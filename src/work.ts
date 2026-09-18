@@ -113,6 +113,36 @@ export async function createWorkStore(databaseUrl: string) {
     return rows.length > 0
   }
 
+  async function cancel(taskId: string) {
+    return db.begin(async sql => {
+      const [run] = await sql`SELECT r.id, r.epoch, r.status, r.active FROM work_runs r
+        JOIN work_tasks t ON t.id = r.task_id WHERE t.id = ${taskId} AND t.owner_id = 'owner'
+        ORDER BY r.created_at DESC, r.id DESC LIMIT 1 FOR UPDATE OF r`
+      if (!run) return null
+      if (run.status === 'cancelling' || run.status === 'cancelled') return { accepted: false }
+      if (!['queued', 'provisioning', 'running'].includes(run.status)) return { accepted: false }
+      if (run.active) {
+        const [terminal] = await sql`SELECT 1 FROM work_events WHERE run_id = ${run.id} AND epoch = ${run.epoch}
+          AND type IN ('run.finished', 'run.failed') LIMIT 1`
+        if (terminal) return { accepted: false }
+      }
+      const status = run.active ? 'cancelling' : 'cancelled'
+      await sql`UPDATE work_runs SET status = ${status}, run_token_hash = NULL,
+        finished_at = CASE WHEN ${status} = 'cancelled' THEN now() ELSE finished_at END
+        WHERE id = ${run.id}`
+      await sql`UPDATE work_tasks SET status = ${status} WHERE id = ${taskId}`
+      if (!run.active) await sql`DELETE FROM work_outbox WHERE run_id = ${run.id}`
+      await sql`INSERT INTO work_events (run_id, epoch, event_id, type, payload, occurred_at)
+        VALUES (${run.id}, ${run.epoch}, ${crypto.randomUUID()}, ${run.active ? 'run.cancel_requested' : 'run.cancelled'}, '{}'::jsonb, now())`
+      return { accepted: true }
+    })
+  }
+
+  async function isRunCancelled(runId: string, epoch: number) {
+    const [row] = await db`SELECT status FROM work_runs WHERE id = ${runId} AND epoch = ${epoch}`
+    return !row || row.status === 'cancelling' || row.status === 'cancelled'
+  }
+
   async function events(taskId: string, after: number) {
     const [run] = await db`SELECT r.id FROM work_tasks t JOIN work_runs r ON r.task_id = t.id
       WHERE t.id = ${taskId} AND t.owner_id = 'owner' ORDER BY r.created_at DESC, r.id DESC LIMIT 1`
@@ -191,5 +221,5 @@ export async function createWorkStore(databaseUrl: string) {
       WHERE EXISTS (SELECT 1 FROM work_runs WHERE id = ${runId} AND epoch = ${epoch} AND active)`
   }
 
-  return { list, detail, events, create, artifactVersion, requestCleanupRetry, resolveRunModelConnection, authorizeModelProxy, recordModelUsage }
+  return { list, detail, events, create, cancel, isRunCancelled, artifactVersion, requestCleanupRetry, resolveRunModelConnection, authorizeModelProxy, recordModelUsage }
 }

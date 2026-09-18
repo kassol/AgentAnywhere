@@ -13,6 +13,7 @@ let started = false
 let finished = false
 let session
 let reportSubmitted = false
+let cancelRequested = false
 const outputDir = '/tmp/agentanywhere-output'
 
 function authorized(request) {
@@ -23,10 +24,11 @@ function authorized(request) {
 }
 
 function emit(type, payload = {}) {
+  if (finished) return
   const event = { producerSeq: events.length + 1, eventId: crypto.randomUUID(), type, payload, occurredAt: new Date().toISOString() }
   events.push(event)
   for (const response of listeners) response.write(`data: ${JSON.stringify(event)}\n\n`)
-  if (type === 'run.finished' || type === 'run.failed') {
+  if (type === 'run.finished' || type === 'run.failed' || type === 'run.cancelled') {
     finished = true
     for (const response of listeners) response.end()
     listeners.clear()
@@ -55,11 +57,15 @@ async function execute({ goal, model, proxyBase }) {
       customTools: [{
         name: 'echo_observation', label: 'Echo observation', description: 'Return a supplied test observation without external access.',
         parameters: Type.Object({ text: Type.String() }),
-        execute: async (_id, params) => ({ content: [{ type: 'text', text: params.text }], details: {} }),
+        execute: async (_id, params, signal) => {
+          if (cancelRequested || signal?.aborted) throw new Error('Run cancelled')
+          return { content: [{ type: 'text', text: params.text }], details: {} }
+        },
       }, {
         name: 'submit_report', label: 'Submit report', description: 'Save the final Markdown report and optional plain text attachments.',
         parameters: Type.Object({ markdown: Type.String(), attachments: Type.Optional(Type.Array(Type.Object({ name: Type.String(), content: Type.String() }), { maxItems: 5 })) }),
-        execute: async (_id, params) => {
+        execute: async (_id, params, signal) => {
+          if (cancelRequested || signal?.aborted) throw new Error('Run cancelled')
           if (reportSubmitted) throw new Error('报告已提交')
           const report = Buffer.from(params.markdown, 'utf8')
           if (!report.length || report.length > 2_000_000) throw new Error('报告大小无效')
@@ -75,6 +81,7 @@ async function execute({ goal, model, proxyBase }) {
             await writeFile(`${temporary}/report.md`, report, { mode: 0o600 })
             for (const [index, item] of attachments.entries()) await writeFile(`${temporary}/${files[index + 1].path}`, item.content, { mode: 0o600 })
             await writeFile(`${temporary}/manifest.json`, JSON.stringify(files), { mode: 0o600 })
+            if (cancelRequested || signal?.aborted) throw new Error('Run cancelled')
             await rename(temporary, outputDir)
           } catch (error) { await rm(temporary, { recursive: true, force: true }); throw error }
           reportSubmitted = true
@@ -83,6 +90,7 @@ async function execute({ goal, model, proxyBase }) {
       }],
     })
     session = created.session
+    if (cancelRequested) throw new Error('Run cancelled')
     session.subscribe(event => {
       if (event.type === 'message_update' && event.assistantMessageEvent.type === 'text_delta') emit('message.delta', { delta: event.assistantMessageEvent.delta })
       if (event.type === 'message_end' && event.message.role === 'assistant') emit('message.completed', {
@@ -96,12 +104,14 @@ async function execute({ goal, model, proxyBase }) {
     emit('worker.ready')
     await session.prompt(`${goal}\n\n完成后调用 submit_report 保存 Markdown 报告。只引用实际获得的来源；目前没有搜索工具，无法核查的事实须写明。最后简短回复已提交。测试要求使用 echo_observation 时可以调用。`)
     await session.waitForIdle()
+    if (cancelRequested) throw new Error('Run cancelled')
     const last = [...session.messages].reverse().find(message => message.role === 'assistant')
     if (!last || last.stopReason === 'error' || last.stopReason === 'aborted') throw new Error(last?.errorMessage || '模型执行未完成')
     if (!reportSubmitted) throw new Error('未提交报告')
     emit('run.finished')
   } catch (error) {
-    emit('run.failed', { error: error instanceof Error ? error.message : '执行失败' })
+    if (cancelRequested) emit('run.cancelled')
+    else emit('run.failed', { error: error instanceof Error ? error.message : '执行失败' })
   } finally {
     session?.dispose()
   }
@@ -120,6 +130,7 @@ http.createServer(async (request, response) => {
     return
   }
   if (request.url === '/run' && request.method === 'POST') {
+    if (cancelRequested) return send(response, 409, { error: 'Run cancelled' })
     if (started) return send(response, 200, { started: true })
     let body = ''
     request.setEncoding('utf8')
@@ -135,7 +146,10 @@ http.createServer(async (request, response) => {
     return send(response, 202, { started: true })
   }
   if (request.url === '/cancel' && request.method === 'POST') {
-    await session?.abort()
+    if (finished) return send(response, 200, { cancelled: false })
+    cancelRequested = true
+    void session?.abort().catch(() => {})
+    if (!started) emit('run.cancelled')
     return send(response, 202, { cancelled: true })
   }
   send(response, 404, { error: 'Not found' })

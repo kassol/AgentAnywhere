@@ -50,24 +50,25 @@ async function record(run, event) {
   const db = await pool.connect()
   try {
     await db.query('BEGIN')
-    const current = await db.query('SELECT active FROM work_runs WHERE id=$1 AND epoch=$2 FOR UPDATE', [run.id, run.epoch])
+    const current = await db.query('SELECT active, status FROM work_runs WHERE id=$1 AND epoch=$2 FOR UPDATE', [run.id, run.epoch])
     if (!current.rows[0]?.active) { await db.query('ROLLBACK'); return false }
+    if (current.rows[0].status === 'cancelling' && ['run.finished', 'run.failed'].includes(event.type)) { await db.query('ROLLBACK'); return false }
     await db.query(`INSERT INTO work_events (run_id, epoch, producer_seq, event_id, type, payload, occurred_at)
       VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING`,
       [run.id, run.epoch, event.producerSeq, event.eventId, event.type, event.payload || {}, event.occurredAt])
     if (event.type === 'worker.ready') {
-      await db.query("UPDATE work_runs SET status='running' WHERE id=$1 AND epoch=$2 AND status='provisioning'", [run.id, run.epoch])
-      await db.query("UPDATE work_tasks SET status='running' WHERE id=$1", [run.task_id])
+      const ready = await db.query("UPDATE work_runs SET status='running' WHERE id=$1 AND epoch=$2 AND status='provisioning'", [run.id, run.epoch])
+      if (ready.rowCount) await db.query("UPDATE work_tasks SET status='running' WHERE id=$1", [run.task_id])
     }
     await db.query('COMMIT')
     return true
   } catch (error) { await db.query('ROLLBACK'); throw error } finally { db.release() }
 }
 
-async function liveEvents(endpoint, token, run) {
+async function liveEvents(endpoint, token, run, signal) {
   let after = 0
   for (;;) {
-    const response = await fetch(`${endpoint.endpoint}/events?after=${after}`, { headers: { ...endpoint.headers, 'x-run-token': token }, signal: AbortSignal.timeout(50 * 60_000) })
+    const response = await fetch(`${endpoint.endpoint}/events?after=${after}`, { headers: { ...endpoint.headers, 'x-run-token': token }, signal })
     if (!response.ok || !response.body) throw new Error('Pi 事件连接失败')
     const reader = response.body.getReader()
     const decoder = new TextDecoder()
@@ -89,6 +90,7 @@ async function liveEvents(endpoint, token, run) {
           after = event.producerSeq
           if (event.type === 'run.finished') return { status: 'succeeded', failure: null }
           if (event.type === 'run.failed') return { status: 'failed', failure: event.payload?.error || '模型执行失败' }
+          if (event.type === 'run.cancelled') return { status: 'cancelled', failure: null }
         }
       }
     } finally { reader.releaseLock() }
@@ -157,6 +159,8 @@ async function markSaveBlocked(run, error, result) {
   const db = await pool.connect()
   try {
     await db.query('BEGIN')
+    const current = await db.query('SELECT status FROM work_runs WHERE id=$1 AND epoch=$2 FOR UPDATE', [run.id, run.epoch])
+    if (current.rows[0]?.status === 'cancelling') result = { status: 'cancelled', failure: null }
     const updated = await db.query(`UPDATE work_runs SET status='save_failed', failure=$3, cleanup_state='blocked',
       pending_status=$4, pending_failure=$5, run_token_hash=NULL WHERE id=$1 AND epoch=$2 AND active RETURNING task_id`,
       [run.id, run.epoch, `成果保存失败：${error.message}`, result.status, result.failure])
@@ -184,6 +188,8 @@ async function finish(run, result, sandboxId) {
   const db = await pool.connect()
   try {
     await db.query('BEGIN')
+    const current = await db.query('SELECT status FROM work_runs WHERE id=$1 AND epoch=$2 FOR UPDATE', [run.id, run.epoch])
+    if (current.rows[0]?.status === 'cancelling') result = { status: 'cancelled', failure: null }
     const updated = await db.query(`UPDATE work_runs SET status=$3, failure=$4, cleanup_state=$5, active=$6,
       run_token_hash=NULL, finished_at=COALESCE(finished_at, now()) WHERE id=$1 AND epoch=$2 AND active RETURNING task_id`,
       [run.id, run.epoch, result.status, result.failure, cleanupState, cleanupState !== 'cleaned'])
@@ -195,7 +201,25 @@ async function finish(run, result, sandboxId) {
 async function execute(run, token) {
   let sandbox
   let result = { status: 'failed', failure: 'Pi 启动失败' }
+  let cancelled = false
+  let endpoint
+  const eventsAbort = new AbortController()
+  const watch = setInterval(() => void pool.query('SELECT status FROM work_runs WHERE id=$1 AND epoch=$2', [run.id, run.epoch]).then(async ({ rows }) => {
+    if (cancelled || rows[0]?.status !== 'cancelling') return
+    cancelled = true
+    if (endpoint) {
+      const base = endpoint.endpoint.startsWith('http') ? endpoint.endpoint : `${sandbox.connectionConfig.protocol}://${endpoint.endpoint}`
+      try { await fetch(`${base}/cancel`, { method: 'POST', headers: { ...endpoint.headers, 'x-run-token': token }, signal: AbortSignal.timeout(3000) }) }
+      catch { /* cleanup still follows */ }
+    }
+    setTimeout(() => eventsAbort.abort(), 5000)
+  }).catch(() => {}), 200)
+  const ensureActive = async () => {
+    const { rows } = await pool.query('SELECT status FROM work_runs WHERE id=$1 AND epoch=$2', [run.id, run.epoch])
+    if (rows[0]?.status === 'cancelling') { cancelled = true; throw new Error('Run cancelled') }
+  }
   try {
+    await ensureActive()
     sandbox = await Sandbox.create({
       connectionConfig: sandboxConnection, image, entrypoint: ['node', '/app/agent-worker.mjs'],
       env: { RUN_TOKEN: token }, metadata: { runId: run.id, epoch: String(run.epoch) },
@@ -203,7 +227,8 @@ async function execute(run, token) {
     })
     run.sandbox_id = sandbox.id
     await pool.query('UPDATE work_runs SET sandbox_id=$3 WHERE id=$1 AND epoch=$2 AND active', [run.id, run.epoch, sandbox.id])
-    const endpoint = await sandbox.getEndpoint(3001)
+    await ensureActive()
+    endpoint = await sandbox.getEndpoint(3001)
     let ready = false
     for (let attempt = 0; attempt < 30; attempt++) {
       try {
@@ -213,18 +238,22 @@ async function execute(run, token) {
       await pause(500)
     }
     if (!ready) throw new Error('Pi 进程未能启动')
+    await ensureActive()
     const row = await pool.query('SELECT goal, source_url FROM work_tasks WHERE id=$1', [run.task_id])
     const goal = [row.rows[0].goal, row.rows[0].source_url && `指定来源：${row.rows[0].source_url}`].filter(Boolean).join('\n\n')
     const proxyOrigin = new URL(process.env.MODEL_PROXY_ORIGIN || 'http://web:3000')
     proxyOrigin.hostname = (await lookup(proxyOrigin.hostname, { family: 4 })).address
     const proxyBase = `${proxyOrigin.origin}/internal/runs/${run.id}/${run.epoch}/v1`
     const base = `${sandbox.connectionConfig.protocol}://${endpoint.endpoint}`
+    await ensureActive()
     const started = await fetch(`${base}/run`, { method: 'POST', headers: { ...endpoint.headers, 'x-run-token': token, 'content-type': 'application/json' },
       body: JSON.stringify({ goal, model: run.model_snapshot, proxyBase }), signal: AbortSignal.timeout(10_000) })
     if (!started.ok) throw new Error('Pi 启动请求失败')
-    result = await liveEvents({ ...endpoint, endpoint: base }, token, run)
-  } catch { result = { status: 'failed', failure: 'Pi 启动或执行中断' } }
+    endpoint = { ...endpoint, endpoint: base }
+    result = await liveEvents(endpoint, token, run, eventsAbort.signal)
+  } catch { result = cancelled ? { status: 'cancelled', failure: null } : { status: 'failed', failure: 'Pi 启动或执行中断' } }
   finally {
+    clearInterval(watch)
     try {
       if (sandbox) {
         const manifestPath = `${outputDir}/manifest.json`
@@ -262,6 +291,11 @@ async function reconcile() {
       if (run.sandbox_id) sandbox = await Sandbox.connect({ connectionConfig: sandboxConnection, sandboxId: run.sandbox_id })
       const manifest = sandbox && await optionalFileInfo(sandbox, `${outputDir}/manifest.json`)
       const report = sandbox && await optionalFileInfo(sandbox, `${outputDir}/report.md`)
+      if (run.status === 'cancelling') {
+        if (manifest || report) await persistArtifacts(run, sandbox)
+        await finish(run, { status: 'cancelled', failure: null }, run.sandbox_id)
+        continue
+      }
       if (manifest || report) await markSaveBlocked(run, new Error('执行服务中断，需重试保存已有报告'), { status: 'lost', failure: '执行服务中断；请手动重试' })
       else await finish(run, { status: 'lost', failure: '执行服务中断；请手动重试' }, run.sandbox_id)
     } catch (error) {
