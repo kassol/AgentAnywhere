@@ -8,11 +8,44 @@ http.createServer(async (request, response) => {
     response.writeHead(200, { 'content-type': 'application/json' })
     return response.end(JSON.stringify(calls))
   }
-  if (!request.url?.endsWith('/v1/chat/completions') || request.method !== 'POST') { response.writeHead(404); return response.end() }
+  const responses = request.url?.endsWith('/v1/responses')
+  if ((!responses && !request.url?.endsWith('/v1/chat/completions')) || request.method !== 'POST') { response.writeHead(404); return response.end() }
   let raw = ''
   request.setEncoding('utf8')
   for await (const chunk of request) raw += chunk
   const body = JSON.parse(raw)
+  if (responses) {
+    const observation = body.input?.filter(item => item.type === 'function_call_output').map(item => item.output) || []
+    const toolResult = observation.length > 0
+    calls.push({ model: body.model, protocol: 'responses', toolResult, observation, stream: body.stream, chatMessages: 'messages' in body })
+    if (body.model === 'fixture-responses-error') {
+      response.writeHead(400, { 'content-type': 'application/json' })
+      return response.end(JSON.stringify({ error: { message: 'fixture protocol rejected', type: 'invalid_request_error', code: 'unsupported_protocol' } }))
+    }
+    if (!body.stream) {
+      response.writeHead(200, { 'content-type': 'application/json' })
+      return response.end(JSON.stringify({ id: `resp_${calls.length}`, status: 'completed', output: [], usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 } }))
+    }
+    response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' })
+    const responseId = `resp_${calls.length}`
+    const usage = body.model === 'fixture-responses-missing' && !toolResult ? undefined : { input_tokens: 10, output_tokens: 5, total_tokens: 15 }
+    if (!toolResult) {
+      const item = { id: 'fc_echo', type: 'function_call', call_id: 'call_echo', name: 'echo_observation', arguments: '{"text":"fixture observation"}' }
+      send(response, { type: 'response.output_item.added', output_index: 0, item: { ...item, arguments: '' } })
+      send(response, { type: 'response.function_call_arguments.delta', output_index: 0, delta: '{"text":"fixture' })
+      send(response, { type: 'response.function_call_arguments.delta', output_index: 0, delta: ' observation"}' })
+      send(response, { type: 'response.function_call_arguments.done', output_index: 0, arguments: item.arguments })
+      send(response, { type: 'response.output_item.done', output_index: 0, item })
+      send(response, { type: 'response.completed', response: { id: responseId, status: 'completed', output: [item], ...(usage ? { usage } : {}) } })
+    } else {
+      const item = { id: 'msg_fixture', type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'The fixture observation was returned.', annotations: [] }] }
+      send(response, { type: 'response.output_item.added', output_index: 0, item: { ...item, content: [] } })
+      for (const delta of ['The fixture ', 'observation was ', 'returned.']) send(response, { type: 'response.output_text.delta', output_index: 0, content_index: 0, delta })
+      send(response, { type: 'response.output_item.done', output_index: 0, item })
+      send(response, { type: 'response.completed', response: { id: responseId, status: 'completed', output: [item], ...(usage ? { usage } : {}) } })
+    }
+    return response.end()
+  }
   const observation = body.messages.filter(message => message.role === 'tool').flatMap(message => typeof message.content === 'string' ? [message.content] : message.content?.filter?.(part => part.type === 'text').map(part => part.text) || [])
   const toolResult = observation.length > 0
   calls.push({ model: body.model, toolResult, observation, stream: body.stream })
