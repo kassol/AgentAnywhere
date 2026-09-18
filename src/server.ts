@@ -50,7 +50,7 @@ const cookieName = 'agentanywhere_session'
 const day = 86_400_000
 const assets = join(import.meta.dir, '../dist')
 
-async function readLimited(request: Request, limit = 1024): Promise<string | null> {
+async function readLimited(request: Request | Response, limit = 1024): Promise<string | null> {
   const reader = request.body?.getReader()
   if (!reader) return null
   const chunks: Uint8Array[] = []
@@ -245,7 +245,14 @@ export async function startServer(config: Config) {
             method: 'POST', headers: { authorization: `Bearer ${credential.apiKey}`, 'content-type': 'application/json' },
             body: JSON.stringify(requestBody), redirect: 'manual', signal: AbortSignal.timeout(30_000),
           })
-          return upstream.ok ? json({ ok: true, modelId: selected.id, protocol }) : json({ error: '连接测试失败', status: upstream.status }, 502)
+          if (upstream.ok) return json({ ok: true, modelId: selected.id, protocol })
+          let reason = ''
+          try {
+            const details = JSON.parse(await readLimited(upstream, 16_384) ?? '{}')
+            reason = [details?.error?.code, details?.error?.message].filter(value => typeof value === 'string').join(': ')
+              .replaceAll(credential.apiKey, '[已隐藏]').slice(0, 500)
+          } catch { /* non-JSON errors retain the upstream status */ }
+          return json({ error: `连接测试失败（HTTP ${upstream.status}）${reason ? `：${reason}` : ''}`, status: upstream.status }, 502)
         } catch { return json({ error: '模型网关不可用' }, 502) }
       }
       if ((path === '/api/model-connection' || path === '/api/model-connection/models' || path === '/api/model-connection/refresh' || path === '/api/model-connection/directory') && request.method !== 'GET') {
