@@ -6,13 +6,15 @@
 
 ## 技术栈
 
-React/TypeScript、Bun、PostgreSQL、Node.js 24.21、pg-boss 12.26.3、Pi 0.85.1 与 OpenSandbox SDK 0.1.11 用于最小执行链路。sub2api 已用于模型列表发现；真实 Chat Completions 调用仍需在正式 R1 验收。Responses 与 OpenConnector 属后续实施范围。
+React/TypeScript、Bun、PostgreSQL、Node.js 24.21、pg-boss 12.26.3、Pi 0.85.1 与 OpenSandbox SDK 0.1.11 用于最小执行链路。sub2api 已用于模型列表发现；真实 Chat Completions 已在隔离 Run 验证，正式公网入口待后续验收。Responses 与 OpenConnector 属后续实施范围。
 
 ## 目录索引
 
 - `docs/`：产品、实施、工程流程与决策文档。
 - `diagrams/`：架构与浏览器隔离图。
-- `infra/w0/`：独立基线验证脚本与运行配置；执行证据位于 `docs/evidence/w0/`。`infra/r1/`：R1 镜像、队列与沙箱运行配置。
+- `infra/w0/`：独立基线验证脚本与运行配置；执行证据位于 `docs/evidence/w0/`。
+- `infra/r1/`：R1 镜像、队列与沙箱运行配置。
+- `infra/r1/search/`：cc-la 独立私有 SearXNG 的配置与复现步骤。
 - `src/server.ts`：Web/API 服务与登录鉴权；`src/model-connection.ts`：单套模型连接配置与发现；`src/work.ts`：工作与事件持久化；`src/queue-worker.mjs`：Node 队列与沙箱生命周期；`src/agent-worker.mjs`：沙箱内 Pi；`src/web/`：精简 Web；`docs/evidence/`：实施验证。
 - `CONTEXT.md`：领域定义。
 
