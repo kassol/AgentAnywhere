@@ -1,5 +1,6 @@
 import http from 'node:http'
 import { timingSafeEqual } from 'node:crypto'
+import { mkdtemp, rename, rm, writeFile } from 'node:fs/promises'
 import { createAgentSession, ModelRuntime, SessionManager } from '@earendil-works/pi-coding-agent'
 import { Type } from 'typebox'
 
@@ -11,6 +12,8 @@ const listeners = new Set()
 let started = false
 let finished = false
 let session
+let reportSubmitted = false
+const outputDir = '/tmp/agentanywhere-output'
 
 function authorized(request) {
   const supplied = request.headers['x-run-token'] || ''
@@ -48,11 +51,34 @@ async function execute({ goal, model, proxyBase }) {
     const selected = runtime.getModel('agentanywhere', model.id)
     if (!selected) throw new Error('Pi 模型注册失败')
     const created = await createAgentSession({
-      model: selected, modelRuntime: runtime, sessionManager: SessionManager.inMemory(), tools: ['echo_observation'],
+      model: selected, modelRuntime: runtime, sessionManager: SessionManager.inMemory(), tools: ['echo_observation', 'submit_report'],
       customTools: [{
         name: 'echo_observation', label: 'Echo observation', description: 'Return a supplied test observation without external access.',
         parameters: Type.Object({ text: Type.String() }),
         execute: async (_id, params) => ({ content: [{ type: 'text', text: params.text }], details: {} }),
+      }, {
+        name: 'submit_report', label: 'Submit report', description: 'Save the final Markdown report and optional plain text attachments.',
+        parameters: Type.Object({ markdown: Type.String(), attachments: Type.Optional(Type.Array(Type.Object({ name: Type.String(), content: Type.String() }), { maxItems: 5 })) }),
+        execute: async (_id, params) => {
+          if (reportSubmitted) throw new Error('报告已提交')
+          const report = Buffer.from(params.markdown, 'utf8')
+          if (!report.length || report.length > 2_000_000) throw new Error('报告大小无效')
+          const attachments = params.attachments ?? []
+          const files = [{ path: 'report.md', name: 'report.md', type: 'text/markdown' }]
+          for (const [index, item] of attachments.entries()) {
+            if (!/^[^/\\\x00-\x1f]{1,100}\.(txt|csv|json|md)$/i.test(item.name) || Buffer.byteLength(item.content, 'utf8') > 10_000_000) throw new Error('附件类型、名称或大小无效')
+            files.push({ path: `attachment-${index}.${item.name.split('.').at(-1).toLowerCase()}`, name: item.name, type: 'text/plain' })
+          }
+          const temporary = await mkdtemp(`${outputDir}-`)
+          try {
+            await writeFile(`${temporary}/report.md`, report, { mode: 0o600 })
+            for (const [index, item] of attachments.entries()) await writeFile(`${temporary}/${files[index + 1].path}`, item.content, { mode: 0o600 })
+            await writeFile(`${temporary}/manifest.json`, JSON.stringify(files), { mode: 0o600 })
+            await rename(temporary, outputDir)
+          } catch (error) { await rm(temporary, { recursive: true, force: true }); throw error }
+          reportSubmitted = true
+          return { content: [{ type: 'text', text: '报告已保存，等待持久化校验' }], details: {} }
+        },
       }],
     })
     session = created.session
@@ -67,10 +93,11 @@ async function execute({ goal, model, proxyBase }) {
         result: event.result?.content?.filter(part => part.type === 'text').map(part => part.text).join('') ?? '', isError: event.isError })
     })
     emit('worker.ready')
-    await session.prompt(`${goal}\n\nFor this initial execution, use echo_observation once with a short observation before the final reply. Do not claim external sources or create files.`)
+    await session.prompt(`${goal}\n\n完成后调用 submit_report 保存 Markdown 报告。只引用实际获得的来源；目前没有搜索工具，无法核查的事实须写明。最后简短回复已提交。测试要求使用 echo_observation 时可以调用。`)
     await session.waitForIdle()
     const last = [...session.messages].reverse().find(message => message.role === 'assistant')
     if (!last || last.stopReason === 'error' || last.stopReason === 'aborted') throw new Error(last?.errorMessage || '模型执行未完成')
+    if (!reportSubmitted) throw new Error('未提交报告')
     emit('run.finished')
   } catch (error) {
     emit('run.failed', { error: error instanceof Error ? error.message : '执行失败' })

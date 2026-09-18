@@ -1,5 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { lookup } from 'node:dns/promises'
+import { mkdir, open, rename, rm } from 'node:fs/promises'
+import { join } from 'node:path'
 import { PgBoss } from 'pg-boss'
 import pg from 'pg'
 import { Sandbox, SandboxManager } from '@alibaba-group/opensandbox'
@@ -13,7 +15,16 @@ const sandboxConnection = { domain: process.env.OPEN_SANDBOX_DOMAIN || 'opensand
 const manager = SandboxManager.create({ connectionConfig: sandboxConnection })
 const boss = new PgBoss({ connectionString: databaseUrl, schema: process.env.QUEUE_SCHEMA || 'pgboss' })
 const active = new Set()
+const recovering = new Set()
+const artifactDir = process.env.AGENTANYWHERE_ARTIFACT_DIR || '/artifacts'
+const outputDir = '/tmp/agentanywhere-output'
+const retentionSeconds = 30 * 86400
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms))
+
+async function optionalFileInfo(sandbox, path) {
+  try { return (await sandbox.files.getFileInfo([path]))[path] ?? null }
+  catch (error) { if (error.statusCode === 404 && error.error?.code === 'FILE_NOT_FOUND') return null; throw error }
+}
 
 async function claim(runId, token) {
   const db = await pool.connect()
@@ -86,6 +97,80 @@ async function liveEvents(endpoint, token, run) {
   }
 }
 
+async function persistArtifacts(run, sandbox) {
+  const manifestPath = `${outputDir}/manifest.json`
+  const manifestInfo = await optionalFileInfo(sandbox, manifestPath)
+  if (manifestInfo?.type !== 'file' || !Number.isSafeInteger(manifestInfo.size) || manifestInfo.size < 2 || manifestInfo.size > 4096) throw new Error('报告清单不存在或无效')
+  const bytes = await sandbox.files.readBytes(manifestPath, { limit: 4097 })
+  if (bytes.length !== manifestInfo.size) throw new Error('报告清单已变化')
+  const entries = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
+  if (!Array.isArray(entries) || entries.length < 1 || entries.length > 6 || entries[0]?.path !== 'report.md') throw new Error('报告清单无效')
+  if (new Set(entries.map(item => item?.name)).size !== entries.length) throw new Error('附件名称重复')
+  const saved = []
+  const destination = join(artifactDir, run.id)
+  await mkdir(destination, { recursive: true, mode: 0o700 })
+  for (const [index, entry] of entries.entries()) {
+    if (!entry || typeof entry !== 'object' || entry.path !== (index === 0 ? 'report.md' : `attachment-${index - 1}.${entry.path?.split('.').at(-1)}`)
+      || (index > 0 && !/^attachment-[0-4]\.(txt|csv|json|md)$/.test(entry.path))
+      || typeof entry.name !== 'string' || !/^[^/\\\x00-\x1f]{1,100}\.(txt|csv|json|md)$/i.test(entry.name)
+      || entry.type !== (index === 0 ? 'text/markdown' : 'text/plain')) throw new Error('成果类型或路径无效')
+    const source = `${outputDir}/${entry.path}`
+    const info = await optionalFileInfo(sandbox, source)
+    const limit = index === 0 ? 2_000_000 : 10_000_000
+    if (info?.type !== 'file' || !Number.isSafeInteger(info.size) || info.size < 1 || info.size > limit) throw new Error('成果文件类型或大小无效')
+    const temporary = join(destination, `${entry.path}.${randomBytes(8).toString('hex')}.tmp`)
+    const file = await open(temporary, 'wx', 0o600)
+    let size = 0
+    const hash = createHash('sha256')
+    try {
+      for await (const chunk of sandbox.files.readBytesStream(source)) {
+        size += chunk.length
+        if (size > limit) throw new Error('成果文件超过大小限制')
+        hash.update(chunk)
+        let offset = 0
+        while (offset < chunk.length) offset += (await file.write(chunk, offset)).bytesWritten
+      }
+      await file.sync()
+    } catch (error) { await file.close(); await rm(temporary, { force: true }); throw error }
+    await file.close()
+    if (size !== info.size || (await optionalFileInfo(sandbox, source))?.type !== 'file') { await rm(temporary, { force: true }); throw new Error('成果文件复制时发生变化') }
+    const storageKey = `${run.id}/${entry.path}`
+    await rename(temporary, join(artifactDir, storageKey))
+    saved.push({ ...entry, storageKey, size, sha256: hash.digest('hex'), kind: index === 0 ? 'report' : 'attachment' })
+  }
+  const db = await pool.connect()
+  try {
+    await db.query('BEGIN')
+    const current = await db.query('SELECT active FROM work_runs WHERE id=$1 AND epoch=$2 FOR UPDATE', [run.id, run.epoch])
+    if (!current.rows[0]?.active) throw new Error('Run 执行代次已失效')
+    for (const item of saved) {
+      const artifact = await db.query(`INSERT INTO work_artifacts (id, task_id, kind, name) VALUES ($1,$2,$3,$4)
+        ON CONFLICT (task_id, kind, name) DO UPDATE SET name=EXCLUDED.name RETURNING id`, [crypto.randomUUID(), run.task_id, item.kind, item.name])
+      await db.query(`INSERT INTO work_artifact_versions (id, artifact_id, run_id, storage_key, sha256, size_bytes, mime_type)
+        VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (artifact_id, run_id) DO NOTHING`,
+        [crypto.randomUUID(), artifact.rows[0].id, run.id, item.storageKey, item.sha256, item.size, item.type])
+    }
+    await db.query('COMMIT')
+  } catch (error) { await db.query('ROLLBACK'); throw error } finally { db.release() }
+}
+
+async function markSaveBlocked(run, error, result) {
+  let renewal = ''
+  if (run.sandbox_id) {
+    try { await manager.renewSandbox(run.sandbox_id, retentionSeconds) }
+    catch { renewal = '；沙箱续租失败，文件可能到期丢失' }
+  }
+  const db = await pool.connect()
+  try {
+    await db.query('BEGIN')
+    const updated = await db.query(`UPDATE work_runs SET status='save_failed', failure=$3, cleanup_state='blocked',
+      pending_status=$4, pending_failure=$5, run_token_hash=NULL WHERE id=$1 AND epoch=$2 AND active RETURNING task_id`,
+      [run.id, run.epoch, `成果保存失败：${error.message}${renewal}`, result.status, result.failure])
+    if (updated.rowCount) await db.query("UPDATE work_tasks SET status='save_failed' WHERE id=$1", [updated.rows[0].task_id])
+    await db.query('COMMIT')
+  } catch (failure) { await db.query('ROLLBACK'); throw failure } finally { db.release() }
+}
+
 async function cleanup(run, sandboxId) {
   try {
     const infos = await manager.listSandboxInfos({ metadata: { runId: run.id }, pageSize: 100 })
@@ -122,6 +207,7 @@ async function execute(run, token) {
       env: { RUN_TOKEN: token }, metadata: { runId: run.id, epoch: String(run.epoch) },
       resource: { cpu: '1', memory: '512Mi' }, timeoutSeconds: 3600, readyTimeoutSeconds: 60,
     })
+    run.sandbox_id = sandbox.id
     await pool.query('UPDATE work_runs SET sandbox_id=$3 WHERE id=$1 AND epoch=$2 AND active', [run.id, run.epoch, sandbox.id])
     const endpoint = await sandbox.getEndpoint(3001)
     let ready = false
@@ -145,7 +231,20 @@ async function execute(run, token) {
     result = await liveEvents({ ...endpoint, endpoint: base }, token, run)
   } catch { result = { status: 'failed', failure: 'Pi 启动或执行中断' } }
   finally {
-    try { await finish(run, result, sandbox?.id) }
+    try {
+      if (sandbox) {
+        const manifestPath = `${outputDir}/manifest.json`
+        const reportPath = `${outputDir}/report.md`
+        let manifest, report
+        try { [manifest, report] = await Promise.all([optionalFileInfo(sandbox, manifestPath), optionalFileInfo(sandbox, reportPath)]) }
+        catch (error) { await markSaveBlocked(run, error, result); return }
+        if (result.status === 'succeeded' || manifest || report) {
+          try { await persistArtifacts(run, sandbox) }
+          catch (error) { await markSaveBlocked(run, error, result); return }
+        }
+      }
+      await finish(run, result, sandbox?.id)
+    }
     finally {
       await sandbox?.close().catch(() => {})
       active.delete(run.id)
@@ -154,12 +253,45 @@ async function execute(run, token) {
 }
 
 async function reconcile() {
-  const rows = await pool.query('SELECT id, task_id, epoch, sandbox_id, status, failure FROM work_runs WHERE active')
+  const rows = await pool.query('SELECT id, task_id, epoch, sandbox_id, status, failure, cleanup_state FROM work_runs WHERE active')
   for (const run of rows.rows) {
-    const result = ['succeeded', 'failed', 'lost'].includes(run.status)
-      ? { status: run.status, failure: run.failure }
-      : { status: 'lost', failure: '执行服务中断；请手动重试' }
-    await finish(run, result, run.sandbox_id)
+    if (run.cleanup_state === 'blocked' || run.cleanup_state === 'failed' || run.cleanup_state === 'retry_requested') continue
+    let sandbox
+    try {
+      if (run.sandbox_id) sandbox = await Sandbox.connect({ connectionConfig: sandboxConnection, sandboxId: run.sandbox_id })
+      const manifest = sandbox && await optionalFileInfo(sandbox, `${outputDir}/manifest.json`)
+      const report = sandbox && await optionalFileInfo(sandbox, `${outputDir}/report.md`)
+      if (manifest || report) await markSaveBlocked(run, new Error('执行服务中断，需重试保存已有报告'), { status: 'lost', failure: '执行服务中断；请手动重试' })
+      else await finish(run, { status: 'lost', failure: '执行服务中断；请手动重试' }, run.sandbox_id)
+    } catch (error) { await markSaveBlocked(run, error, { status: 'lost', failure: '执行服务中断；请手动重试' }) }
+    finally { await sandbox?.close().catch(() => {}) }
+  }
+}
+
+async function recoverPending() {
+  const rows = await pool.query("SELECT id, task_id, epoch, sandbox_id, status, failure, pending_status, pending_failure FROM work_runs WHERE active AND cleanup_state='retry_requested'")
+  for (const run of rows.rows) {
+    if (recovering.has(run.id)) continue
+    recovering.add(run.id)
+    void (async () => {
+      let sandbox
+      try {
+        if (run.status === 'save_failed') {
+          sandbox = await Sandbox.connect({ connectionConfig: sandboxConnection, sandboxId: run.sandbox_id })
+          await persistArtifacts(run, sandbox)
+        }
+        await finish(run, { status: run.pending_status || run.status, failure: run.pending_failure || (run.status === 'save_failed' ? null : run.failure) }, run.sandbox_id)
+      } catch (error) { await markSaveBlocked(run, error, { status: run.pending_status || run.status, failure: run.pending_failure || run.failure }) }
+      finally { await sandbox?.close().catch(() => {}); recovering.delete(run.id) }
+    })()
+  }
+}
+
+async function renewBlocked() {
+  const rows = await pool.query("SELECT id, sandbox_id FROM work_runs WHERE active AND cleanup_state IN ('blocked', 'retry_requested') AND sandbox_id IS NOT NULL")
+  for (const run of rows.rows) {
+    try { await manager.renewSandbox(run.sandbox_id, retentionSeconds) }
+    catch { await pool.query("UPDATE work_runs SET failure=COALESCE(failure, '') || '；沙箱续租失败，请尽快核查' WHERE id=$1", [run.id]) }
   }
 }
 
@@ -182,10 +314,15 @@ await boss.work('work-dispatch', { batchSize: 1 }, async ([job]) => {
   void execute(run, token)
 })
 const dispatchTimer = setInterval(() => void dispatchPending().catch(() => {}), 1000)
+const recoveryTimer = setInterval(() => void recoverPending().catch(() => {}), 2000)
+const renewalTimer = setInterval(() => void renewBlocked().catch(() => {}), 60_000)
+await renewBlocked()
 await dispatchPending()
 
 process.once('SIGTERM', async () => {
   clearInterval(dispatchTimer)
+  clearInterval(recoveryTimer)
+  clearInterval(renewalTimer)
   await boss.stop()
   await pool.end()
 })

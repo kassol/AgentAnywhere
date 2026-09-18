@@ -1,11 +1,19 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { EmptyStateCard } from './EmptyStateCard'
+import Markdown from 'react-markdown'
 
 type Model = { id: string; protocol: 'chat-completions' | 'responses' }
 type Task = { id: string; goal: string; sourceUrl: string | null; status: string; createdAt: string }
-type Detail = Task & { run: { id: string; status: string; model: Model; cleanupState: string; failure: string | null; startedAt: string | null; finishedAt: string | null }; thread: { id: string; messages: { role: 'user'; content: string }[] } }
+type Artifact = { id: string; kind: 'report' | 'attachment'; name: string; versionId: string; runId: string; sha256: string; sizeBytes: number; createdAt: string }
+type Detail = Task & { run: { id: string; status: string; model: Model; cleanupState: string; failure: string | null; startedAt: string | null; finishedAt: string | null }; thread: { id: string; messages: { role: 'user'; content: string }[] }; artifacts: Artifact[] }
 type RunEvent = { serverSeq: number; type: string; payload: Record<string, any>; occurredAt: string }
-const statusLabel: Record<string, string> = { queued: '待执行', provisioning: '准备环境', running: '执行中', succeeded: '已完成', failed: '失败', lost: '执行中断' }
+const statusLabel: Record<string, string> = { queued: '待执行', provisioning: '准备环境', running: '执行中', succeeded: '已完成', failed: '失败', lost: '执行中断', save_failed: '成果保存失败' }
+const safeLink = (url: string) => {
+  try {
+    const parsed = new URL(url)
+    return ['https:', 'http:'].includes(parsed.protocol) && !parsed.username && !parsed.password ? parsed.href : ''
+  } catch { return '' }
+}
 
 async function read<T>(response: Response): Promise<T> {
   if (response.status === 401) location.assign('/login')
@@ -18,6 +26,9 @@ export function Work() {
   const detailId = location.pathname.startsWith('/tasks/') ? location.pathname.slice('/tasks/'.length) : null
   const [tasks, setTasks] = useState<Task[] | null>(null)
   const [detail, setDetail] = useState<Detail | null>(null)
+  const [selectedVersion, setSelectedVersion] = useState<string | null>(null)
+  const [report, setReport] = useState('')
+  const [loadedVersion, setLoadedVersion] = useState<string | null>(null)
   const [events, setEvents] = useState<RunEvent[]>([])
   const cursor = useRef(0)
   const [models, setModels] = useState<Model[]>([])
@@ -59,6 +70,18 @@ export function Work() {
     return () => { disposed = true; if (timer) clearInterval(timer) }
   }, [detailId])
 
+  const currentVersion = selectedVersion ?? detail?.artifacts.find(item => item.kind === 'report')?.versionId
+  useEffect(() => {
+    if (!currentVersion) return
+    let disposed = false
+    setReport('')
+    setLoadedVersion(null)
+    fetch(`/api/artifacts/${currentVersion}/content`).then(response => read<{ markdown: string }>(response))
+      .then(value => { if (!disposed) { setReport(value.markdown); setLoadedVersion(currentVersion) } })
+      .catch(error => { if (!disposed) setError(error.message) })
+    return () => { disposed = true }
+  }, [currentVersion])
+
   const activity: { id: string; kind: 'message' | 'tool'; text: string; done: boolean }[] = []
   let draft = ''
   for (const event of events) {
@@ -98,6 +121,11 @@ export function Work() {
     } finally { setBusy(false) }
   }
 
+  async function retryCleanup() {
+    try { await read(await fetch(`/api/tasks/${detailId}/cleanup-retry`, { method: 'POST' })) }
+    catch (error) { setError(error instanceof Error ? error.message : '重试失败') }
+  }
+
   if (detailId) return <>
     <a href="/">返回工作列表</a>
     {error && <p className="error" role="alert">{error}</p>}
@@ -114,7 +142,13 @@ export function Work() {
       <p className="muted">实际费用：未知</p>
       <p className="muted">耗时：{detail.run.startedAt && detail.run.finishedAt ? `${Math.round((Date.parse(detail.run.finishedAt) - Date.parse(detail.run.startedAt)) / 1000)} 秒` : '未知'}</p>
       {detail.run.failure && <p className="error" role="alert">{detail.run.failure}</p>}
-      {detail.run.cleanupState === 'failed' && <p className="error" role="alert">沙箱回收失败，需要核查。</p>}
+      {(detail.run.cleanupState === 'failed' || detail.run.cleanupState === 'blocked') && <p className="error" role="alert">{detail.run.cleanupState === 'blocked' ? '成果尚未安全保存；沙箱已保留。' : '沙箱回收失败，请重试。'} <button type="button" onClick={retryCleanup}>重试保存与回收</button></p>}
+      {detail.artifacts.length > 0 && <section className="artifacts"><h3>成果</h3>
+        {detail.artifacts.filter(item => item.kind === 'report').map(item => <button type="button" key={item.versionId} onClick={() => setSelectedVersion(item.versionId)} aria-pressed={currentVersion === item.versionId}>报告版本 · {new Date(item.createdAt).toLocaleString('zh-CN')}</button>)}
+        {currentVersion && <><p><a href={`/api/artifacts/${currentVersion}/download`}>下载 Markdown 报告</a></p>
+          <div className="report-markdown">{loadedVersion === currentVersion ? <Markdown skipHtml urlTransform={safeLink} components={{ a: props => <a {...props} target="_blank" rel="noopener noreferrer" />, img: () => null }}>{report}</Markdown> : <p role="status">正在加载报告…</p>}</div></>}
+        {detail.artifacts.filter(item => item.kind === 'attachment').length > 0 && <><h4>附件</h4><ul>{detail.artifacts.filter(item => item.kind === 'attachment').map(item => <li key={item.versionId}><a href={`/api/artifacts/${item.versionId}/download`}>{item.name}</a></li>)}</ul></>}
+      </section>}
     </section>}
   </>
 

@@ -50,6 +50,8 @@ export async function createWorkStore(databaseUrl: string) {
   await db`ALTER TABLE work_runs ADD COLUMN IF NOT EXISTS failure text`
   await db`ALTER TABLE work_runs ADD COLUMN IF NOT EXISTS started_at timestamptz`
   await db`ALTER TABLE work_runs ADD COLUMN IF NOT EXISTS finished_at timestamptz`
+  await db`ALTER TABLE work_runs ADD COLUMN IF NOT EXISTS pending_status text`
+  await db`ALTER TABLE work_runs ADD COLUMN IF NOT EXISTS pending_failure text`
   await db`CREATE UNIQUE INDEX IF NOT EXISTS one_active_work_run ON work_runs (active) WHERE active`
   await db`CREATE TABLE IF NOT EXISTS work_outbox (
     run_id uuid PRIMARY KEY REFERENCES work_runs(id), created_at timestamptz NOT NULL DEFAULT now()
@@ -66,6 +68,16 @@ export async function createWorkStore(databaseUrl: string) {
     role text NOT NULL CHECK (role = 'user'), content text NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now()
   )`
+  await db`CREATE TABLE IF NOT EXISTS work_artifacts (
+    id uuid PRIMARY KEY, task_id uuid NOT NULL REFERENCES work_tasks(id),
+    kind text NOT NULL, name text NOT NULL, UNIQUE (task_id, kind, name)
+  )`
+  await db`CREATE TABLE IF NOT EXISTS work_artifact_versions (
+    id uuid PRIMARY KEY, artifact_id uuid NOT NULL REFERENCES work_artifacts(id),
+    run_id uuid NOT NULL REFERENCES work_runs(id), storage_key text NOT NULL,
+    sha256 text NOT NULL, size_bytes bigint NOT NULL, mime_type text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(), UNIQUE (artifact_id, run_id)
+  )`
 
   async function detail(id: string) {
     const [row] = await db`SELECT t.id, t.goal, t.source_url AS "sourceUrl", t.status, t.created_at AS "createdAt",
@@ -75,9 +87,30 @@ export async function createWorkStore(databaseUrl: string) {
       WHERE t.id = ${id} AND t.owner_id = 'owner' ORDER BY r.created_at DESC, r.id DESC LIMIT 1`
     if (!row) return null
     const messages = await db`SELECT role, content FROM work_messages WHERE thread_id = ${row.threadId} ORDER BY created_at, id`
+    const artifacts = await db`SELECT a.id, a.kind, a.name, v.id AS "versionId", v.run_id AS "runId",
+      v.sha256, v.size_bytes AS "sizeBytes", v.mime_type AS "mimeType", v.created_at AS "createdAt"
+      FROM work_artifacts a JOIN work_artifact_versions v ON v.artifact_id = a.id
+      WHERE a.task_id = ${id} ORDER BY v.created_at DESC, v.id DESC`
     return { id: row.id, goal: row.goal, sourceUrl: row.sourceUrl, status: row.status, createdAt: row.createdAt,
       run: { id: row.runId, status: row.runStatus, model: typeof row.model === 'string' ? JSON.parse(row.model) : row.model,
-        epoch: row.epoch, cleanupState: row.cleanupState, failure: row.failure, startedAt: row.startedAt, finishedAt: row.finishedAt }, thread: { id: row.threadId, messages } }
+        epoch: row.epoch, cleanupState: row.cleanupState, failure: row.failure, startedAt: row.startedAt, finishedAt: row.finishedAt }, thread: { id: row.threadId, messages }, artifacts }
+  }
+
+  async function artifactVersion(versionId: string) {
+    const [row] = await db`SELECT a.name, a.kind, v.storage_key AS "storageKey", v.sha256,
+      v.size_bytes AS "sizeBytes", v.mime_type AS "mimeType"
+      FROM work_artifact_versions v JOIN work_artifacts a ON a.id = v.artifact_id
+      JOIN work_tasks t ON t.id = a.task_id WHERE v.id = ${versionId} AND t.owner_id = 'owner'`
+    return row ?? null
+  }
+
+  async function requestCleanupRetry(taskId: string) {
+    const rows = await db`UPDATE work_runs SET cleanup_state='retry_requested'
+      WHERE id = (SELECT r.id FROM work_runs r JOIN work_tasks t ON t.id = r.task_id
+        WHERE t.id = ${taskId} AND t.owner_id = 'owner' AND r.cleanup_state IN ('blocked', 'failed')
+        ORDER BY r.created_at DESC, r.id DESC LIMIT 1)
+      RETURNING id`
+    return rows.length > 0
   }
 
   async function events(taskId: string, after: number) {
@@ -158,5 +191,5 @@ export async function createWorkStore(databaseUrl: string) {
       WHERE EXISTS (SELECT 1 FROM work_runs WHERE id = ${runId} AND epoch = ${epoch} AND active)`
   }
 
-  return { list, detail, events, create, resolveRunModelConnection, authorizeModelProxy, recordModelUsage }
+  return { list, detail, events, create, artifactVersion, requestCleanupRetry, resolveRunModelConnection, authorizeModelProxy, recordModelUsage }
 }

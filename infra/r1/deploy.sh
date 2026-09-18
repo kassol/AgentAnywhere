@@ -6,6 +6,8 @@ test "$(docker inspect -f '{{.State.Health.Status}}' agentanywhere-r1-postgres)"
 POSTGRES_IP="$(docker inspect -f '{{(index .NetworkSettings.Networks "agentanywhere-r1_default").IPAddress}}' agentanywhere-r1-postgres)"
 test -n "$POSTGRES_IP"
 export POSTGRES_IP
+mkdir -p artifacts
+chown 1000:1000 artifacts
 
 docker compose -f compose.yaml up -d --no-deps --force-recreate web
 attempt=0

@@ -8,6 +8,8 @@ services:
     ports:
       - "127.0.0.1:19110:3000"
     env_file: [./service.env, ./database.env]
+    environment:
+      AGENTANYWHERE_ARTIFACT_DIR: /artifacts
     extra_hosts: ["postgres:${POSTGRES_IP:?resolve Postgres address before compose up}"]
     depends_on:
       postgres:
@@ -19,6 +21,7 @@ services:
       retries: 12
     volumes:
       - ./data:/data
+      - ./artifacts:/artifacts:ro
       - ./resolv.conf:/etc/resolv.conf:ro
     read_only: true
     tmpfs:
@@ -41,12 +44,15 @@ services:
       AGENT_IMAGE: agentanywhere-r1-agent:r1-05
       OPEN_SANDBOX_DOMAIN: opensandbox:8080
       MODEL_PROXY_ORIGIN: http://web:3000
+      AGENTANYWHERE_ARTIFACT_DIR: /artifacts
     depends_on:
       web:
         condition: service_healthy
       postgres:
         condition: service_healthy
     read_only: true
+    volumes:
+      - ./artifacts:/artifacts
     tmpfs:
       - /tmp:size=16m,mode=1777
     cap_drop: [ALL]
