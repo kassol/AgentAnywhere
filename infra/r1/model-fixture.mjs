@@ -4,6 +4,8 @@ const calls = []
 const send = (response, data) => response.write(`data: ${JSON.stringify(data)}\n\n`)
 const report = '# Fixture report\n\nSource: [Example](https://example.com/source).\n\n<script>window.reportXss = true</script>\n\n[Unsafe](javascript:alert(1))\n'
 const reportArgs = JSON.stringify({ markdown: report, attachments: [{ name: 'notes.txt', content: 'fixture attachment\n' }] })
+const emptyAttachmentArgs = JSON.stringify({ markdown: report, attachments: [{ name: 'empty.txt', content: '' }] })
+const duplicateNameArgs = JSON.stringify({ markdown: report, attachments: [{ name: 'report.md', content: 'duplicate' }] })
 
 http.createServer(async (request, response) => {
   if (request.url === '/calls') {
@@ -65,6 +67,20 @@ http.createServer(async (request, response) => {
   calls.push({ model: body.model, toolResult, observation, stream: body.stream })
   response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' })
   const common = { id: `fixture-${calls.length}`, object: 'chat.completion.chunk', created: 1, model: body.model }
+  if (body.model === 'fixture-empty-attachment' || body.model === 'fixture-duplicate-name') {
+    if (!submitted) {
+      const invalid = body.model === 'fixture-duplicate-name' && !observation.some(item => item.includes('附件名称重复'))
+      const args = body.model === 'fixture-empty-attachment' ? emptyAttachmentArgs : invalid ? duplicateNameArgs : reportArgs
+      send(response, { ...common, choices: [{ index: 0, delta: { role: 'assistant', tool_calls: [{ index: 0, id: invalid ? 'call_invalid_report' : 'call_report', type: 'function', function: { name: 'submit_report', arguments: '' } }] }, finish_reason: null }] })
+      send(response, { ...common, choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: args } }] }, finish_reason: null }] })
+      send(response, { ...common, choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] })
+    } else {
+      send(response, { ...common, choices: [{ index: 0, delta: { role: 'assistant', content: 'Report submitted.' }, finish_reason: null }] })
+      send(response, { ...common, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })
+    }
+    send(response, { ...common, choices: [], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } })
+    return response.end('data: [DONE]\n\n')
+  }
   if (!submitted) {
     const name = echoed ? 'submit_report' : 'echo_observation'
     const args = echoed ? reportArgs : '{"text":"fixture observation"}'

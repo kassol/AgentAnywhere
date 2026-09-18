@@ -116,7 +116,7 @@ async function persistArtifacts(run, sandbox) {
     const source = `${outputDir}/${entry.path}`
     const info = await optionalFileInfo(sandbox, source)
     const limit = index === 0 ? 2_000_000 : 10_000_000
-    if (info?.type !== 'file' || !Number.isSafeInteger(info.size) || info.size < 1 || info.size > limit) throw new Error('成果文件类型或大小无效')
+    if (info?.type !== 'file' || !Number.isSafeInteger(info.size) || info.size < (index === 0 ? 1 : 0) || info.size > limit) throw new Error('成果文件类型或大小无效')
     const temporary = join(destination, `${entry.path}.${randomBytes(8).toString('hex')}.tmp`)
     const file = await open(temporary, 'wx', 0o600)
     let size = 0
