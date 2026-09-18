@@ -341,7 +341,7 @@ async function cleanup(run, sandboxId) {
 }
 
 async function stopRecoveredAgent(sandbox) {
-  await sandbox.files.writeFiles([{ path: '/tmp/agentanywhere-recovery-stop', data: Buffer.from('stop'), mode: 0o600 }])
+  await sandbox.files.writeFiles([{ path: '/tmp/agentanywhere-recovery-stop', data: Buffer.from('stop'), mode: 600 }])
   const command = String.raw`node -e 'const fs=require("node:fs");
     const running=()=>fs.readdirSync("/proc").filter(name=>/^[0-9]+$/.test(name)).filter(pid=>{
       try { const args=fs.readFileSync("/proc/"+pid+"/cmdline","utf8").split(String.fromCharCode(0));
