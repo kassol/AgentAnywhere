@@ -1,6 +1,6 @@
 # 首个可用版本：精简 Web 与模型接入
 
-日期：2026-09-18。状态：grill-with-docs 访谈已完成，18 项决定及整体范围已确认；作为后续 spec 的输入，尚未开始实现或部署。完整产品范围仍以 PRD/MVP 为准，本文件限定首个可用增量。
+日期：2026-09-18。状态：grill-with-docs 访谈完成时，18 项决定及整体范围已确认；作为后续 spec 的输入。后续实施状态见 [阶段验证记录](evidence/)。完整产品范围仍以 PRD/MVP 为准，本文件限定首个可用增量。
 
 ## 已确认的验收路径
 
@@ -46,7 +46,7 @@ W0 原生 Craft 页面继续作为独立验证环境。正式 Web 按本文件�
 
 Q18 已确认：在指定主机 cc-la 新建独立 SearXNG 私有实例，部署与 JSON 搜索接口验证纳入首版。现有服务保持不变；沿用项目隔离与访问边界，不开放无鉴权公共搜索入口。Tavily 仅为已研究候选，不纳入本版实现。
 
-SearXNG 提供 GET/POST `/search`，`format=json` 需要实例在 `search.formats` 启用 JSON；未启用返回 403。语言和时间范围的实际效果取决于启用的上游引擎。需验证 cc-la 上的查询可达性、中文结果、来源字段和上游错误反馈。依据：[官方 Search API](https://docs.searxng.org/dev/search_api.html)。尚未部署或发送实际查询。
+SearXNG 提供 GET/POST `/search`，`format=json` 需要实例在 `search.formats` 启用 JSON；未启用返回 403。语言和时间范围的实际效果取决于启用的上游引擎。cc-la 的独立实例已返回真实中文 JSON 结果，复查时观察到部分引擎 CAPTCHA；部署与查询证据见 [R1 搜索服务记录](../infra/r1/search/README.md)。受控搜索工具尚未接入，时间筛选与完整调研闭环仍待验收。依据：[官方 Search API](https://docs.searxng.org/dev/search_api.html)。
 
 ## 后续工程核查
 
