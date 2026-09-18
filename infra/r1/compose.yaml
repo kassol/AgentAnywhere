@@ -1,7 +1,7 @@
 name: agentanywhere-r1
 services:
   web:
-    image: agentanywhere-r1-web:r1-05
+    image: agentanywhere-r1-web:${AGENTANYWHERE_RELEASE:?set the 40-character release commit SHA}
     container_name: agentanywhere-r1-web
     runtime: agentanywhere-w0-runsc
     restart: unless-stopped
@@ -36,12 +36,12 @@ services:
       sandbox:
         aliases: [web]
   queue:
-    image: agentanywhere-r1-queue:r1-05
+    image: agentanywhere-r1-queue:${AGENTANYWHERE_RELEASE:?set the 40-character release commit SHA}
     container_name: agentanywhere-r1-queue
     restart: unless-stopped
     env_file: [./database.env, ./opensandbox.env, ./service.env]
     environment:
-      AGENT_IMAGE: agentanywhere-r1-agent:r1-05
+      AGENT_IMAGE: agentanywhere-r1-agent:${AGENTANYWHERE_RELEASE:?set the 40-character release commit SHA}
       OPEN_SANDBOX_DOMAIN: opensandbox:8080
       MODEL_PROXY_ORIGIN: http://web:3000
       AGENTANYWHERE_ARTIFACT_DIR: /artifacts
