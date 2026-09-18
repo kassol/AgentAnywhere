@@ -146,7 +146,7 @@ export async function createWorkStore(databaseUrl: string) {
           AND type IN ('run.finished', 'run.failed') LIMIT 1`
         if (terminal) return { accepted: false }
       }
-      if (run.status === 'waiting' && !run.active && run.checkpointRef) {
+      if (run.status === 'waiting' && run.checkpointRef) {
         const checkpoint = typeof run.checkpointRef === 'string' ? JSON.parse(run.checkpointRef) : run.checkpointRef
         if (checkpoint.epoch !== run.epoch || !Array.isArray(checkpoint.files)) throw new WorkConflictError('检查点无效')
         const artifacts = Array.isArray(checkpoint.artifacts) ? checkpoint.artifacts : checkpoint.files
