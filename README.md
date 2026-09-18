@@ -6,6 +6,9 @@
 
 ## 文档
 
+- [工程规范](AGENTS.md)、[领域定义](CONTEXT.md)与[关键决策](docs/adr/)。
+- [GitHub Issues](https://github.com/kassol/AgentAnywhere/issues)：任务与 spec。
+
 - [产品需求（PRD）](docs/PRD.md)：产品定位、交互、领域模型与权限边界。
 - [MVP 实施与验收](docs/MVP.md)：技术路线、W0—W8 任务包与 A01—A25 验收用例。
 - [总体架构](diagrams/architecture.svg)：交互面、VPS 控制面与隔离执行面。
