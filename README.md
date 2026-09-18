@@ -11,6 +11,7 @@
 
 - [产品需求（PRD）](docs/PRD.md)：产品定位、交互、领域模型与权限边界。
 - [MVP 实施与验收](docs/MVP.md)：技术路线、W0—W8 任务包与 A01—A25 验收用例。
+- [W0 决策记录](docs/W0.md)：已确认的验证范围与待决条件。
 - [总体架构](diagrams/architecture.svg)：交互面、VPS 控制面与隔离执行面。
 - [浏览器隔离与人工接管](diagrams/browser.png)：Browser Broker、独立浏览器与控制租约。
 
