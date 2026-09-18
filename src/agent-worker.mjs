@@ -14,8 +14,17 @@ let finished = false
 let session
 let reportSubmitted = false
 let cancelRequested = false
+let recoveryRequested = false
+let stopPolling = () => {}
+let executionDone
 const outputDir = '/tmp/agentanywhere-output'
 const sessionDir = '/tmp/agentanywhere-session'
+const recoveryStopPath = '/tmp/agentanywhere-recovery-stop'
+
+async function recoveryStopped() {
+  try { await stat(recoveryStopPath); return true }
+  catch (error) { if (error.code === 'ENOENT') return false; throw error }
+}
 
 function authorized(request) {
   const supplied = request.headers['x-run-token'] || ''
@@ -44,8 +53,10 @@ function send(response, status, body) {
 async function execute({ goal, model, proxyBase, toolBase, resume = false, answer }) {
   let messageTimer
   let acceptingMessages = false
+  stopPolling = () => { acceptingMessages = false }
   let question = null
   try {
+    if (await recoveryStopped()) throw new Error('Run interrupted')
     if (typeof goal !== 'string' || !goal || !model || typeof model.id !== 'string' || !['chat-completions', 'responses'].includes(model.protocol) || !/^http:\/\/[a-z0-9.-]+(?::\d+)?\/internal\/runs\/[0-9a-f-]+\/\d+\/v1$/i.test(proxyBase)
       || !/^http:\/\/[a-z0-9.-]+(?::\d+)?\/internal\/research\/[0-9a-f-]+\/\d+$/i.test(toolBase)
       || (resume && answer !== null && (typeof answer !== 'string' || !answer.trim() || answer.length > 4000))) throw new Error('Run 配置无效')
@@ -128,7 +139,7 @@ async function execute({ goal, model, proxyBase, toolBase, resume = false, answe
     session = created.session
     if (resume) reportSubmitted = await stat(`${outputDir}/manifest.json`).then(info => info.isFile(), () => false)
     session.agent.shouldStopAfterTurn = () => question !== null
-    if (cancelRequested) throw new Error('Run cancelled')
+    if (cancelRequested || recoveryRequested || await recoveryStopped()) throw new Error('Run interrupted')
     const messageUrl = `${proxyBase.slice(0, -3)}/messages`
     const queued = new Map()
     const seen = new Set()
@@ -203,8 +214,20 @@ async function execute({ goal, model, proxyBase, toolBase, resume = false, answe
   } finally {
     clearInterval(messageTimer)
     session?.dispose()
+    stopPolling = () => {}
   }
 }
+
+process.once('SIGTERM', () => {
+  recoveryRequested = true
+  stopPolling()
+  void (async () => {
+    try {
+      await session?.abort().catch(() => {})
+      await executionDone
+    } finally { process.exit(0) }
+  })()
+})
 
 http.createServer(async (request, response) => {
   if (request.url === '/health') return send(response, 200, { ready: true })
@@ -219,7 +242,7 @@ http.createServer(async (request, response) => {
     return
   }
   if (request.url === '/run' && request.method === 'POST') {
-    if (cancelRequested) return send(response, 409, { error: 'Run cancelled' })
+    if (cancelRequested || recoveryRequested) return send(response, 409, { error: 'Run interrupted' })
     if (started) return send(response, 200, { started: true })
     let body = ''
     request.setEncoding('utf8')
@@ -231,7 +254,7 @@ http.createServer(async (request, response) => {
     try { parsed = JSON.parse(body) } catch { return send(response, 400, { error: 'Invalid JSON' }) }
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return send(response, 400, { error: 'Invalid run configuration' })
     started = true
-    void execute(parsed)
+    executionDone = execute(parsed)
     return send(response, 202, { started: true })
   }
   if (request.url === '/cancel' && request.method === 'POST') {

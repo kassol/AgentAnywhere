@@ -340,6 +340,23 @@ async function cleanup(run, sandboxId) {
   } catch { return 'failed' }
 }
 
+async function stopRecoveredAgent(sandbox) {
+  await sandbox.files.writeFiles([{ path: '/tmp/agentanywhere-recovery-stop', data: Buffer.from('stop'), mode: 600 }])
+  const command = String.raw`node -e 'const fs=require("node:fs");
+    const running=()=>fs.readdirSync("/proc").filter(name=>/^[0-9]+$/.test(name)).filter(pid=>{
+      try { const args=fs.readFileSync("/proc/"+pid+"/cmdline","utf8").split(String.fromCharCode(0));
+        return args[0].split("/").at(-1)==="node" && args[1]==="/app/agent-worker.mjs" }
+      catch { return false }
+    });
+    const found=running();
+    if(found.length>1) process.exit(2);
+    if(found.length) process.kill(Number(found[0]),"SIGTERM");
+    const started=Date.now();
+    setInterval(()=>{ if(!running().length) process.exit(0); if(Date.now()-started>10000) process.exit(3) },100)'`
+  const result = await sandbox.commands.run(command, { timeoutSeconds: 12 })
+  if (result.exitCode !== 0) throw new Error('旧 Pi 未停止')
+}
+
 async function finish(run, result, sandboxId) {
   const cleanupState = await cleanup(run, sandboxId)
   const db = await pool.connect()
@@ -505,7 +522,10 @@ async function reconcile() {
       active_since=NULL WHERE id=$1 AND epoch=$2 AND active`, [run.id, run.epoch])
     let sandbox
     try {
-      if (run.sandbox_id) sandbox = await Sandbox.connect({ connectionConfig: sandboxConnection, sandboxId: run.sandbox_id })
+      if (run.sandbox_id) {
+        sandbox = await Sandbox.connect({ connectionConfig: sandboxConnection, sandboxId: run.sandbox_id })
+        await stopRecoveredAgent(sandbox)
+      }
       if (sandbox && run.status !== 'cancelling' && await optionalFileInfo(sandbox, '/tmp/agentanywhere-session/checkpoint.jsonl')) await saveCheckpoint(run, sandbox)
       const persisted = await pool.query('SELECT 1 FROM work_artifact_versions WHERE run_id=$1 LIMIT 1', [run.id])
       if (persisted.rowCount) {
@@ -524,7 +544,7 @@ async function reconcile() {
       if (manifest || report) await markSaveBlocked(run, new Error('执行服务中断，需重试保存已有报告'), { status: 'lost', failure: '执行服务中断；请手动重试' })
       else await finish(run, { status: 'lost', failure: '执行服务中断；请手动重试' }, run.sandbox_id)
     } catch (error) {
-      if (error.statusCode === 404) await finish(run, { status: 'lost', failure: '执行中断且沙箱已失效；请手动重试' }, run.sandbox_id)
+      if (error.statusCode === 404 && !sandbox) await finish(run, { status: 'lost', failure: '执行中断且沙箱已失效；请手动重试' }, run.sandbox_id)
       else await markSaveBlocked(run, error, { status: 'lost', failure: '执行服务中断；请手动重试' })
     }
     finally { await sandbox?.close().catch(() => {}) }
@@ -542,6 +562,7 @@ async function recoverPending() {
         if (run.status === 'waiting') { await releaseWaiting(run, run.sandbox_id); return }
         if (run.status === 'save_failed') {
           sandbox = await Sandbox.connect({ connectionConfig: sandboxConnection, sandboxId: run.sandbox_id })
+          await stopRecoveredAgent(sandbox)
           if (run.pending_status === 'waiting') {
             const event = await pool.query("SELECT payload FROM work_events WHERE run_id=$1 AND epoch=$2 AND type='interaction.requested' ORDER BY server_seq DESC LIMIT 1", [run.id, run.epoch])
             const reason = (await pool.query('SELECT budget_reason FROM work_runs WHERE id=$1', [run.id])).rows[0]?.budget_reason
