@@ -15,6 +15,7 @@ if (mode !== 'isolated') {
 // These checks restart test services and change test model configuration.
 const origin = process.env.TEST_WEB_ORIGIN || 'http://127.0.0.1:19112'
 assert.equal(origin, 'http://127.0.0.1:19112', 'Use the isolated R1 test stack')
+assert.ok(process.env.TEST_CONTROL_PLANE_ORIGIN, 'Set TEST_CONTROL_PLANE_ORIGIN to the queue configuration')
 execFileSync('docker', ['restart', 'agentanywhere-r1-test-model-fixture-1'], { stdio: 'inherit' })
 const fixture = process.env.TEST_FIXTURE_ORIGIN || 'http://127.0.0.1:19113'
 let ready = false
