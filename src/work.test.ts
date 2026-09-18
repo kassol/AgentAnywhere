@@ -135,6 +135,7 @@ test.skipIf(!databaseUrl)('owner creates one persisted queued work request throu
     expect(continuedTask.run.id).not.toBe(task.run.id)
     expect(continuedTask.runs).toHaveLength(2)
     expect(continuedTask.artifacts).toMatchObject([{ versionId, runId: task.run.id }])
+    expect(continuedTask.thread.messages.find((item: { content: string }) => item.content === deferredInput.content)).toMatchObject({ status: 'carried' })
     expect(continuedTask.thread.messages.at(-1)).toMatchObject({ content: continueBody.content })
     expect((await send(`/api/tasks/${task.id}/runs`, 'POST', continueBody)).status).toBe(200)
     expect((await send(`/api/tasks/${task.id}/runs`, 'POST', { ...continueBody, content: '另一要求' })).status).toBe(409)

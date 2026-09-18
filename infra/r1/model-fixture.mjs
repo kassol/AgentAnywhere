@@ -88,7 +88,10 @@ http.createServer(async (request, response) => {
   }
   if (!submitted || (steered && submissions === 1)) {
     const name = steered && submitted ? 'submit_report' : echoed ? 'submit_report' : 'echo_observation'
-    const args = steered && submitted ? JSON.stringify({ markdown: `${report}\nSTEERING_MARKER_12\n` }) : echoed ? continued ? JSON.stringify({ markdown: `${report}\nCONTINUATION_MARKER_16\n`, attachments: [{ name: 'notes.txt', content: 'continued attachment\n' }] }) : reportArgs : '{"text":"fixture observation"}'
+    let args = '{"text":"fixture observation"}'
+    if (steered && submitted) args = JSON.stringify({ markdown: `${report}\nSTEERING_MARKER_12\n` })
+    else if (echoed && continued) args = JSON.stringify({ markdown: `${report}\nCONTINUATION_MARKER_16\n`, attachments: [{ name: 'notes.txt', content: 'continued attachment\n' }] })
+    else if (echoed) args = reportArgs
     const callId = steered && submitted ? 'call_report_revision' : echoed ? 'call_report' : 'call_echo'
     send(response, { ...common, choices: [{ index: 0, delta: { role: 'assistant', tool_calls: [{ index: 0, id: callId, type: 'function', function: { name, arguments: '' } }] }, finish_reason: null }] })
     send(response, { ...common, choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: args } }] }, finish_reason: null }] })
