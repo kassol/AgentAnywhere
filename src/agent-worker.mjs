@@ -70,6 +70,7 @@ async function execute({ goal, model, proxyBase }) {
             if (!/^[^/\\\x00-\x1f]{1,100}\.(txt|csv|json|md)$/i.test(item.name) || Buffer.byteLength(item.content, 'utf8') > 10_000_000) throw new Error('附件类型、名称或大小无效')
             files.push({ path: `attachment-${index}.${item.name.split('.').at(-1).toLowerCase()}`, name: item.name, type: 'text/plain' })
           }
+          if (new Set(files.map(item => item.name)).size !== files.length) throw new Error('附件名称重复')
           await mkdir(outputDir, { recursive: true, mode: 0o700 })
           const generation = `generation-${crypto.randomUUID()}`
           const temporary = `${outputDir}/${generation}`
