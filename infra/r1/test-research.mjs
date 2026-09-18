@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
+import { lookup } from 'node:dns/promises'
 
 const base = process.env.TEST_WEB_ORIGIN || 'http://127.0.0.1:19112'
 const fixture = process.env.TEST_FIXTURE_ORIGIN || 'http://127.0.0.1:19113'
+const controlOrigin = process.env.TEST_CONTROL_PLANE_ORIGIN
+assert.ok(controlOrigin, 'TEST_CONTROL_PLANE_ORIGIN must match the queue configuration')
 const password = (await readFile(process.env.TEST_PASSWORD_FILE || '/opt/agentanywhere-r1/test-password', 'utf8')).trim()
 const login = await fetch(`${base}/api/auth`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password }) })
 assert.equal(login.status, 204)
@@ -23,7 +26,7 @@ async function waitFor(check) {
   throw new Error('Research run timeout')
 }
 await api('/api/model-connection', 'PUT', { endpoint: 'http://model-fixture:3002/v1', apiKey: 'fixture-only' })
-await api('/api/model-connection/models', 'PUT', { defaultModel: 'fixture-research', models: ['fixture-research', 'fixture-url', 'fixture-rejected'].map(id => ({ id, protocol: 'chat-completions', overrides: { contextWindow: 128000, maxTokens: 1024, input: ['text'], reasoning: false, tools: true } })) })
+await api('/api/model-connection/models', 'PUT', { defaultModel: 'fixture-research', models: ['fixture-research', 'fixture-url', 'fixture-rejected', 'fixture-control-ip'].map(id => ({ id, protocol: 'chat-completions', overrides: { contextWindow: 128000, maxTokens: 1024, input: ['text'], reasoning: false, tools: true } })) })
 const theme = await api('/api/tasks', 'POST', { requestId: crypto.randomUUID(), goal: '研究 Example Domain，并标出搜索引擎失败', modelId: 'fixture-research' })
 await waitFor(async () => (await (await fetch(`${fixture}/waiting-search`)).json()).count > 0)
 const during = await api(`/api/tasks/${theme.id}/events`)
@@ -32,6 +35,8 @@ assert.ok(!during.some(item => item.type === 'tool.completed' && item.payload.na
 assert.equal((await fetch(`${fixture}/release-search`, { method: 'POST' })).status, 200)
 const url = await api('/api/tasks', 'POST', { requestId: crypto.randomUUID(), goal: '读取指定公开网页并交付引用报告', sourceUrl: 'https://example.com/', modelId: 'fixture-url' })
 const rejected = await api('/api/tasks', 'POST', { requestId: crypto.randomUUID(), goal: '验证私网链接被拒绝', modelId: 'fixture-rejected' })
+const controlIp = (await lookup(new URL(controlOrigin).hostname, { family: 4 })).address
+const control = await api('/api/tasks', 'POST', { requestId: crypto.randomUUID(), goal: '验证控制面公网 IP 被拒绝', sourceUrl: `http://${controlIp}/`, modelId: 'fixture-control-ip' })
 for (const item of [theme, url]) {
   const detail = await waitFor(async () => {
     const value = await api(`/api/tasks/${item.id}`)
@@ -51,4 +56,10 @@ await waitFor(async () => {
 })
 const rejectedEvents = await api(`/api/tasks/${rejected.id}/events`)
 assert.ok(rejectedEvents.some(event => event.type === 'tool.completed' && event.payload.name === 'open_public_page' && event.payload.isError && /非公开地址/.test(event.payload.result)))
-console.log(JSON.stringify({ theme: 'succeeded', sourceUrl: 'succeeded', privateUrl: 'rejected', searchPendingObserved: true, reportPersisted: true }))
+await waitFor(async () => {
+  const detail = await api(`/api/tasks/${control.id}`)
+  return detail.run.status === 'succeeded' && detail.run.cleanupState === 'cleaned'
+})
+const controlEvents = await api(`/api/tasks/${control.id}/events`)
+assert.ok(controlEvents.some(event => event.type === 'tool.completed' && event.payload.name === 'open_public_page' && event.payload.isError && /控制面/.test(event.payload.result)))
+console.log(JSON.stringify({ theme: 'succeeded', sourceUrl: 'succeeded', privateUrl: 'rejected', controlIp: 'rejected', searchPendingObserved: true, reportPersisted: true }))

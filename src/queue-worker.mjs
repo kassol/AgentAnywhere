@@ -22,7 +22,7 @@ const artifactDir = process.env.AGENTANYWHERE_ARTIFACT_DIR || '/artifacts'
 const outputDir = '/tmp/agentanywhere-output'
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms))
 const searchOrigin = process.env.SEARCH_ORIGIN || 'http://agentanywhere-r1-searxng:8080'
-const publicHost = process.env.AGENTANYWHERE_PUBLIC_ORIGIN && new URL(process.env.AGENTANYWHERE_PUBLIC_ORIGIN).hostname
+const publicHost = process.env.AGENTANYWHERE_PUBLIC_ORIGIN && new URL(process.env.AGENTANYWHERE_PUBLIC_ORIGIN).hostname.replace(/^\[|\]$/g, '')
 if (!publicHost) throw new Error('AGENTANYWHERE_PUBLIC_ORIGIN is required for public page protection')
 
 const researchServer = http.createServer(async (request, response) => {

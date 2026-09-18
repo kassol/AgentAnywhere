@@ -87,11 +87,14 @@ http.createServer(async (request, response) => {
     return response.end()
   }
   const observation = body.messages.filter(message => message.role === 'tool').flatMap(message => typeof message.content === 'string' ? [message.content] : message.content?.filter?.(part => part.type === 'text').map(part => part.text) || [])
-  if (['fixture-research', 'fixture-url', 'fixture-rejected'].includes(body.model)) {
+  if (['fixture-research', 'fixture-url', 'fixture-rejected', 'fixture-control-ip'].includes(body.model)) {
     const searched = observation.some(item => item.includes('search_snippet'))
     const opened = body.messages.some(item => item.role === 'assistant' && item.tool_calls?.some(call => call.function?.name === 'open_public_page'))
     const name = opened ? 'submit_report' : body.model !== 'fixture-research' || searched ? 'open_public_page' : 'search_web'
-    const args = opened ? JSON.stringify({ markdown: '# Research fixture\n\n搜索摘要：Example source excerpt。\n\n正文来源：[Example Domain](https://example.com/)。\n\n部分引擎失败：duckduckgo CAPTCHA。' }) : name === 'open_public_page' ? JSON.stringify({ url: body.model === 'fixture-rejected' ? 'http://169.254.169.254/latest/meta-data/' : 'https://example.com/' }) : JSON.stringify({ query: 'fixture-blocked' })
+    const firstUser = body.messages.find(item => item.role === 'user')?.content
+    const userText = typeof firstUser === 'string' ? firstUser : firstUser?.filter?.(item => item.type === 'text').map(item => item.text).join('') || ''
+    const specified = userText.match(/指定来源：(\S+)/)?.[1]
+    const args = opened ? JSON.stringify({ markdown: '# Research fixture\n\n搜索摘要：Example source excerpt。\n\n正文来源：[Example Domain](https://example.com/)。\n\n部分引擎失败：duckduckgo CAPTCHA。' }) : name === 'open_public_page' ? JSON.stringify({ url: body.model === 'fixture-rejected' ? 'http://169.254.169.254/latest/meta-data/' : body.model === 'fixture-control-ip' ? specified : 'https://example.com/' }) : JSON.stringify({ query: 'fixture-blocked' })
     calls.push({ model: body.model, observation, name, stream: body.stream })
     response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' })
     const common = { id: `fixture-${calls.length}`, object: 'chat.completion.chunk', created: 1, model: body.model }

@@ -21,18 +21,27 @@ async function publicTarget(input, forbiddenHost, signal) {
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || !url.hostname || url.href.length > 2048) throw new Error('仅支持公开 HTTP(S) 链接')
   const host = url.hostname.replace(/^\[|\]$/g, '')
   if (host.toLowerCase().replace(/\.+$/, '') === forbiddenHost?.toLowerCase().replace(/\.+$/, '')) throw new Error('链接指向控制面')
-  const addresses = isIP(host) ? [{ address: host, family: isIP(host) }] : await (async () => {
+  const resolve = async name => isIP(name) ? [{ address: name, family: isIP(name) }] : await (async () => {
     let timer
     let onAbort
     try {
       return await Promise.race([
-        lookup(host, { all: true, verbatim: true }),
+        lookup(name, { all: true, verbatim: true }),
         new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('域名解析超时')), 5_000) }),
         new Promise((_, reject) => { onAbort = () => reject(signal.reason); signal?.addEventListener('abort', onAbort, { once: true }) }),
       ])
     } finally { clearTimeout(timer); signal?.removeEventListener('abort', onAbort) }
   })()
+  const addresses = await resolve(host)
   if (!addresses.length || addresses.some(({ address }) => !publicAddress(address))) throw new Error('链接指向非公开地址')
+  if (forbiddenHost) {
+    let controlAddresses
+    try { controlAddresses = await resolve(forbiddenHost) } catch { throw new Error('无法验证控制面地址') }
+    if (!controlAddresses.length) throw new Error('无法验证控制面地址')
+    const control = new BlockList()
+    for (const item of controlAddresses) control.addAddress(item.address, item.family === 4 ? 'ipv4' : 'ipv6')
+    if (addresses.some(item => control.check(item.address, item.family === 4 ? 'ipv4' : 'ipv6'))) throw new Error('链接指向控制面')
+  }
   return { url, ...addresses[0] }
 }
 

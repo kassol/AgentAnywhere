@@ -31,7 +31,7 @@ services:
       MODEL_PROXY_ORIGIN: http://test-web:3000
       SEARCH_ORIGIN: http://model-fixture:3002
       AGENTANYWHERE_ARTIFACT_DIR: /artifacts
-      AGENTANYWHERE_PUBLIC_ORIGIN: http://test-web:3000
+      AGENTANYWHERE_PUBLIC_ORIGIN: ${TEST_CONTROL_PLANE_ORIGIN:-http://test-web:3000}
     volumes: ["./test-artifacts:/artifacts"]
     networks: [app, sandbox]
   model-fixture:
