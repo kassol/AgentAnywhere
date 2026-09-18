@@ -29,6 +29,7 @@ services:
       AGENT_IMAGE: agentanywhere-r1-agent:${TEST_RELEASE:?set the 40-character test commit SHA}
       OPEN_SANDBOX_DOMAIN: opensandbox:8080
       MODEL_PROXY_ORIGIN: http://test-web:3000
+      TOOL_GATEWAY_ORIGIN: http://agentanywhere-r1-test-queue-1:3003
       SEARCH_ORIGIN: http://model-fixture:3002
       AGENTANYWHERE_ARTIFACT_DIR: /artifacts
       AGENTANYWHERE_PUBLIC_ORIGIN: ${TEST_CONTROL_PLANE_ORIGIN:-http://test-web:3000}
