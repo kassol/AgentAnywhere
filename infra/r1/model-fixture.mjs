@@ -28,6 +28,10 @@ http.createServer(async (request, response) => {
     }
     response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' })
     const responseId = `resp_${calls.length}`
+    if (body.model === 'fixture-responses-stream-error') {
+      send(response, { type: 'response.failed', response: { id: responseId, status: 'failed', error: { code: 'fixture_stream_failure', message: 'fixture streamed failure' } } })
+      return response.end()
+    }
     const usage = body.model === 'fixture-responses-missing' && !toolResult ? undefined : { input_tokens: 10, output_tokens: 5, total_tokens: 15 }
     if (!toolResult) {
       const item = { id: 'fc_echo', type: 'function_call', call_id: 'call_echo', name: 'echo_observation', arguments: '{"text":"fixture observation"}' }
@@ -40,7 +44,10 @@ http.createServer(async (request, response) => {
     } else {
       const item = { id: 'msg_fixture', type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'The fixture observation was returned.', annotations: [] }] }
       send(response, { type: 'response.output_item.added', output_index: 0, item: { ...item, content: [] } })
-      for (const delta of ['The fixture ', 'observation was ', 'returned.']) send(response, { type: 'response.output_text.delta', output_index: 0, content_index: 0, delta })
+      for (const delta of ['The fixture ', 'observation was ', 'returned.']) {
+        send(response, { type: 'response.output_text.delta', output_index: 0, content_index: 0, delta })
+        await new Promise(resolve => setTimeout(resolve, 500))
+      }
       send(response, { type: 'response.output_item.done', output_index: 0, item })
       send(response, { type: 'response.completed', response: { id: responseId, status: 'completed', output: [item], ...(usage ? { usage } : {}) } })
     }

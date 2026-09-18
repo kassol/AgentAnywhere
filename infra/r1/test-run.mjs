@@ -18,7 +18,7 @@ async function api(path, method = 'GET', body) {
 }
 
 await api('/api/model-connection', 'PUT', { endpoint: 'http://model-fixture:3002/v1', apiKey: 'fixture-only' })
-await api('/api/model-connection/models', 'PUT', { defaultModel: 'fixture-slow', models: [...['fixture-slow', 'fixture-mixed', 'fixture-split'].map(id => ({ id, protocol: 'chat-completions' })), ...['fixture-responses', 'fixture-responses-missing', 'fixture-responses-error'].map(id => ({ id, protocol: 'responses' }))].map(model => ({ ...model, overrides: { contextWindow: 128000, maxTokens: 1024, input: ['text'], reasoning: false, tools: true } })) })
+await api('/api/model-connection/models', 'PUT', { defaultModel: 'fixture-slow', models: [...['fixture-slow', 'fixture-mixed', 'fixture-split'].map(id => ({ id, protocol: 'chat-completions' })), ...['fixture-responses', 'fixture-responses-missing', 'fixture-responses-error', 'fixture-responses-stream-error'].map(id => ({ id, protocol: 'responses' }))].map(model => ({ ...model, overrides: { contextWindow: 128000, maxTokens: 1024, input: ['text'], reasoning: false, tools: true } })) })
 assert.equal((await fetch(`${base}/api/model-connection/test`, { method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: 'null' })).status, 400)
 assert.deepEqual(await api('/api/model-connection/test', 'POST', { modelId: 'fixture-responses', protocol: 'responses' }), { ok: true, modelId: 'fixture-responses', protocol: 'responses' })
 
@@ -31,23 +31,25 @@ const third = await task('fixture-split')
 const responseRun = await task('fixture-responses')
 const missingRun = await task('fixture-responses-missing')
 const errorRun = await task('fixture-responses-error')
-const submitted = [first, second, third, responseRun, missingRun, errorRun]
+const streamErrorRun = await task('fixture-responses-stream-error')
+const submitted = [first, second, third, responseRun, missingRun, errorRun, streamErrorRun]
 let statuses = []
-for (let i = 0; i < 100; i++) {
+for (let i = 0; i < 280; i++) {
   const rows = await Promise.all(submitted.map(item => api(`/api/tasks/${item.id}`)))
   statuses.push(rows.map(item => item.run.status))
   if (rows.every(item => ['succeeded', 'failed', 'lost'].includes(item.run.status) && item.run.cleanupState === 'cleaned')) break
   await new Promise(resolve => setTimeout(resolve, 500))
 }
 const details = await Promise.all(submitted.map(item => api(`/api/tasks/${item.id}`)))
-assert.deepEqual(details.map(item => [item.run.status, item.run.cleanupState]), [...Array(5).fill(['succeeded', 'cleaned']), ['failed', 'cleaned']])
+assert.deepEqual(details.map(item => [item.run.status, item.run.cleanupState]), [...Array(5).fill(['succeeded', 'cleaned']), ...Array(2).fill(['failed', 'cleaned'])])
 assert.ok(details.slice(3).every(item => item.run.model.protocol === 'responses'))
 assert.match(details[5].run.failure, /fixture protocol rejected/)
+assert.match(details[6].run.failure, /fixture streamed failure/)
 assert.ok(statuses.every(row => row.filter(status => ['provisioning', 'running'].includes(status)).length <= 1))
 for (const [index, item] of submitted.entries()) {
   const events = await api(`/api/tasks/${item.id}/events`)
-  if (index === 5) {
-    assert.ok(events.some(event => event.type === 'run.failed' && /fixture protocol rejected/.test(event.payload.error)))
+  if (index >= 5) {
+    assert.ok(events.some(event => event.type === 'run.failed' && new RegExp(index === 5 ? 'fixture protocol rejected' : 'fixture streamed failure').test(event.payload.error)))
     assert.ok(!events.some(event => event.type === 'run.finished'))
     continue
   }
@@ -74,6 +76,7 @@ for (const model of ['fixture-responses', 'fixture-responses-missing']) {
   assert.deepEqual(pair.find(call => call.toolResult)?.observation, ['fixture observation'])
 }
 assert.equal(calls.filter(call => call.model === 'fixture-responses-error').length, 1)
+assert.equal(calls.filter(call => call.model === 'fixture-responses-stream-error').length, 1)
 const checkSandboxes = `import { SandboxManager } from '@alibaba-group/opensandbox';
 const manager = SandboxManager.create({ connectionConfig: { domain: process.env.OPEN_SANDBOX_DOMAIN, protocol: 'http', apiKey: process.env.OPEN_SANDBOX_API_KEY, useServerProxy: true, disableMetrics: true } });
 for (const runId of process.argv.slice(1)) {
