@@ -46,7 +46,7 @@ W0 原生 Craft 页面继续作为独立验证环境。正式 Web 按本文件�
 
 Q18 已确认：在指定主机 cc-la 新建独立 SearXNG 私有实例，部署与 JSON 搜索接口验证纳入首版。现有服务保持不变；沿用项目隔离与访问边界，不开放无鉴权公共搜索入口。Tavily 仅为已研究候选，不纳入本版实现。
 
-SearXNG 提供 GET/POST `/search`，`format=json` 需要实例在 `search.formats` 启用 JSON；未启用返回 403。语言和时间范围的实际效果取决于启用的上游引擎。cc-la 的独立实例已返回真实中文 JSON 结果，复查时观察到部分引擎 CAPTCHA；部署与查询证据见 [R1 搜索服务记录](../infra/r1/search/README.md)。受控搜索工具尚未接入，时间筛选与完整调研闭环仍待验收。依据：[官方 Search API](https://docs.searxng.org/dev/search_api.html)。
+SearXNG 提供 GET/POST `/search`，`format=json` 需要实例在 `search.formats` 启用 JSON；未启用返回 403。语言和时间范围的实际效果取决于启用的上游引擎。cc-la 的独立实例已返回真实中文 JSON 结果，复查时观察到部分引擎 CAPTCHA；部署与查询证据见 [R1 搜索服务记录](../infra/r1/search/README.md)。受控搜索与正文读取已接入并通过真实调研验收，见 [R1-08](evidence/r1-08.md) 与 [R1-14](evidence/r1-14.md)；时间筛选效果仍取决于实际引擎支持。依据：[官方 Search API](https://docs.searxng.org/dev/search_api.html)。
 
 ## 后续工程核查
 

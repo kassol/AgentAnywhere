@@ -1,6 +1,6 @@
 # W0 执行证据
 
-日期：2026-09-18。环境：指定主机 `cc-la`，Ubuntu 24.04 x86_64。范围为独立上游基线验证，产品集成仍待后续任务。
+日期：2026-09-18。环境：指定主机 `cc-la`，Ubuntu 24.04 x86_64。范围为独立上游基线验证。R1 产品集成与最终发布另见 [R1-14](../r1-14.md)。
 
 ## 结果
 
@@ -30,15 +30,13 @@ Chromium 初次运行出现 GPU 初始化退出和截图错误；增加 `--disab
 
 源码与适用许可证保留在主机的独立上游目录。仓库只保存适配脚本和脱敏证据。原始构建日志位于 `/opt/agentanywhere-w0/evidence/`；Craft 原始启动日志可能含 token，不公开。
 
-## 保留环境与下一步
+## 最终归档与回收
 
-浏览器探针容器、专用网络与临时 VNC 密钥已清理。保留 `agentanywhere-w0-craft`、独立数据卷及网络、gVisor runtime、固定镜像与上游源码，供所有者继续试用；provider 配置及模型验证已经完成，环境回收仍为开放事项。Craft 仅发布宿主机 `127.0.0.1:19100`；容器内 HTTP 使用上游 `--allow-insecure-bind`，HTTPS 由现有 OpenResty 终止。
+2026-09-19（Asia/Singapore），R1 公网真实调研与报告下载通过后，停止 Craft 并完整归档 `/opt/agentanywhere-w0` 与 `agentanywhere-w0_craft-data`。私有归档位于 cc-la `/opt/agentanywhere-backups/20260918-r1-release`（root:root，0700）；两个 tar 为 0600，均通过目录读取和 `sha256sum -c final-SHA256SUMS`。配置、凭证、容器身份元数据与上游许可均随归档保留，不公开秘密内容。
 
-WebUI 密码保存在主机 `/opt/agentanywhere-w0/webui-password`（0600）；登录页面虽显示 “Server Token”，实际接受独立 `CRAFT_WEBUI_PASSWORD`。凭证不写入 Issue 或仓库。
+随后用 W0 Compose 回收 Craft 容器、独立卷和网络，逐项 inspect 确認资源不存在，并删除已归档的工作目录。公网入口现指向 R1 的 19110；正式服务仍使用的 gVisor runtime 与 OpenSandbox 镜像保留。恢复 W0 必须先从私有归档恢复环境，不能直接将代理切回空的 19100。
 
-`craft.env` 的 `CRAFT_WEBUI_WS_URL` 已改为 `wss://agent.riverflows.in`，并仅重建本测试容器。所有者已将反代目标修正为宿主 19100；公网 HTTPS 登录、API 鉴权及 WSS 握手均通过。模型调用已完成；保留环境回收后才关闭 [W0 Issue #1](https://github.com/kassol/AgentAnywhere/issues/1)。
-
-W0 结果不覆盖正式 Browser Broker 控制租约、完整网络策略、长期运行或完整安全验收。
+W0 结果不覆盖正式 Browser Broker 控制租约、完整网络策略、长期运行或完整安全验收。以下为回收前的历史验证记录。
 
 ## Pi 配置超时修复
 
