@@ -14,7 +14,22 @@
 ```sh
 python3 infra/w0/prepare-craft.py <upstream-directory> > /tmp/Dockerfile.craft
 docker build -f /tmp/Dockerfile.craft -t agentanywhere-w0-craft:e896385 <upstream-directory>
+docker build -f infra/w0/Dockerfile.craft-pi -t agentanywhere-w0-craft:e896385-pi1 infra/w0
 ```
+
+第二层修复 Pi 启动兼容性：控制服务仍用 Bun 1.3.10，Pi 单独用固定 Node 24.21.0；Pi bundle 使用 Node ESM，保留外部原生模块 koffi。`CRAFT_PI_NODE_PATH` 仅覆盖 Pi 子进程。原 Bun 缺少 undici 8.9 所需的 `worker_threads.markAsUncloneable`，升级到已测试的 Bun 1.3.14 仍缺失。
+
+`pi-startup.patch` 让子进程在 ready 前退出或启动报错时立即拒绝等待，沿用已有 stderr 回传。两项真实子进程回归在原镜像超时失败，修复后分别在 240ms 与 7ms 内返回具体错误。
+
+```sh
+docker run --rm --network none --entrypoint bun agentanywhere-w0-craft:e896385-pi1 \
+  test packages/shared/src/agent/__tests__/pi-agent-startup.test.ts
+docker run --rm --network none --entrypoint bun \
+  -v "$PWD/infra/w0/check-pi-runtime.ts:/tmp/check-pi-runtime.ts:ro" \
+  agentanywhere-w0-craft:e896385-pi1 /tmp/check-pi-runtime.ts
+```
+
+第二项使用容器内 HTTP 测试服务验证实际 Pi bundle 的初始化、凭证传递、OpenAI SSE 响应和 mini completion；没有真实凭证或外网请求。cc-la 实测还带 `--runtime agentanywhere-w0-runsc`。
 
 ## 部署与凭证
 

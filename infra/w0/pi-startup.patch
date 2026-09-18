@@ -1,0 +1,140 @@
+--- a/packages/shared/src/agent/pi-agent.ts
++++ b/packages/shared/src/agent/pi-agent.ts
+@@ -174,6 +174,7 @@
+   private readline: ReadlineInterface | null = null;
+   private subprocessReady: Promise<void> | null = null;
+   private subprocessReadyResolve: (() => void) | null = null;
++  private subprocessReadyReject: ((error: Error) => void) | null = null;
+ 
+   // Pi session ID (managed by subprocess, reported back)
+   private piSessionId: string | null = null;
+@@ -438,8 +439,9 @@
+     this.resetSubprocessErrorDedup();
+ 
+     // Set up ready promise before spawning
+-    this.subprocessReady = new Promise<void>((resolve) => {
++    this.subprocessReady = new Promise<void>((resolve, reject) => {
+       this.subprocessReadyResolve = resolve;
++      this.subprocessReadyReject = reject;
+     });
+ 
+     // Build session ID and session dir path upfront (used for spawn env + init command)
+@@ -531,6 +533,8 @@
+ 
+     child.on('error', (error) => {
+       this.debug(`Subprocess error: ${error.message}`);
++      this.subprocessReadyReject?.(error);
++      this.handleSubprocessExit(null, null);
+       this.resetSubprocessErrorDedup();
+       this.eventQueue.enqueue({ type: 'error', message: `Pi subprocess error: ${error.message}` });
+       this.eventQueue.complete();
+@@ -918,6 +922,8 @@
+           this.config.onSdkSessionIdUpdate?.(this.piSessionId!);
+         }
+         this.subprocessReadyResolve?.();
++        this.subprocessReadyResolve = null;
++        this.subprocessReadyReject = null;
+         break;
+ 
+       case 'event':
+@@ -1759,12 +1765,14 @@
+    */
+   private handleSubprocessExit(code: number | null, signal: string | null): void {
+     this.debug(`Pi subprocess exited: code=${code}, signal=${signal}`);
++    this.subprocessReadyReject?.(new Error(`Pi subprocess exited before ready (code=${code}, signal=${signal})`));
+ 
+     this.subprocess = null;
+     this.readline = null;
+     this.resetSubprocessErrorDedup();
+     this.subprocessReady = null;
+     this.subprocessReadyResolve = null;
++    this.subprocessReadyReject = null;
+ 
+     // If we were processing, emit error + complete
+     if (this._isProcessing) {
+@@ -2443,6 +2451,8 @@
+    * Used before an idle runtime restart so we don't leave transient children behind.
+    */
+   private async killSubprocessGracefully(timeoutMs = 2_000): Promise<void> {
++    this.subprocessReadyReject?.(new Error('Pi subprocess stopped before ready'));
++    this.subprocessReadyReject = null;
+     this.rejectAllPendingEphemeral(new Error('Pi subprocess stopped'));
+ 
+     const child = this.subprocess;
+@@ -2490,6 +2500,7 @@
+     }
+     this.subprocessReady = null;
+     this.subprocessReadyResolve = null;
++    this.subprocessReadyReject = null;
+     this.callbackPort = 0;
+     this.preToolMetadataByCallId.clear();
+     this.adapter.resetRecoveryState();
+@@ -2505,6 +2516,8 @@
+    * Kill the subprocess and clean up resources.
+    */
+   private killSubprocess(): void {
++    this.subprocessReadyReject?.(new Error('Pi subprocess stopped before ready'));
++    this.subprocessReadyReject = null;
+     this.rejectAllPendingEphemeral(new Error('Pi subprocess stopped'));
+ 
+     if (this.readline) {
+@@ -2525,6 +2538,7 @@
+ 
+     this.subprocessReady = null;
+     this.subprocessReadyResolve = null;
++    this.subprocessReadyReject = null;
+     this.callbackPort = 0;
+     this.preToolMetadataByCallId.clear();
+ 
+--- /dev/null
++++ b/packages/shared/src/agent/__tests__/pi-agent-startup.test.ts
+@@ -0,0 +1,49 @@
++import { describe, expect, it } from 'bun:test'
++import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
++import { tmpdir } from 'node:os'
++import { join } from 'node:path'
++import { PiAgent } from '../pi-agent.ts'
++import type { BackendConfig } from '../backend/types.ts'
++
++describe('PiAgent startup failure', () => {
++  for (const failure of ['early exit', 'missing executable'] as const) {
++    it(`rejects mini completion promptly on ${failure}`, async () => {
++      const root = mkdtempSync(join(tmpdir(), 'pi-startup-'))
++      const script = join(root, 'exit.cjs')
++      writeFileSync(script, `
++        process.stdin.once('data', () => {
++          require('node:fs').writeSync(2, 'startup fixture failed\\n');
++          process.exit(17);
++        });
++      `)
++      const config: BackendConfig = {
++        provider: 'pi',
++        workspace: { id: 'test', name: 'Test', slug: 'test', rootPath: root, createdAt: 0 },
++        isHeadless: true,
++        runtime: {
++          paths: { node: failure === 'early exit' ? process.execPath : join(root, 'missing-runtime'), piServer: script },
++          // Avoid reading ambient provider credentials; this test never calls a model.
++          customEndpoint: { api: 'openai-completions' },
++        },
++      }
++      const agent = new PiAgent(config)
++      let timer: ReturnType<typeof setTimeout> | undefined
++      try {
++        const result = Promise.race([
++          agent.runMiniCompletion('unused'),
++          new Promise<never>((_, reject) => {
++            timer = setTimeout(() => reject(new Error('startup rejection deadline exceeded')), 1500)
++          }),
++        ])
++        await expect(result).rejects.toThrow(failure === 'early exit' ? 'code=17' : 'ENOENT')
++        if (failure === 'early exit') {
++          expect(agent.getRecentStderr()).toContain('startup fixture failed')
++        }
++      } finally {
++        clearTimeout(timer)
++        agent.destroy()
++        rmSync(root, { recursive: true, force: true })
++      }
++    })
++  }
++})

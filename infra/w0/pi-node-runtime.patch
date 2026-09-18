@@ -1,0 +1,11 @@
+--- a/packages/shared/src/agent/backend/internal/drivers/pi.ts
++++ b/packages/shared/src/agent/backend/internal/drivers/pi.ts
+@@ -222,7 +222,7 @@
+     paths: {
+       piServer: resolvedPaths.piServerPath,
+       interceptor: resolvedPaths.interceptorBundlePath,
+-      node: resolvedPaths.nodeRuntimePath,
++      node: process.env.CRAFT_PI_NODE_PATH || resolvedPaths.nodeRuntimePath,
+     },
+     piAuthProvider: providerOptions?.piAuthProvider || context.connection?.piAuthProvider,
+     baseUrl: context.connection?.baseUrl,

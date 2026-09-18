@@ -22,7 +22,7 @@
 
 基于固定 Craft 版本精简派生 WebApp，使用 Pi 执行、sub2api 模型网关、OpenSandbox/Docker 隔离环境、OpenConnector 账号工具，以及 PostgreSQL/pg-boss 持久化与调度。控制面部署于自有 VPS；Cloudflare 执行后端留待后续验证。
 
-W0 在指定主机 `cc-la` 的独立环境执行，再进入裁剪和业务开发。HTTPS 反代已验证，等待手动配置 sub2api provider/模型后完成真实模型验证。
+W0 在指定主机 `cc-la` 的独立环境执行，再进入裁剪和业务开发。HTTPS 反代已验证，sub2api 连接测试已通过，正在验证会话内工具、取消与用量。
 
 ## 材料说明
 

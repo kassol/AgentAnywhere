@@ -1,7 +1,7 @@
 name: agentanywhere-w0
 services:
   craft:
-    image: agentanywhere-w0-craft:e896385
+    image: agentanywhere-w0-craft:e896385-pi1
     container_name: agentanywhere-w0-craft
     runtime: agentanywhere-w0-runsc
     # TLS terminates at OpenResty; Docker publishes this port only on host loopback.

@@ -1,0 +1,10 @@
+FROM agentanywhere-w0-craft:e896385
+USER root
+COPY --from=node@sha256:713cfbf4a0ac19f40e1bb9919893e126b74a5c8cf5d0623c9f89515c8f74c6fa /usr/local/bin/node /usr/local/bin/pi-node
+COPY pi-startup.patch pi-node-runtime.patch /tmp/
+RUN git apply /tmp/pi-startup.patch /tmp/pi-node-runtime.patch \
+    && bun build packages/pi-agent-server/src/index.ts \
+       --outfile packages/pi-agent-server/dist/index.js --target node --format esm --external koffi \
+    && rm /tmp/pi-startup.patch /tmp/pi-node-runtime.patch
+ENV CRAFT_PI_NODE_PATH=/usr/local/bin/pi-node
+USER craftagents

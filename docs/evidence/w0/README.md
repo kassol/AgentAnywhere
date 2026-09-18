@@ -13,7 +13,7 @@
 | Craft 登录与实时连接鉴权 | 通过 | [可执行检查](../../../infra/w0/check-craft-auth.ts)；匿名 API 401、主页跳转登录、错误密码 401、成功登录 Cookie 含 HttpOnly/SameSite=Strict/Secure；匿名 RPC 握手关闭码 4005，登录后握手成功 |
 | Craft 真实浏览器登录 | 通过 | [登录后截图](craft-onboarding.png)；通过公网 HTTPS 登录，进入 provider 配置页 |
 | 公网 HTTPS / WebSocket 反代 | 通过 | `https://agent.riverflows.in` 登录成功；匿名 config 401，登录后 config 200，浏览器 WSS 握手成功 |
-| Pi / sub2api 模型调用 | 待配置 | provider 和模型由所有者手动配置；流式输出、工具、取消和用量均未验证 |
+| Pi / sub2api 连接测试 | 通过 | 所有者手动填入新 Key；`https://sub.riverflows.in/v1`、`gpt-6-astra` 的真实 mini completion 在 6102ms 成功。会话内流式输出、工具、取消和用量继续验证 |
 | Chromium / noVNC | 通过 | [结果](browser-result.json)、[sandbox 状态](sandbox.txt)、[公开页截图](example.png)、[接管截图](takeover.png)、[下载文件](download.txt)；非 root、namespace/seccomp、截图、下载与同实例输入全部通过 |
 
 ## 固定版本与最小修改
@@ -38,3 +38,11 @@ WebUI 密码保存在主机 `/opt/agentanywhere-w0/webui-password`（0600）；�
 `craft.env` 的 `CRAFT_WEBUI_WS_URL` 已改为 `wss://agent.riverflows.in`，并仅重建本测试容器。所有者已将反代目标修正为宿主 19100；公网 HTTPS 登录、API 鉴权及 WSS 握手均通过。模型调用及清理全部完成后才关闭 [W0 Issue #1](https://github.com/kassol/AgentAnywhere/issues/1)。
 
 W0 结果不覆盖正式 Browser Broker 控制租约、完整网络策略、长期运行或完整安全验收。
+
+## Pi 配置超时修复
+
+最初的 Pi 子进程在 undici 初始化时调用 Bun 未提供的 `worker_threads.markAsUncloneable`，立即退出。ready Promise 未拒绝，后端等待 45 秒，前端先在 30 秒报 RPC 超时。该次故障发生在模型请求之前。
+
+现部署 `e896385-pi1`：仅 Pi 使用 Node 24.21.0，并修正原 Dockerfile 的 CJS `.js` 输出为 Node ESM；控制服务继续使用 Bun。补丁及离线复现见 [infra/w0](../../../infra/w0/README.md)。真实早退/ENOENT 回归由红转绿，完整离线 Pi SSE 测试和部署后的登录鉴权均通过。
+
+2026-09-18 09:08:18 UTC 开始的公网配置测试，服务端记录 `Elapsed: 6102ms, success=true`；随后保存连接并重新初始化认证，所有者确认已进入应用。旧 Key 已更换，诊断期间的临时凭证、候选容器和两个试验镜像均已清理。当前 RPC 的通用 30 秒期限与服务端模型测试 45 秒期限保持原样；本补丁修复启动崩溃和失败回传。
