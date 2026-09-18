@@ -1,0 +1,149 @@
+{
+  "date": "2026-09-18",
+  "endpoint": "https://agent.riverflows.in",
+  "model": "gpt-6-astra",
+  "sessionId": "260918-steady-gem",
+  "tool": "Bash: pwd",
+  "output": "W0_TOOL_OK /home/craftagents/.craft-agent/workspaces/w0-validation",
+  "toolEvents": [
+    {
+      "at": 1789722922996,
+      "type": "permission_mode_changed",
+      "sessionId": "260918-steady-gem"
+    },
+    {
+      "at": 1789722924021,
+      "type": "user_message",
+      "sessionId": "260918-steady-gem"
+    },
+    {
+      "at": 1789722927801,
+      "type": "usage_update",
+      "sessionId": "260918-steady-gem"
+    },
+    {
+      "at": 1789722927822,
+      "type": "tool_start",
+      "sessionId": "260918-steady-gem"
+    },
+    {
+      "at": 1789722927902,
+      "type": "tool_result",
+      "sessionId": "260918-steady-gem"
+    },
+    {
+      "at": 1789722932446,
+      "type": "text_delta",
+      "sessionId": "260918-steady-gem",
+      "deltaLength": 2
+    },
+    {
+      "at": 1789722932509,
+      "type": "text_delta",
+      "sessionId": "260918-steady-gem",
+      "deltaLength": 9
+    },
+    {
+      "at": 1789722932614,
+      "type": "text_delta",
+      "sessionId": "260918-steady-gem",
+      "deltaLength": 11
+    },
+    {
+      "at": 1789722932680,
+      "type": "text_delta",
+      "sessionId": "260918-steady-gem",
+      "deltaLength": 13
+    },
+    {
+      "at": 1789722932766,
+      "type": "text_delta",
+      "sessionId": "260918-steady-gem",
+      "deltaLength": 11
+    },
+    {
+      "at": 1789722932831,
+      "type": "text_delta",
+      "sessionId": "260918-steady-gem",
+      "deltaLength": 8
+    },
+    {
+      "at": 1789722932901,
+      "type": "text_delta",
+      "sessionId": "260918-steady-gem",
+      "deltaLength": 12
+    },
+    {
+      "at": 1789722933291,
+      "type": "text_complete",
+      "sessionId": "260918-steady-gem"
+    },
+    {
+      "at": 1789722933306,
+      "type": "usage_update",
+      "sessionId": "260918-steady-gem"
+    },
+    {
+      "at": 1789722933316,
+      "type": "complete",
+      "sessionId": "260918-steady-gem"
+    }
+  ],
+  "cancelEvents": [
+    {
+      "at": 1789722946124,
+      "type": "user_message",
+      "sessionId": "260918-steady-gem"
+    },
+    {
+      "at": 1789722951802,
+      "type": "text_delta",
+      "sessionId": "260918-steady-gem",
+      "deltaLength": 1
+    },
+    {
+      "at": 1789722951957,
+      "type": "text_delta",
+      "sessionId": "260918-steady-gem",
+      "deltaLength": 2
+    },
+    {
+      "at": 1789722952066,
+      "type": "text_delta",
+      "sessionId": "260918-steady-gem",
+      "deltaLength": 1
+    },
+    {
+      "at": 1789722952155,
+      "type": "text_delta",
+      "sessionId": "260918-steady-gem",
+      "deltaLength": 3
+    },
+    {
+      "at": 1789722952172,
+      "type": "interrupted",
+      "sessionId": "260918-steady-gem"
+    },
+    {
+      "at": 1789722952183,
+      "type": "complete",
+      "sessionId": "260918-steady-gem"
+    }
+  ],
+  "usage": {
+    "inputTokens": 19016,
+    "outputTokens": 43,
+    "totalTokens": 19059,
+    "contextTokens": 0,
+    "costUsd": 0,
+    "cacheReadTokens": 18816,
+    "cacheCreationTokens": 0
+  },
+  "isProcessing": false,
+  "usageDisplay": "gpt-6-astra\nConnection default\nMedium\nExtended reasoning depth\nContext\n19k tokens used",
+  "cleanup": {
+    "testSessionRemoved": true,
+    "serviceRetained": true,
+    "workspaceRetained": true
+  }
+}
