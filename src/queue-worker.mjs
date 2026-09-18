@@ -1,7 +1,7 @@
-import { createHash, randomBytes } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { lookup } from 'node:dns/promises'
 import http from 'node:http'
-import { mkdir, open, readFile, rename, rm } from 'node:fs/promises'
+import { mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { PgBoss } from 'pg-boss'
 import pg from 'pg'
@@ -66,7 +66,7 @@ async function claim(runId, token) {
     const result = await db.query(`UPDATE work_runs SET status='provisioning', active=true, epoch=epoch+1,
       run_token_hash=$2, started_at=now(), cleanup_state='pending'
       WHERE id=$1 AND status='queued' AND NOT active RETURNING id, task_id, epoch, model_snapshot,
-        previous_report_version_id, context_snapshot`,
+        previous_report_version_id, context_snapshot, checkpoint_ref`,
       [runId, createHash('sha256').update(token).digest('hex')])
     if (!result.rowCount) { await db.query('ROLLBACK'); return null }
     await db.query("UPDATE work_tasks SET status='provisioning' WHERE id=$1", [result.rows[0].task_id])
@@ -123,6 +123,7 @@ async function liveEvents(endpoint, token, run, signal) {
           if (event.producerSeq <= after) continue
           if (!await record(run, event)) throw new Error('Run 执行代次已失效')
           after = event.producerSeq
+          if (event.type === 'interaction.requested') return { status: 'waiting', question: event.payload?.question }
           if (event.type === 'run.finished') return { status: 'succeeded', failure: null }
           if (event.type === 'run.failed') return { status: 'failed', failure: event.payload?.error || '模型执行失败' }
           if (event.type === 'run.cancelled') return { status: 'cancelled', failure: null }
@@ -146,7 +147,7 @@ async function persistArtifacts(run, sandbox) {
   if (!Array.isArray(entries) || entries.length < 1 || entries.length > 6 || entries[0]?.path !== 'report.md') throw new Error('报告清单无效')
   if (new Set(entries.map(item => item?.name)).size !== entries.length) throw new Error('附件名称重复')
   const saved = []
-  const destination = join(artifactDir, run.id)
+  const destination = join(artifactDir, run.id, `epoch-${run.epoch}`)
   await mkdir(destination, { recursive: true, mode: 0o700 })
   for (const [index, entry] of entries.entries()) {
     if (!entry || typeof entry !== 'object' || entry.path !== (index === 0 ? 'report.md' : `attachment-${index - 1}.${entry.path?.split('.').at(-1)}`)
@@ -173,7 +174,7 @@ async function persistArtifacts(run, sandbox) {
     } catch (error) { await file.close(); await rm(temporary, { force: true }); throw error }
     await file.close()
     if (size !== info.size || (await optionalFileInfo(sandbox, source))?.type !== 'file') { await rm(temporary, { force: true }); throw new Error('成果文件复制时发生变化') }
-    const storageKey = `${run.id}/${entry.path}`
+    const storageKey = `${run.id}/epoch-${run.epoch}/${entry.path}`
     await rename(temporary, join(artifactDir, storageKey))
     saved.push({ ...entry, storageKey, size, sha256: hash.digest('hex'), kind: index === 0 ? 'report' : 'attachment' })
   }
@@ -188,6 +189,95 @@ async function persistArtifacts(run, sandbox) {
       await db.query(`INSERT INTO work_artifact_versions (id, artifact_id, run_id, storage_key, sha256, size_bytes, mime_type)
         VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (artifact_id, run_id) DO NOTHING`,
         [crypto.randomUUID(), artifact.rows[0].id, run.id, item.storageKey, item.sha256, item.size, item.type])
+    }
+    await db.query('COMMIT')
+  } catch (error) { await db.query('ROLLBACK'); throw error } finally { db.release() }
+}
+
+async function saveCheckpoint(run, sandbox, question) {
+  if (typeof question !== 'string' || !question.trim() || question.length > 4000) throw new Error('问题无效')
+  const paths = [{ source: '/tmp/agentanywhere-session/checkpoint.jsonl', name: 'session.jsonl', limit: 10_000_000 }]
+  const manifestPath = `${outputDir}/manifest.json`
+  const manifestInfo = await optionalFileInfo(sandbox, manifestPath)
+  if (manifestInfo) {
+    if (manifestInfo.type !== 'file' || manifestInfo.size > 4096) throw new Error('检查点成果清单无效')
+    const bytes = await sandbox.files.readBytes(manifestPath, { limit: 4097 })
+    const manifest = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
+    if (!/^generation-[0-9a-f-]{36}$/.test(manifest?.generation) || !Array.isArray(manifest.files) || manifest.files.length < 1 || manifest.files.length > 6) throw new Error('检查点成果清单无效')
+    paths.push({ source: manifestPath, name: 'manifest.json', limit: 4096 })
+    for (const [index, file] of manifest.files.entries()) {
+      if (file.path !== (index === 0 ? 'report.md' : `attachment-${index - 1}.${file.path?.split('.').at(-1)}`)
+        || (index > 0 && !/^attachment-[0-4]\.(txt|csv|json|md)$/.test(file.path))) throw new Error('检查点成果路径无效')
+      paths.push({ source: `${outputDir}/${manifest.generation}/${file.path}`, name: `${manifest.generation}/${file.path}`, limit: index === 0 ? 2_000_000 : 10_000_000 })
+    }
+  }
+  const root = join(artifactDir, run.id)
+  const destination = join(root, `checkpoint-${run.epoch}`)
+  const temporary = join(root, `checkpoint-${run.epoch}-${randomBytes(8).toString('hex')}.tmp`)
+  await mkdir(temporary, { recursive: true, mode: 0o700 })
+  const files = []
+  try {
+    for (const item of paths) {
+      const info = await optionalFileInfo(sandbox, item.source)
+      if (info?.type !== 'file' || !Number.isSafeInteger(info.size) || info.size < (item.name.includes('/attachment-') ? 0 : 1) || info.size > item.limit) throw new Error('检查点文件缺失或过大')
+      const bytes = await sandbox.files.readBytes(item.source, { limit: item.limit + 1 })
+      if (bytes.length !== info.size || (await optionalFileInfo(sandbox, item.source))?.size !== info.size) throw new Error('检查点文件复制时变化')
+      const path = join(temporary, item.name)
+      await mkdir(join(path, '..'), { recursive: true, mode: 0o700 })
+      await writeFile(path, bytes, { mode: 0o600, flush: true })
+      files.push({ name: item.name, size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') })
+    }
+    await rm(destination, { recursive: true, force: true })
+    await rename(temporary, destination)
+    const db = await pool.connect()
+    try {
+      await db.query('BEGIN')
+      const current = await db.query("SELECT status FROM work_runs WHERE id=$1 AND epoch=$2 AND active FOR UPDATE", [run.id, run.epoch])
+      if (!['running', 'save_failed'].includes(current.rows[0]?.status)) throw new Error('Run 执行代次已失效')
+      await db.query('INSERT INTO work_interactions (id, run_id, epoch, question, status) VALUES ($1,$2,$3,$4,$5)', [randomUUID(), run.id, run.epoch, question, 'pending'])
+      await db.query("UPDATE work_runs SET status='waiting', checkpoint_ref=$3, run_token_hash=NULL, failure=NULL, pending_status=NULL WHERE id=$1 AND epoch=$2", [run.id, run.epoch, JSON.stringify({ epoch: run.epoch, files })])
+      await db.query("UPDATE work_tasks SET status='waiting' WHERE id=$1", [run.task_id])
+      await db.query('COMMIT')
+    } catch (error) { await db.query('ROLLBACK'); throw error } finally { db.release() }
+  } catch (error) { await rm(temporary, { recursive: true, force: true }); throw error }
+}
+
+async function restoreCheckpoint(run, sandbox) {
+  const checkpoint = run.checkpoint_ref
+  if (!checkpoint) return null
+  if (!Number.isSafeInteger(checkpoint.epoch) || checkpoint.epoch >= run.epoch || !Array.isArray(checkpoint.files)) throw new Error('检查点引用无效')
+  const root = join(artifactDir, run.id, `checkpoint-${checkpoint.epoch}`)
+  const entries = []
+  for (const file of checkpoint.files) {
+    if (file.name !== 'session.jsonl' && file.name !== 'manifest.json' && !/^generation-[0-9a-f-]{36}\/(report\.md|attachment-[0-4]\.(txt|csv|json|md))$/.test(file.name)) throw new Error('检查点路径无效')
+    const bytes = await readFile(join(root, file.name))
+    if (bytes.length !== file.size || createHash('sha256').update(bytes).digest('hex') !== file.sha256) throw new Error('检查点校验失败')
+    entries.push({ path: file.name === 'session.jsonl' ? '/tmp/agentanywhere-session/checkpoint.jsonl' : `${outputDir}/${file.name}`, data: bytes, mode: 0o600 })
+  }
+  if (!entries.some(item => item.path.endsWith('/checkpoint.jsonl'))) throw new Error('检查点会话缺失')
+  const generationDirs = [...new Set(entries.filter(item => item.path.startsWith(`${outputDir}/generation-`)).map(item => item.path.slice(0, item.path.lastIndexOf('/'))))]
+  await sandbox.files.createDirectories([{ path: '/tmp/agentanywhere-session', mode: 0o700 }, { path: outputDir, mode: 0o700 },
+    ...generationDirs.map(path => ({ path, mode: 0o700 }))])
+  await sandbox.files.writeFiles(entries)
+  const [interaction] = (await pool.query("SELECT answer FROM work_interactions WHERE run_id=$1 AND epoch=$2 AND status='answered'", [run.id, checkpoint.epoch])).rows
+  if (!interaction?.answer) throw new Error('检查点回答缺失')
+  return interaction.answer
+}
+
+async function releaseWaiting(run, sandboxId) {
+  const state = await cleanup(run, sandboxId)
+  const db = await pool.connect()
+  try {
+    await db.query('BEGIN')
+    const current = await db.query('SELECT status FROM work_runs WHERE id=$1 AND epoch=$2 AND active FOR UPDATE', [run.id, run.epoch])
+    if (current.rows[0]?.status === 'waiting') {
+      await db.query("UPDATE work_runs SET cleanup_state=$3, active=$4, sandbox_id=CASE WHEN $4 THEN sandbox_id ELSE NULL END WHERE id=$1 AND epoch=$2", [run.id, run.epoch, state, state !== 'cleaned'])
+    } else if (current.rows[0]?.status === 'cancelling' && state === 'cleaned') {
+      await db.query("UPDATE work_runs SET status='cancelled', cleanup_state='cleaned', active=false, sandbox_id=NULL, finished_at=now() WHERE id=$1 AND epoch=$2", [run.id, run.epoch])
+      await db.query("UPDATE work_tasks SET status='cancelled' WHERE id=$1", [run.task_id])
+      await db.query("INSERT INTO work_events (run_id, epoch, event_id, type, payload, occurred_at) VALUES ($1,$2,$3,'run.cancelled','{}'::jsonb,now())", [run.id, run.epoch, randomUUID()])
+    } else if (current.rows[0]?.status === 'cancelling') {
+      await db.query("UPDATE work_runs SET cleanup_state='failed' WHERE id=$1 AND epoch=$2", [run.id, run.epoch])
     }
     await db.query('COMMIT')
   } catch (error) { await db.query('ROLLBACK'); throw error } finally { db.release() }
@@ -265,7 +355,7 @@ async function execute(run, token) {
         FROM work_artifact_versions v JOIN work_artifacts a ON a.id=v.artifact_id
         WHERE v.id=$1 AND a.task_id=$2 AND a.kind='report'`, [run.previous_report_version_id, run.task_id])
       const version = previous.rows[0]
-      if (!version || version.storage_key !== `${version.run_id}/report.md` || !Number.isSafeInteger(Number(version.size_bytes))
+      if (!version || !(version.storage_key === `${version.run_id}/report.md` || new RegExp(`^${version.run_id}/epoch-[0-9]+/report\\.md$`).test(version.storage_key)) || !Number.isSafeInteger(Number(version.size_bytes))
         || Number(version.size_bytes) < 1 || Number(version.size_bytes) > 2_000_000) throw new Error('旧报告校验失败')
       let report
       try { report = await readFile(join(artifactDir, version.storage_key)) } catch { throw new Error('旧报告校验失败') }
@@ -282,6 +372,7 @@ async function execute(run, token) {
     })
     run.sandbox_id = sandbox.id
     await pool.query('UPDATE work_runs SET sandbox_id=$3 WHERE id=$1 AND epoch=$2 AND active', [run.id, run.epoch, sandbox.id])
+    const answer = await restoreCheckpoint(run, sandbox)
     await ensureActive()
     endpoint = await sandbox.getEndpoint(3001)
     let ready = false
@@ -302,7 +393,7 @@ async function execute(run, token) {
     const base = `${sandbox.connectionConfig.protocol}://${endpoint.endpoint}`
     await ensureActive()
     const started = await fetch(`${base}/run`, { method: 'POST', headers: { ...endpoint.headers, 'x-run-token': token, 'content-type': 'application/json' },
-      body: JSON.stringify({ goal, model: run.model_snapshot, proxyBase, toolBase: `${toolOrigin.origin}/internal/research/${run.id}/${run.epoch}` }), signal: AbortSignal.timeout(10_000) })
+      body: JSON.stringify({ goal, model: run.model_snapshot, proxyBase, toolBase: `${toolOrigin.origin}/internal/research/${run.id}/${run.epoch}`, resume: answer !== null, answer }), signal: AbortSignal.timeout(10_000) })
     if (!started.ok) throw new Error('Pi 启动请求失败')
     endpoint = { ...endpoint, endpoint: base }
     result = await liveEvents(endpoint, token, run, AbortSignal.any([eventsAbort.signal, AbortSignal.timeout(50 * 60_000)]))
@@ -311,6 +402,12 @@ async function execute(run, token) {
     clearInterval(watch)
     try {
       if (sandbox) {
+        if (result.status === 'waiting') {
+          try { await saveCheckpoint(run, sandbox, result.question) }
+          catch (error) { await markSaveBlocked(run, error, result); return }
+          await releaseWaiting(run, sandbox.id)
+          return
+        }
         const manifestPath = `${outputDir}/manifest.json`
         const reportPath = `${outputDir}/report.md`
         let manifest, report
@@ -334,6 +431,7 @@ async function reconcile() {
   const rows = await pool.query('SELECT id, task_id, epoch, sandbox_id, status, failure, cleanup_state FROM work_runs WHERE active')
   for (const run of rows.rows) {
     if (run.cleanup_state === 'blocked' || run.cleanup_state === 'failed' || run.cleanup_state === 'retry_requested') continue
+    if (run.status === 'waiting') { await releaseWaiting(run, run.sandbox_id); continue }
     let sandbox
     try {
       const persisted = await pool.query('SELECT 1 FROM work_artifact_versions WHERE run_id=$1 LIMIT 1', [run.id])
@@ -369,8 +467,15 @@ async function recoverPending() {
     void (async () => {
       let sandbox
       try {
+        if (run.status === 'waiting') { await releaseWaiting(run, run.sandbox_id); return }
         if (run.status === 'save_failed') {
           sandbox = await Sandbox.connect({ connectionConfig: sandboxConnection, sandboxId: run.sandbox_id })
+          if (run.pending_status === 'waiting') {
+            const event = await pool.query("SELECT payload FROM work_events WHERE run_id=$1 AND epoch=$2 AND type='interaction.requested' ORDER BY server_seq DESC LIMIT 1", [run.id, run.epoch])
+            await saveCheckpoint(run, sandbox, event.rows[0]?.payload?.question)
+            await releaseWaiting(run, run.sandbox_id)
+            return
+          }
           await persistArtifacts(run, sandbox)
         }
         await finish(run, { status: run.pending_status || run.status, failure: run.pending_failure || (run.status === 'save_failed' ? null : run.failure) }, run.sandbox_id)

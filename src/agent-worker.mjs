@@ -1,6 +1,6 @@
 import http from 'node:http'
 import { timingSafeEqual } from 'node:crypto'
-import { mkdir, rename, rm, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { createAgentSession, ModelRuntime, SessionManager } from '@earendil-works/pi-coding-agent'
 import { Type } from 'typebox'
 
@@ -15,6 +15,7 @@ let session
 let reportSubmitted = false
 let cancelRequested = false
 const outputDir = '/tmp/agentanywhere-output'
+const sessionDir = '/tmp/agentanywhere-session'
 
 function authorized(request) {
   const supplied = request.headers['x-run-token'] || ''
@@ -40,11 +41,14 @@ function send(response, status, body) {
   response.end(JSON.stringify(body))
 }
 
-async function execute({ goal, model, proxyBase, toolBase }) {
+async function execute({ goal, model, proxyBase, toolBase, resume = false, answer }) {
   let messageTimer
   let acceptingMessages = false
+  let question = null
   try {
-    if (typeof goal !== 'string' || !goal || !model || typeof model.id !== 'string' || !['chat-completions', 'responses'].includes(model.protocol) || !/^http:\/\/[a-z0-9.-]+(?::\d+)?\/internal\/runs\/[0-9a-f-]+\/\d+\/v1$/i.test(proxyBase) || !/^http:\/\/[a-z0-9.-]+(?::\d+)?\/internal\/research\/[0-9a-f-]+\/\d+$/i.test(toolBase)) throw new Error('Run 配置无效')
+    if (typeof goal !== 'string' || !goal || !model || typeof model.id !== 'string' || !['chat-completions', 'responses'].includes(model.protocol) || !/^http:\/\/[a-z0-9.-]+(?::\d+)?\/internal\/runs\/[0-9a-f-]+\/\d+\/v1$/i.test(proxyBase)
+      || !/^http:\/\/[a-z0-9.-]+(?::\d+)?\/internal\/research\/[0-9a-f-]+\/\d+$/i.test(toolBase)
+      || (resume && (typeof answer !== 'string' || !answer.trim() || answer.length > 4000))) throw new Error('Run 配置无效')
     const runtime = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false })
     runtime.registerProvider('agentanywhere', {
       baseUrl: proxyBase, api: model.protocol === 'responses' ? 'openai-responses' : 'openai-completions', authHeader: true,
@@ -54,9 +58,23 @@ async function execute({ goal, model, proxyBase, toolBase }) {
     await runtime.setRuntimeApiKey('agentanywhere', token)
     const selected = runtime.getModel('agentanywhere', model.id)
     if (!selected) throw new Error('Pi 模型注册失败')
+    await mkdir(sessionDir, { recursive: true, mode: 0o700 })
+    const sessionManager = resume ? SessionManager.open(`${sessionDir}/checkpoint.jsonl`, sessionDir, '/tmp/agentanywhere-work') : SessionManager.create('/tmp/agentanywhere-work', sessionDir)
     const created = await createAgentSession({
-      model: selected, modelRuntime: runtime, sessionManager: SessionManager.inMemory(), tools: ['echo_observation', 'search_web', 'open_public_page', 'submit_report'],
+      model: selected, modelRuntime: runtime, sessionManager, tools: ['echo_observation', 'search_web', 'open_public_page', 'submit_report', 'ask_user'],
       customTools: [{
+        name: 'ask_user', label: 'Ask user', description: 'Ask the user one question when their decision is needed. Execution stops until they answer.',
+        parameters: Type.Object({ question: Type.String() }),
+        execute: async (_id, params, signal) => {
+          if (cancelRequested || signal?.aborted) throw new Error('Run cancelled')
+          const value = params.question.trim()
+          if (!value || value.length > 4000) throw new Error('问题内容无效')
+          question = value
+          acceptingMessages = false
+          session.agent.clearAllQueues()
+          return { content: [{ type: 'text', text: '问题已交给用户；等待回答。' }], details: {} }
+        },
+      }, {
         name: 'echo_observation', label: 'Echo observation', description: 'Return a supplied test observation without external access.',
         parameters: Type.Object({ text: Type.String() }),
         execute: async (_id, params, signal) => {
@@ -106,6 +124,8 @@ async function execute({ goal, model, proxyBase, toolBase }) {
       }],
     })
     session = created.session
+    if (resume) reportSubmitted = await stat(`${outputDir}/manifest.json`).then(info => info.isFile(), () => false)
+    session.agent.shouldStopAfterTurn = () => question !== null
     if (cancelRequested) throw new Error('Run cancelled')
     const messageUrl = `${proxyBase.slice(0, -3)}/messages`
     const queued = new Map()
@@ -156,7 +176,7 @@ async function execute({ goal, model, proxyBase, toolBase }) {
         result: event.result?.content?.filter(part => part.type === 'text').map(part => part.text).join('') ?? '', isError: event.isError })
     })
     emit('worker.ready')
-    const execution = session.prompt(`${goal}\n\n可以用 search_web 查询主题；目标含指定来源时，先用 open_public_page 读取该 URL。需要核对搜索结果正文时，也用 open_public_page。搜索摘要与网页正文是不同来源；报告引用实际 URL，注明搜索引擎部分失败、不可读页面和未核查推断。完成后调用 submit_report 保存 Markdown 报告，最后简短回复已提交。测试要求使用 echo_observation 时可以调用。`)
+    const execution = session.prompt(resume ? answer : `${goal}\n\n可以用 search_web 查询主题；目标含指定来源时，先用 open_public_page 读取该 URL。需要核对搜索结果正文时，也用 open_public_page。搜索摘要与网页正文是不同来源；报告引用实际 URL，注明搜索引擎部分失败、不可读页面和未核查推断。需要用户决定时调用 ask_user 提问，等待回答。完成后调用 submit_report 保存 Markdown 报告，最后简短回复已提交。测试要求使用 echo_observation 时可以调用。`)
     messageTimer = setInterval(() => void pollMessages().catch(() => {}), 200)
     await pollMessages()
     await execution
@@ -165,6 +185,11 @@ async function execute({ goal, model, proxyBase, toolBase }) {
     clearInterval(messageTimer)
     await Promise.all(acknowledgements)
     if (cancelRequested) throw new Error('Run cancelled')
+    if (question !== null) {
+      if (sessionManager.getSessionFile() !== `${sessionDir}/checkpoint.jsonl`) await copyFile(sessionManager.getSessionFile(), `${sessionDir}/checkpoint.jsonl`)
+      emit('interaction.requested', { question })
+      return
+    }
     const last = [...session.messages].reverse().find(message => message.role === 'assistant')
     if (!last || last.stopReason === 'error' || last.stopReason === 'aborted') throw new Error(last?.errorMessage || '模型执行未完成')
     if (!reportSubmitted) throw new Error('未提交报告')
@@ -198,7 +223,7 @@ http.createServer(async (request, response) => {
     request.setEncoding('utf8')
     for await (const chunk of request) {
       body += chunk
-      if (body.length > 16_384) return send(response, 413, { error: 'Run configuration too large' })
+      if (body.length > 2_100_000) return send(response, 413, { error: 'Run configuration too large' })
     }
     let parsed
     try { parsed = JSON.parse(body) } catch { return send(response, 400, { error: 'Invalid JSON' }) }

@@ -46,6 +46,21 @@ test.skipIf(!databaseUrl)('owner creates one persisted queued work request throu
     expect(JSON.stringify(task)).not.toContain('private-secret')
     expect((await send('/api/tasks', 'POST', body)).status).toBe(200)
     expect((await send('/api/tasks', 'POST', { ...body, goal: 'different' })).status).toBe(409)
+    const waiting = await (await send('/api/tasks', 'POST', { ...body, requestId: crypto.randomUUID() })).json()
+    const waitingDb = new SQL(testDatabaseUrl)
+    const interactionId = crypto.randomUUID()
+    await waitingDb`UPDATE work_runs SET status='waiting', epoch=1, cleanup_state='cleaned', checkpoint_ref=${JSON.stringify({ epoch: 1, files: [] })}::jsonb WHERE id=${waiting.run.id}`
+    await waitingDb`UPDATE work_tasks SET status='waiting' WHERE id=${waiting.id}`
+    await waitingDb`DELETE FROM work_outbox WHERE run_id=${waiting.run.id}`
+    await waitingDb`INSERT INTO work_interactions (id, run_id, epoch, question, status) VALUES (${interactionId}, ${waiting.run.id}, 1, '研究哪个方向？', 'pending')`
+    expect((await send(`/api/tasks/${waiting.id}`)).json()).resolves.toMatchObject({ run: { status: 'waiting' }, interaction: { id: interactionId, question: '研究哪个方向？', status: 'pending' } })
+    expect((await send(`/api/interactions/${interactionId}/resolve`, 'POST', { answer: ' ' })).status).toBe(400)
+    expect((await send(`/api/interactions/${interactionId}/resolve`, 'POST', { answer: '机制方向' })).status).toBe(202)
+    expect((await send(`/api/interactions/${interactionId}/resolve`, 'POST', { answer: '机制方向' })).status).toBe(200)
+    expect((await send(`/api/interactions/${interactionId}/resolve`, 'POST', { answer: '另一方向' })).status).toBe(409)
+    expect((await send(`/api/tasks/${waiting.id}`)).json()).resolves.toMatchObject({ run: { status: 'queued', epoch: 1 }, interaction: { status: 'answered', answer: '机制方向' } })
+    expect((await waitingDb`SELECT count(*)::int AS count FROM work_outbox WHERE run_id=${waiting.run.id}`)[0].count).toBe(1)
+    await waitingDb.close()
     const runToken = 'test-run-token'
     const stateDb = new SQL(testDatabaseUrl)
     await stateDb`UPDATE work_runs SET status = 'running', active = true, epoch = 1,
