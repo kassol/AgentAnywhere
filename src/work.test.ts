@@ -3,6 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { SQL } from 'bun'
+import { createHash } from 'node:crypto'
 import { startServer } from './server'
 import { createWorkStore } from './work'
 import { createModelConnectionStore } from './model-connection'
@@ -45,6 +46,33 @@ test.skipIf(!databaseUrl)('owner creates one persisted queued work request throu
     expect(JSON.stringify(task)).not.toContain('private-secret')
     expect((await send('/api/tasks', 'POST', body)).status).toBe(200)
     expect((await send('/api/tasks', 'POST', { ...body, goal: 'different' })).status).toBe(409)
+    const runToken = 'test-run-token'
+    const stateDb = new SQL(testDatabaseUrl)
+    await stateDb`UPDATE work_runs SET status = 'running', active = true, epoch = 1,
+      run_token_hash = ${createHash('sha256').update(runToken).digest('hex')} WHERE id = ${task.run.id}`
+    const commandId = crypto.randomUUID()
+    const addition = { commandId, kind: 'steer', content: '改为对照两篇论文' }
+    expect((await fetch(`${base}/api/runs/${task.run.id}/messages`, { method: 'POST' })).status).toBe(401)
+    expect((await send(`/api/runs/${task.run.id}/messages`, 'POST', addition, { origin: 'https://other.example' })).status).toBe(403)
+    const appended = await send(`/api/runs/${task.run.id}/messages`, 'POST', addition)
+    expect(appended.status).toBe(201)
+    const message = await appended.json()
+    expect(message).toMatchObject({ content: addition.content, status: 'pending' })
+    expect((await send(`/api/runs/${task.run.id}/messages`, 'POST', addition)).status).toBe(200)
+    expect((await send(`/api/runs/${task.run.id}/messages`, 'POST', { ...addition, content: '不同内容' })).status).toBe(409)
+    expect((await send(`/api/tasks/${task.id}`)).json()).resolves.toMatchObject({ thread: { messages: [{ content: body.goal, status: 'applied' }, { content: addition.content, status: 'pending' }] } })
+    const internal = `/internal/runs/${task.run.id}/1/messages`
+    const pending = await fetch(`${base}${internal}`, { headers: { authorization: `Bearer ${runToken}` } })
+    expect(await pending.json()).toEqual([{ id: message.id, content: addition.content }])
+    expect((await fetch(`${base}${internal}`, { method: 'POST', headers: { authorization: 'Bearer wrong', 'content-type': 'application/json' }, body: JSON.stringify({ id: message.id }) })).status).toBe(409)
+    expect((await fetch(`${base}${internal}`, { method: 'POST', headers: { authorization: `Bearer ${runToken}`, 'content-type': 'application/json' }, body: JSON.stringify({ id: message.id }) })).status).toBe(200)
+    expect((await send(`/api/tasks/${task.id}`)).json()).resolves.toMatchObject({ thread: { messages: [{ status: 'applied' }, { status: 'applied' }] } })
+    const deferred = await (await send(`/api/runs/${task.run.id}/messages`, 'POST', { commandId: crypto.randomUUID(), kind: 'steer', content: '保留待续' })).json()
+    await stateDb`UPDATE work_runs SET epoch = 2, status = 'succeeded', active = false WHERE id = ${task.run.id}`
+    expect((await fetch(`${base}${internal}`, { method: 'POST', headers: { authorization: `Bearer ${runToken}`, 'content-type': 'application/json' }, body: JSON.stringify({ id: deferred.id }) })).status).toBe(409)
+    expect((await send(`/api/tasks/${task.id}`)).json()).resolves.toMatchObject({ thread: { messages: [{ status: 'applied' }, { status: 'applied' }, { status: 'pending' }] } })
+    expect((await send(`/api/runs/${task.run.id}/messages`, 'POST', { commandId: crypto.randomUUID(), kind: 'steer', content: '新要求' })).status).toBe(409)
+    await stateDb.close()
     expect((await send('/api/tasks', 'POST', { ...body, requestId: crypto.randomUUID(), modelId: 'unknown' })).status).toBe(400)
     expect((await send('/api/tasks', 'POST', { ...body, requestId: crypto.randomUUID(), sourceUrl: 'file:///etc/passwd' })).status).toBe(400)
     const linkOnly = await send('/api/tasks', 'POST', { requestId: crypto.randomUUID(), goal: '', sourceUrl: 'https://example.org/news', modelId: 'test-model' })

@@ -36,6 +36,7 @@ function send(response, status, body) {
 }
 
 async function execute({ goal, model, proxyBase }) {
+  let messageTimer
   try {
     if (typeof goal !== 'string' || !goal || !model || typeof model.id !== 'string' || !['chat-completions', 'responses'].includes(model.protocol) || !/^http:\/\/[a-z0-9.-]+(?::\d+)?\/internal\/runs\/[0-9a-f-]+\/\d+\/v1$/i.test(proxyBase)) throw new Error('Run 配置无效')
     const runtime = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false })
@@ -56,7 +57,43 @@ async function execute({ goal, model, proxyBase }) {
       }],
     })
     session = created.session
+    const messageUrl = `${proxyBase.slice(0, -3)}/messages`
+    const queued = new Map()
+    const seen = new Set()
+    const acknowledgements = []
+    let polling = false
+    let initialPromptSeen = false
+    async function pollMessages() {
+      if (polling || finished) return
+      polling = true
+      try {
+        const response = await fetch(messageUrl, { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(5000) })
+        if (!response.ok) return
+        for (const message of await response.json()) {
+          if (seen.has(message.id)) continue
+          seen.add(message.id)
+          queued.set(message.id, message)
+          session.agent.steer({ role: 'user', content: [{ type: 'text', text: message.content }], timestamp: Date.now() })
+        }
+      } finally { polling = false }
+    }
     session.subscribe(event => {
+      if (event.type === 'message_end' && event.message.role === 'user') {
+        if (!initialPromptSeen) initialPromptSeen = true
+        else {
+          const content = event.message.content.filter(part => part.type === 'text').map(part => part.text).join('')
+          const entry = [...queued].find(([, item]) => item.content === content)
+          if (entry) {
+            queued.delete(entry[0])
+            const acknowledgement = fetch(messageUrl, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+              body: JSON.stringify({ id: entry[0] }), signal: AbortSignal.timeout(5000) }).then(response => {
+              if (!response.ok) throw new Error('追加要求确认失败')
+            })
+            acknowledgements.push(acknowledgement)
+            acknowledgement.catch(() => {})
+          }
+        }
+      }
       if (event.type === 'message_update' && event.assistantMessageEvent.type === 'text_delta') emit('message.delta', { delta: event.assistantMessageEvent.delta })
       if (event.type === 'message_end' && event.message.role === 'assistant') emit('message.completed', {
         content: event.message.content.filter(part => part.type === 'text').map(part => part.text).join(''),
@@ -67,14 +104,20 @@ async function execute({ goal, model, proxyBase }) {
         result: event.result?.content?.filter(part => part.type === 'text').map(part => part.text).join('') ?? '', isError: event.isError })
     })
     emit('worker.ready')
-    await session.prompt(`${goal}\n\nFor this initial execution, use echo_observation once with a short observation before the final reply. Do not claim external sources or create files.`)
+    const execution = session.prompt(`${goal}\n\nFor this initial execution, use echo_observation once with a short observation before the final reply. Do not claim external sources or create files.`)
+    messageTimer = setInterval(() => void pollMessages().catch(() => {}), 200)
+    await pollMessages()
+    await execution
     await session.waitForIdle()
+    clearInterval(messageTimer)
+    await Promise.all(acknowledgements)
     const last = [...session.messages].reverse().find(message => message.role === 'assistant')
     if (!last || last.stopReason === 'error' || last.stopReason === 'aborted') throw new Error(last?.errorMessage || '模型执行未完成')
     emit('run.finished')
   } catch (error) {
     emit('run.failed', { error: error instanceof Error ? error.message : '执行失败' })
   } finally {
+    clearInterval(messageTimer)
     session?.dispose()
   }
 }
