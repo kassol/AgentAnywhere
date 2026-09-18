@@ -2,6 +2,12 @@ import http from 'node:http'
 
 const calls = []
 const waitingSearch = []
+const waiting = new Set()
+function hold(response, data) {
+  send(response, data)
+  waiting.add(response)
+  response.on('close', () => waiting.delete(response))
+}
 const send = (response, data) => response.write(`data: ${JSON.stringify(data)}\n\n`)
 const report = '# Fixture report\n\nSource: [Example](https://example.com/source).\n\n<script>window.reportXss = true</script>\n\n[Unsafe](javascript:alert(1))\n'
 const reportArgs = JSON.stringify({ markdown: report, attachments: [{ name: 'notes.txt', content: 'fixture attachment\n' }] })
@@ -38,6 +44,10 @@ http.createServer(async (request, response) => {
     response.writeHead(200, { 'content-type': 'application/json' })
     return response.end(JSON.stringify(calls))
   }
+  if (request.url === '/waiting-model') {
+    response.writeHead(200, { 'content-type': 'application/json' })
+    return response.end(JSON.stringify({ count: waiting.size }))
+  }
   const responses = request.url?.endsWith('/v1/responses')
   if ((!responses && !request.url?.endsWith('/v1/chat/completions')) || request.method !== 'POST') { response.writeHead(404); return response.end() }
   let raw = ''
@@ -60,6 +70,9 @@ http.createServer(async (request, response) => {
     }
     response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' })
     const responseId = `resp_${calls.length}`
+    if (body.model === 'fixture-cancel-responses') {
+      return hold(response, { type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: 'Partial response' })
+    }
     if (body.model === 'fixture-responses-stream-error') {
       send(response, { type: 'response.failed', response: { id: responseId, status: 'failed', error: { code: 'fixture_stream_failure', message: 'fixture streamed failure' } } })
       return response.end()
@@ -75,6 +88,7 @@ http.createServer(async (request, response) => {
       send(response, { type: 'response.output_item.done', output_index: 0, item })
       send(response, { type: 'response.completed', response: { id: responseId, status: 'completed', output: [item], ...(usage ? { usage } : {}) } })
     } else {
+      if (body.model === 'fixture-cancel-after-report') return hold(response, { type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: 'Saved report' })
       const item = { id: 'msg_fixture', type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'The fixture observation was returned.', annotations: [] }] }
       send(response, { type: 'response.output_item.added', output_index: 0, item: { ...item, content: [] } })
       for (const delta of ['The fixture ', 'observation was ', 'returned.']) {
@@ -120,6 +134,8 @@ http.createServer(async (request, response) => {
   calls.push({ model: body.model, toolResult, observation, userMessages, stream: body.stream })
   response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' })
   const common = { id: `fixture-${calls.length}`, object: 'chat.completion.chunk', created: 1, model: body.model }
+  if (body.model === 'fixture-cancel-chat') return hold(response, { ...common, choices: [{ index: 0, delta: { role: 'assistant', content: 'Partial response' }, finish_reason: null }] })
+  if (body.model === 'fixture-cancel-after-report' && submitted) return hold(response, { ...common, choices: [{ index: 0, delta: { role: 'assistant', content: 'Saved report' }, finish_reason: null }] })
   if (body.model === 'fixture-empty-attachment' || body.model === 'fixture-duplicate-name') {
     if (!submitted) {
       const invalid = body.model === 'fixture-duplicate-name' && !observation.some(item => item.includes('附件名称重复'))

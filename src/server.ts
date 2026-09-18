@@ -43,6 +43,29 @@ function observeUsage(body: ReadableStream<Uint8Array>, save: (usage: { inputTok
   }))
 }
 
+function closeWith(body: ReadableStream<Uint8Array>, cleanup: () => void) {
+  const reader = body.getReader()
+  let closed = false
+  const finish = () => {
+    if (closed) return
+    closed = true
+    cleanup()
+    reader.releaseLock()
+  }
+  return new ReadableStream<Uint8Array>({
+    async pull(output) {
+      try {
+        const chunk = await reader.read()
+        if (chunk.done) { finish(); output.close() }
+        else output.enqueue(chunk.value)
+      } catch (error) { finish(); output.error(error) }
+    },
+    async cancel(reason) {
+      try { await reader.cancel(reason) } finally { finish() }
+    },
+  })
+}
+
 type Config = { password: string; host?: string; port?: number; secureCookie?: boolean; publicOrigin?: string; dataDir?: string; artifactDir?: string; modelTimeoutMs?: number; directoryUrl?: string; databaseUrl?: string }
 type Session = { expires: number; sockets: Set<ServerWebSocket<{ token: string }>> }
 
@@ -143,10 +166,22 @@ export async function startServer(config: Config) {
         const token = request.headers.get('authorization')?.replace(/^Bearer /, '') ?? ''
         const credential = await work.authorizeModelProxy(proxyMatch[1], Number(proxyMatch[2]), token, parsed.model as string, protocol, modelConnection.resolveCredential)
         if (!credential) return json({ error: 'Unauthorized' }, 401)
+        const controller = new AbortController()
+        const runId = proxyMatch[1]
+        const epoch = Number(proxyMatch[2])
+        if (await work.isRunStopped(runId, epoch)) return json({ error: 'Run stopped' }, 409)
+        const timer = setInterval(() => void work.isRunStopped(runId, epoch).then(stopped => {
+          if (stopped) { controller.abort(); stopWatching() }
+        }).catch(() => { controller.abort(); stopWatching() }), 200)
+        const stopWatching = () => {
+          clearInterval(timer)
+          request.signal.removeEventListener('abort', stopWatching)
+        }
+        request.signal.addEventListener('abort', stopWatching, { once: true })
         try {
           const upstream = await fetch(`${credential.endpoint}/${modelPath(protocol)}`, {
             method: 'POST', headers: { authorization: `Bearer ${credential.apiKey}`, 'content-type': 'application/json' },
-            body, redirect: 'manual', signal: request.signal,
+            body, redirect: 'manual', signal: AbortSignal.any([request.signal, controller.signal]),
           })
           const contentType = upstream.headers.get('content-type') ?? 'application/json'
           const metered = upstream.body && upstream.ok && contentType.includes('text/event-stream')
@@ -155,8 +190,9 @@ export async function startServer(config: Config) {
           const stream = metered
             ? observeUsage(upstream.body!, usage => usage.inputTokens !== null || usage.outputTokens !== null || usage.totalTokens !== null
               ? work.recordModelUsage(proxyMatch[1], Number(proxyMatch[2]), { callId, ...usage }) : Promise.resolve()) : upstream.body
-          return new Response(stream, { status: upstream.status, headers: { ...common, 'content-type': contentType } })
-        } catch { return json({ error: 'Model gateway unavailable' }, 502) }
+          if (!stream) stopWatching()
+          return new Response(stream ? closeWith(stream, stopWatching) : null, { status: upstream.status, headers: { ...common, 'content-type': contentType } })
+        } catch { stopWatching(); return json({ error: 'Model gateway unavailable' }, 502) }
       }
 
       if (path === '/api/auth' && request.method === 'POST') {
@@ -207,6 +243,11 @@ export async function startServer(config: Config) {
         } catch { return json({ error: '成果文件不可读取' }, 503) }
       }
       if (path === '/api/tasks' && request.method === 'GET') return json(work ? await work.list() : [])
+      if (/^\/api\/tasks\/[0-9a-f-]{36}\/cancel$/i.test(path) && request.method === 'POST') {
+        if (!sameOrigin(request)) return json({ error: 'Forbidden' }, 403)
+        const result = await work?.cancel(path.split('/')[3])
+        return result ? json({ accepted: result.accepted }, result.accepted ? 202 : 200) : json({ error: 'Not found' }, 404)
+      }
       if (/^\/api\/tasks\/[0-9a-f-]{36}\/cleanup-retry$/i.test(path) && request.method === 'POST') {
         if (!sameOrigin(request)) return json({ error: 'Forbidden' }, 403)
         return await work?.requestCleanupRetry(path.split('/')[3]) ? json({ retrying: true }, 202) : json({ error: 'Not found' }, 404)
