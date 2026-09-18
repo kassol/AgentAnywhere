@@ -2,19 +2,122 @@
 
 `compose.yaml` 只管理 R1 的 Web、PostgreSQL 和 queue；`sandbox.compose.yaml` 继续管理 OpenSandbox。镜像版本固定为 Bun 1.3.10、Node 24.21、Pi 0.85.1、pg-boss 12.26.3、OpenSandbox SDK 0.1.11。`Dockerfile.agent` 将沙箱内运行程序与 Pi 依赖装入非 root 镜像。模型长期凭证只保存在 Web 的受限 `data/model-connection.json`；可信 queue 持有数据库与 OpenSandbox 管理凭证并生成每次 Run 的短 token。沙箱只持短 token，通过 Web 内部模型代理调用快照固定的模型与协议。
 
-部署目录为 `/opt/agentanywhere-r1`。将仓库工作树复制到部署目录的 `build-r1-05`，从本目录复制 `compose.yaml` 和 `deploy.sh` 到部署目录。构建正式镜像：
+部署目录为 `/opt/agentanywhere-r1`，目标仅为 `cc-la`。正式 Web、queue、agent 和隔离测试的模型 fixture 镜像都使用同一个完整 Git commit SHA 作为标签；不要复写运行中的 `r1-05` 标签。先在本地已提交且干净的发布工作树中，将固定提交导出到主机：
 
 ```sh
-docker build -t agentanywhere-r1-web:r1-05 -f build-r1-05/infra/r1/Dockerfile.web build-r1-05
-docker build -t agentanywhere-r1-queue:r1-05 -f build-r1-05/infra/r1/Dockerfile.queue build-r1-05
-docker build -t agentanywhere-r1-agent:r1-05 -f build-r1-05/infra/r1/Dockerfile.agent build-r1-05
+release=$(git rev-parse HEAD)
+test -z "$(git status --porcelain)"
+git archive "$release" | ssh cc-la "mkdir -p /opt/agentanywhere-r1/build-$release && tar -x -C /opt/agentanywhere-r1/build-$release"
+ssh cc-la "cd /opt/agentanywhere-r1 && for component in web queue agent; do
+  if docker image inspect agentanywhere-r1-\$component:$release >/dev/null 2>&1; then
+    echo 'Release image tag already exists' >&2; exit 1
+  fi
+  docker build -t agentanywhere-r1-\$component:$release -f build-$release/infra/r1/Dockerfile.\$component build-$release || exit
+done
+if docker image inspect agentanywhere-r1-model-fixture:$release >/dev/null 2>&1; then
+  echo 'Release fixture image tag already exists' >&2; exit 1
+fi
+docker build -t agentanywhere-r1-model-fixture:$release -f build-$release/infra/r1/Dockerfile.fixture build-$release"
 ```
 
-`database.env` 需为 0600，含 `DATABASE_URL=postgresql://agentanywhere_app:<URL编码密码>@postgres:5432/agentanywhere`；`service.env` 保留登录与 HTTPS origin，`opensandbox.env` 保留 OpenSandbox 管理凭证。执行 `sh /opt/agentanywhere-r1/deploy.sh`：脚本读取现有 R1 PostgreSQL 在 `agentanywhere-r1_default` 网络的当前 IP，为 gVisor Web 写入容器级 `/etc/hosts` 映射，等 Web 建表并健康后启动 queue。PostgreSQL 容器重建后须重新执行脚本，以更新 IP 映射。不要将管理凭证传入沙箱。
+`database.env` 需为 0600，含 `DATABASE_URL=postgresql://agentanywhere_app:<URL编码密码>@postgres:5432/agentanywhere`；`service.env` 保留登录与 HTTPS origin，`opensandbox.env` 保留 OpenSandbox 管理凭证。确认下文已完成的私有备份仍完整，再把发布提交的 `infra/r1/compose.yaml`、`deploy.sh` 复制到部署目录，执行 `ssh cc-la "sh /opt/agentanywhere-r1/deploy.sh /opt/agentanywhere-r1 $release"`。脚本先校验 SHA、三个镜像、PostgreSQL 健康及 Compose 配置，读取 PostgreSQL 在 `agentanywhere-r1_default` 网络的当前 IP，为 gVisor Web 写入容器级 `/etc/hosts` 映射，等 Web 建表并健康后启动 queue。PostgreSQL 容器重建后须重新部署，以更新 IP 映射。不要将管理凭证传入沙箱。
 
-`artifacts/` 是 Web 只读、queue 可写的持久成果目录。部署脚本创建该目录并交给非 root queue 用户。成果版本记录在 PostgreSQL；文件先从沙箱复制、核验大小及 SHA-256，成功后才登记版本并回收沙箱。保存失败会保留沙箱并在工作详情提供重试；回收失败也可从同一入口重试。备份需同时包含数据库与 `artifacts/`。
+`artifacts/` 是 Web 只读、queue 可写的持久成果目录。部署脚本创建该目录并交给非 root queue 用户。成果版本记录在 PostgreSQL；文件先从沙箱复制、核验大小及 SHA-256，成功后才登记版本并回收沙箱。保存失败会保留沙箱并在工作详情提供重试；回收失败也可从同一入口重试。备份需同时包含数据库与 `artifacts/`，并保存 `data/` 中的模型连接。
 
-隔离回归使用 `test.compose.yaml`、独立 schema/数据目录、可由 queue 用户写入的 `test-artifacts/` 和 `model-fixture.mjs`。测试镜像另用 `Dockerfile.fixture` 构建。将 `test-run.mjs` 放在远程构建目录对应位置，`TEST_PASSWORD_FILE` 指向隔离 Web 的 0600 密码文件；运行 `node infra/r1/test-run.mjs`。脚本通过公开 API 创建串行 Run，核查 Pi 工具参数、报告与附件 SHA-256、保存失败与重试、Web 重启后读取，以及 OpenSandbox SDK 按 Run ID 查不到存活沙箱。测试期间脚本会短暂将隔离成果目录设为只读并重启隔离 Web。模型 HTTP fixture 是唯一可控响应边界；数据库、pg-boss、Pi 与 OpenSandbox 均使用真实服务。默认隔离端口为 Web `127.0.0.1:19112`、fixture `127.0.0.1:19113`。测试完删除隔离 Compose、schema、数据和本地临时镜像。
+## 正式发布与回退
+
+2026-09-18 已在 cc-la 建立 root:root、0700 的私有发布备份 `/opt/agentanywhere-backups/20260918-r1-release`。其中 `agentanywhere.dump` 经 `pg_restore --list` 检查通过；`r1/` 保存现役 Compose、deploy、0600 env、密码文件和 `data/`，并保留 Web/queue inspect；`w0/` 保存 Craft 配置、`craft.env`、`webui-password` 和容器 inspect；`proxy-root.conf` 是公网旧代理。备份时正式 `artifacts/` 尚不存在。该备份已完成，不在本发布步骤重复覆盖；发布前确认它仍完整，并记录发布 SHA 与镜像 ID。TLS 私钥已由 root 改为 0600，OpenResty master/worker 均以 root 运行，修改后 `openresty -t` 实际通过，未 reload。
+
+W0 完整用户数据卷仍待正式入口稳定后最终归档。Craft 上游归档 `/opt/agentanywhere-w0/upstream/craft.tar.gz` 中的 `packages/shared/src/credentials/backends/secure-storage.ts:84-98,336-343` 先读取容器内两个 machine-id 路径；当前以 Node `existsSync` 实测两者均不存在，实际身份回退到 `craftagents:/home/craftagents`，旧版密钥推导还使用容器 hostname。容器内 username、uid/gid、home、hostname 和两个存在性布尔值已保存到私有备份 `w0/identity.json`（0600）；无需复制宿主 SSH 或 TLS 私钥。最终归档先停止已不再承载公网流量的 Craft，保存 W0 工作目录和 `agentanywhere-w0_craft-data` 卷；归档失败时重新启动 Craft 并保留卷。以下命令只在最终回收窗口于 cc-la 执行：
+
+```sh
+set -eu
+cd /
+umask 077
+backup=/opt/agentanywhere-backups/20260918-r1-release
+test -f "$backup/w0/identity.json"
+docker stop agentanywhere-w0-craft >/dev/null
+trap 'docker start agentanywhere-w0-craft >/dev/null' 0 1 2 3 15
+tar -cpf "$backup/w0-files-final.tar" opt/agentanywhere-w0
+volume=$(docker volume inspect -f '{{.Mountpoint}}' agentanywhere-w0_craft-data)
+tar -C "$volume" -cpf "$backup/w0-craft-data-final.tar" .
+(cd "$backup" && sha256sum w0-files-final.tar w0-craft-data-final.tar > final-SHA256SUMS)
+trap - 0 1 2 3 15
+```
+
+核对归档及 `final-SHA256SUMS` 后，方可回收 W0 卷。归档保存在主机独立的 root:root 0700 目录，文件为 0600；不得公开凭据内容。
+
+今后正式环境出现成果时，数据库与 `artifacts/` 必须在无活跃执行窗口配对备份。发布代码只更新 Compose、部署脚本和三个正式镜像；保留现有 0600 env、PostgreSQL 卷、`data/`、`artifacts/`、OpenSandbox 与私有 SearXNG。复制发布文件并部署：
+
+```sh
+ssh cc-la "cp /opt/agentanywhere-r1/build-$release/infra/r1/compose.yaml /opt/agentanywhere-r1/compose.yaml &&
+  cp /opt/agentanywhere-r1/build-$release/infra/r1/deploy.sh /opt/agentanywhere-r1/deploy.sh &&
+  sh /opt/agentanywhere-r1/deploy.sh /opt/agentanywhere-r1 $release"
+```
+
+脚本只部署正式 Web 与 queue，不修改公网代理。确认 `19110/login` 为 HTTP 200、Web 健康、queue 运行、Web/queue 分别只读/读写挂载 `artifacts/`，queue 加入 `agentanywhere-r1-search`，真实 SearXNG 查询成功；再切换公网入口。cc-la 的站点文件 `/opt/1panel/www/conf.d/agent.riverflows.in.conf:33` 引入 `proxy/root.conf`，其第 2 行当前为 `proxy_pass http://127.0.0.1:19100;`。在 cc-la 的 root shell 中确认旧目标只出现一次后只改这一个代理目标，保留 Host、X-Forwarded-Proto 与 WebSocket Upgrade：
+
+```sh
+backup=/opt/agentanywhere-backups/20260918-r1-release
+proxy=/opt/1panel/www/sites/agent.riverflows.in/proxy/root.conf
+test "$(grep -c 'proxy_pass http://127.0.0.1:19100;' "$proxy")" -eq 1
+cmp "$proxy" "$backup/proxy-root.conf"
+sed -i 's@proxy_pass http://127.0.0.1:19100;@proxy_pass http://127.0.0.1:19110;@' "$proxy"
+docker exec 1Panel-openresty-T6pp openresty -t
+docker exec 1Panel-openresty-T6pp openresty -s reload
+```
+
+从公网验证 HTTPS 登录、匿名拒绝、WSS、两种真实模型协议、搜索、成果与浏览器完整路径；检查 cc-la 其他服务正常。
+
+公网验收失败时，立即从私有备份恢复原代理文件；W0 保持在 `19100`：
+
+```sh
+backup=/opt/agentanywhere-backups/20260918-r1-release
+cp -p "$backup/proxy-root.conf" /opt/1panel/www/sites/agent.riverflows.in/proxy/root.conf
+docker exec 1Panel-openresty-T6pp openresty -t
+docker exec 1Panel-openresty-T6pp openresty -s reload
+```
+
+正式 R1 部署失败时，从备份取回旧 `compose.yaml`、`deploy.sh`，运行旧脚本：
+
+```sh
+backup=/opt/agentanywhere-backups/20260918-r1-release
+cp -p "$backup/r1/compose.yaml" /opt/agentanywhere-r1/compose.yaml
+cp -p "$backup/r1/deploy.sh" /opt/agentanywhere-r1/deploy.sh
+sh /opt/agentanywhere-r1/deploy.sh
+```
+
+当前发布前版本是 `r1-05`，旧镜像标签在本发布流程中未被覆盖。后续版本回退到对应旧 SHA 标签。不要自动回滚数据库：还原数据库和 `artifacts/` 会丢弃快照之后的工作，应单独确认范围再执行。
+
+待正式入口稳定、W0 最终私有归档和 SHA-256 校验完成后，执行 `docker compose -f /opt/agentanywhere-w0/compose.yaml down --volumes` 回收 W0 Craft 容器、`agentanywhere-w0_craft-data` 卷和 W0 Compose 网络，执行 `! docker volume inspect agentanywhere-w0_craft-data >/dev/null 2>&1` 核对卷已删除。可随后清理 W0 专用镜像 `agentanywhere-w0-craft:e896385-pi1` 与 `/opt/agentanywhere-w0/` 工作目录；保留站点 TLS 证书、gVisor runtime、OpenSandbox 和正式 R1 资源。记录回收证据后关闭 W0 Issue #1。
+
+测试资源单独清理。先用 `docker inspect -f '{{index .Config.Labels "com.docker.compose.project.config_files"}}' agentanywhere-r1-test-web-1` 确认当前隔离 Compose 路径及项目名；停用该 Compose 时不加 `-v`。当前 cc-la 路径为 `/opt/agentanywhere-r1/test.dfba27b.compose.yaml`，但后续验收可能重建，必须以清理时的容器标签为准。核对测试 schema 的实际所有者和 `test.env` 引用，再只删除对应 schema、`test-data/`、`test-artifacts/`、fixture 容器与无引用的测试镜像；可执行部分为 `docker compose -f "$test_compose" down` 和 `rm -rf /opt/agentanywhere-r1/test-data /opt/agentanywhere-r1/test-artifacts`，其中 `test_compose` 必须先设为刚核对的路径。`19114` 真实模型隔离栈按自身 Compose 路径另行核对。正式 PostgreSQL 卷 `agentanywhere-r1-postgres-data`、`data/`、`artifacts/`、搜索服务和 Sandbox 网络始终保留。
+
+隔离回归使用 `test.compose.yaml`、独立 schema/数据目录、可由 queue 用户写入的 `test-artifacts/` 和 `model-fixture.mjs`。上文已按同一 SHA 构建 Web、queue、agent、fixture 四镜像；`TEST_RELEASE` 必须设为该完整 SHA。先在真实 PostgreSQL 的 `agentanywhere` 库为本次发布建立独立应用 schema 和 pg-boss schema，授权 `agentanywhere_app`。例如在 cc-la 的部署目录执行以下命令；已有同名 schema 时先核对归属，不能复用别的测试数据：
+
+```sh
+test_schema="r1test_$(printf '%.12s' "$release")"
+boss_schema="${test_schema}_boss"
+docker exec agentanywhere-r1-postgres psql -U agentanywhere_admin -d agentanywhere -v ON_ERROR_STOP=1 \
+  -c "CREATE SCHEMA \"$test_schema\" AUTHORIZATION agentanywhere_app" \
+  -c "CREATE SCHEMA \"$boss_schema\" AUTHORIZATION agentanywhere_app"
+```
+
+`test.env` 保持 0600，含 `AGENTANYWHERE_PASSWORD`、`AGENTANYWHERE_SECURE_COOKIE`、`DATABASE_URL`、`OPEN_SANDBOX_API_KEY` 和 `QUEUE_SCHEMA`；`DATABASE_URL` 的 `options` 必须为 `-csearch_path=<test_schema>`，`QUEUE_SCHEMA` 必须为 `<boss_schema>`。保留 `/opt/agentanywhere-r1/test-password` 0600 且与测试登录密码一致。不要把正式 `data/` 或正式 schema 挂给测试栈。
+
+在 cc-la 发布目录确认四个 SHA 标签、两个 schema、`test.env` 与 `test-password` 均已就绪，再执行：
+
+```sh
+TEST_RELEASE="$release" docker compose -f test.compose.yaml config --quiet
+TEST_RELEASE="$release" docker compose -f test.compose.yaml up -d
+TEST_PASSWORD_FILE=/opt/agentanywhere-r1/test-password \
+TEST_CONTROL_PLANE_ORIGIN=http://test-web:3000 \
+OPEN_SANDBOX_DOMAIN=127.0.0.1:19510 \
+OPEN_SANDBOX_API_KEY="$(sed -n 's/^OPEN_SANDBOX_API_KEY=//p' test.env)" \
+node "build-$release/infra/r1/test-all.mjs" isolated
+```
+
+该栈固定为 Web `127.0.0.1:19112`、fixture `127.0.0.1:19113`；`test-data/` 和 `test-artifacts/` 与正式数据分离。统一入口 `node infra/r1/test-all.mjs [isolated|live|public]` 默认 isolated；该模式重启隔离 fixture，按 run、report-contract、research、steering、interaction、cancel、continuation、recovery 顺序调用最高层 Web/API 测试。模型 HTTP fixture 是唯一可控响应边界；数据库、pg-boss、Pi 与 OpenSandbox 均使用真实服务。测试期间脚本会重启隔离 queue/Web 并临时修改隔离成果目录权限，勿与其他 19112/19113 验收并发。live 模式要求单独 19114 栈、私有模型连接副本和真实 SearXNG，`TEST_PROTOCOL=chat-completions` 与 `TEST_PROTOCOL=responses` 分别执行 `node build-$release/infra/r1/test-all.mjs live`；test-live-run 先验证所选协议的模型存在及连接测试，再创建真实 Run。public 模式在公网切换后执行 `TEST_PASSWORD_FILE=/opt/agentanywhere-backups/20260918-r1-release/w0/webui-password node build-$release/infra/r1/test-all.mjs public`，密码从原 W0 安全文件读取，不输出内容。测试完按上文精确清理隔离 Compose、schema、数据和无引用的测试镜像。
 
 真实 sub2api 的双协议连接测试和 Pi 工具往返分别见 [R1-05](../../docs/evidence/r1-05.md) 与 [R1-06](../../docs/evidence/r1-06.md)。`submit_report` 在沙箱内写报告与文本附件；同一 Run 的修订报告先写新 generation，再原子更新 manifest 指针，queue 按该指针校验并提交 Artifact/Version。执行中追加要求通过 `POST /api/runs/:id/messages` 保存，并由当前 epoch 的 Pi 在下一模型步骤接收；隔离流式回归运行 `node infra/r1/test-steering.mjs`，结果见 [R1-09](../../docs/evidence/r1-09.md)。取消隔离回归使用 `node infra/r1/test-cancel.mjs`；正式浏览器接管待后续票验收。
 
