@@ -94,8 +94,10 @@ http.createServer(async (request, response) => {
     const firstUser = body.messages.find(item => item.role === 'user')?.content
     const userText = typeof firstUser === 'string' ? firstUser : firstUser?.filter?.(item => item.type === 'text').map(item => item.text).join('') || ''
     const specified = userText.match(/指定来源：(\S+)/)?.[1]
-    const args = opened ? JSON.stringify({ markdown: '# Research fixture\n\n搜索摘要：Example source excerpt。\n\n正文来源：[Example Domain](https://example.com/)。\n\n部分引擎失败：duckduckgo CAPTCHA。' }) : name === 'open_public_page' ? JSON.stringify({ url: body.model === 'fixture-rejected' ? 'http://169.254.169.254/latest/meta-data/' : body.model === 'fixture-control-ip' ? specified : 'https://example.com/' }) : JSON.stringify({ query: 'fixture-blocked' })
-    calls.push({ model: body.model, observation, name, stream: body.stream })
+    const userMessages = body.messages.filter(item => item.role === 'user').map(item => typeof item.content === 'string' ? item.content : item.content?.filter?.(part => part.type === 'text').map(part => part.text).join('') || '')
+    const marker = userMessages.some(message => message.includes('STEERING_MARKER_12')) ? '\n\nSTEERING_MARKER_12' : ''
+    const args = opened ? JSON.stringify({ markdown: `# Research fixture\n\n搜索摘要：Example source excerpt。\n\n正文来源：[Example Domain](https://example.com/)。\n\n部分引擎失败：duckduckgo CAPTCHA。${marker}` }) : name === 'open_public_page' ? JSON.stringify({ url: body.model === 'fixture-rejected' ? 'http://169.254.169.254/latest/meta-data/' : body.model === 'fixture-control-ip' ? specified : 'https://example.com/' }) : JSON.stringify({ query: 'fixture-blocked' })
+    calls.push({ model: body.model, observation, name, userMessages, stream: body.stream })
     response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' })
     const common = { id: `fixture-${calls.length}`, object: 'chat.completion.chunk', created: 1, model: body.model }
     if (observation.some(item => item.includes('报告已保存'))) {
