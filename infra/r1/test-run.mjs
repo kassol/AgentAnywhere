@@ -117,6 +117,13 @@ try {
   assert.equal(blocked.run.status, 'save_failed')
   assert.equal(blocked.run.cleanupState, 'blocked')
   assert.equal(blocked.artifacts.length, 0)
+  const inspectBlocked = `import { SandboxManager } from '@alibaba-group/opensandbox';
+const manager = SandboxManager.create({ connectionConfig: { domain: process.env.OPEN_SANDBOX_DOMAIN, protocol: 'http', apiKey: process.env.OPEN_SANDBOX_API_KEY, useServerProxy: true, disableMetrics: true } });
+const result = await manager.listSandboxInfos({ metadata: { runId: process.argv[1] }, pageSize: 100 });
+const sandbox = result.items.find(item => item.status.state !== 'Deleted');
+if (!sandbox || sandbox.expiresAt != null) throw new Error('Blocked report sandbox has expiration or is missing');
+process.stdout.write(JSON.stringify({ sandboxId: sandbox.id }));`
+  assert.ok(JSON.parse(execFileSync('docker', ['exec', 'agentanywhere-r1-test-queue-1', 'node', '--input-type=module', '-e', inspectBlocked, blocked.run.id], { encoding: 'utf8' })).sandboxId)
 } finally {
   execFileSync('docker', ['exec', '-u', 'root', 'agentanywhere-r1-test-queue-1', 'chmod', '700', '/artifacts'])
 }

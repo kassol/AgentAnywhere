@@ -18,7 +18,6 @@ const active = new Set()
 const recovering = new Set()
 const artifactDir = process.env.AGENTANYWHERE_ARTIFACT_DIR || '/artifacts'
 const outputDir = '/tmp/agentanywhere-output'
-const retentionSeconds = 30 * 86400
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms))
 
 async function optionalFileInfo(sandbox, path) {
@@ -155,17 +154,12 @@ async function persistArtifacts(run, sandbox) {
 }
 
 async function markSaveBlocked(run, error, result) {
-  let renewal = ''
-  if (run.sandbox_id) {
-    try { await manager.renewSandbox(run.sandbox_id, retentionSeconds) }
-    catch { renewal = '；沙箱续租失败，文件可能到期丢失' }
-  }
   const db = await pool.connect()
   try {
     await db.query('BEGIN')
     const updated = await db.query(`UPDATE work_runs SET status='save_failed', failure=$3, cleanup_state='blocked',
       pending_status=$4, pending_failure=$5, run_token_hash=NULL WHERE id=$1 AND epoch=$2 AND active RETURNING task_id`,
-      [run.id, run.epoch, `成果保存失败：${error.message}${renewal}`, result.status, result.failure])
+      [run.id, run.epoch, `成果保存失败：${error.message}`, result.status, result.failure])
     if (updated.rowCount) await db.query("UPDATE work_tasks SET status='save_failed' WHERE id=$1", [updated.rows[0].task_id])
     await db.query('COMMIT')
   } catch (failure) { await db.query('ROLLBACK'); throw failure } finally { db.release() }
@@ -205,7 +199,7 @@ async function execute(run, token) {
     sandbox = await Sandbox.create({
       connectionConfig: sandboxConnection, image, entrypoint: ['node', '/app/agent-worker.mjs'],
       env: { RUN_TOKEN: token }, metadata: { runId: run.id, epoch: String(run.epoch) },
-      resource: { cpu: '1', memory: '512Mi' }, timeoutSeconds: 3600, readyTimeoutSeconds: 60,
+      resource: { cpu: '1', memory: '512Mi' }, timeoutSeconds: null, readyTimeoutSeconds: 60,
     })
     run.sandbox_id = sandbox.id
     await pool.query('UPDATE work_runs SET sandbox_id=$3 WHERE id=$1 AND epoch=$2 AND active', [run.id, run.epoch, sandbox.id])
@@ -297,14 +291,6 @@ async function recoverPending() {
   }
 }
 
-async function renewBlocked() {
-  const rows = await pool.query("SELECT id, sandbox_id FROM work_runs WHERE active AND cleanup_state IN ('blocked', 'retry_requested') AND sandbox_id IS NOT NULL")
-  for (const run of rows.rows) {
-    try { await manager.renewSandbox(run.sandbox_id, retentionSeconds) }
-    catch { await pool.query("UPDATE work_runs SET failure=CASE WHEN failure LIKE '%沙箱续租失败%' THEN failure ELSE COALESCE(failure, '') || '；沙箱续租失败，请尽快核查' END WHERE id=$1", [run.id]) }
-  }
-}
-
 async function dispatchPending() {
   const busy = await pool.query('SELECT 1 FROM work_runs WHERE active LIMIT 1')
   if (busy.rowCount) return
@@ -325,14 +311,11 @@ await boss.work('work-dispatch', { batchSize: 1 }, async ([job]) => {
 })
 const dispatchTimer = setInterval(() => void dispatchPending().catch(() => {}), 1000)
 const recoveryTimer = setInterval(() => void recoverPending().catch(() => {}), 2000)
-const renewalTimer = setInterval(() => void renewBlocked().catch(() => {}), 60_000)
-await renewBlocked()
 await dispatchPending()
 
 process.once('SIGTERM', async () => {
   clearInterval(dispatchTimer)
   clearInterval(recoveryTimer)
-  clearInterval(renewalTimer)
   await boss.stop()
   await pool.end()
 })
