@@ -415,7 +415,10 @@ async function execute(run, token) {
     if (!started.ok) throw new Error('Pi 启动请求失败')
     endpoint = { ...endpoint, endpoint: base }
     result = await liveEvents(endpoint, token, run, AbortSignal.any([eventsAbort.signal, AbortSignal.timeout(50 * 60_000)]))
-  } catch (error) { result = cancelled ? { status: 'cancelled', failure: null } : { status: 'failed', failure: error?.message === '旧报告校验失败' ? error.message : 'Pi 启动或执行中断' } }
+  } catch (error) {
+    if (!cancelled) console.error('Run execution interrupted', run.id, error?.message)
+    result = cancelled ? { status: 'cancelled', failure: null } : { status: 'failed', failure: error?.message === '旧报告校验失败' ? error.message : 'Pi 启动或执行中断' }
+  }
   finally {
     clearInterval(watch)
     try {
