@@ -63,8 +63,12 @@ http.createServer(async (request, response) => {
   const observation = body.messages.filter(message => message.role === 'tool').flatMap(message => typeof message.content === 'string' ? [message.content] : message.content?.filter?.(part => part.type === 'text').map(part => part.text) || [])
   const echoed = observation.some(item => item.includes('fixture observation'))
   const submitted = observation.some(item => item.includes('报告已保存'))
+  const submissions = observation.filter(item => item.includes('报告已保存')).length
   const toolResult = observation.length > 0
-  calls.push({ model: body.model, toolResult, observation, stream: body.stream })
+  const userMessages = body.messages.filter(message => message.role === 'user').map(message => typeof message.content === 'string'
+    ? message.content : message.content?.filter?.(part => part.type === 'text').map(part => part.text).join('') || '')
+  const steered = body.model === 'fixture-slow' && userMessages.some(message => message.includes('STEERING_MARKER_12'))
+  calls.push({ model: body.model, toolResult, observation, userMessages, stream: body.stream })
   response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' })
   const common = { id: `fixture-${calls.length}`, object: 'chat.completion.chunk', created: 1, model: body.model }
   if (body.model === 'fixture-empty-attachment' || body.model === 'fixture-duplicate-name') {
@@ -81,17 +85,18 @@ http.createServer(async (request, response) => {
     send(response, { ...common, choices: [], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } })
     return response.end('data: [DONE]\n\n')
   }
-  if (!submitted) {
-    const name = echoed ? 'submit_report' : 'echo_observation'
-    const args = echoed ? reportArgs : '{"text":"fixture observation"}'
-    send(response, { ...common, choices: [{ index: 0, delta: { role: 'assistant', tool_calls: [{ index: 0, id: echoed ? 'call_report' : 'call_echo', type: 'function', function: { name, arguments: '' } }] }, finish_reason: null }] })
+  if (!submitted || (steered && submissions === 1)) {
+    const name = steered && submitted ? 'submit_report' : echoed ? 'submit_report' : 'echo_observation'
+    const args = steered && submitted ? JSON.stringify({ markdown: `${report}\nSTEERING_MARKER_12\n` }) : echoed ? reportArgs : '{"text":"fixture observation"}'
+    const callId = steered && submitted ? 'call_report_revision' : echoed ? 'call_report' : 'call_echo'
+    send(response, { ...common, choices: [{ index: 0, delta: { role: 'assistant', tool_calls: [{ index: 0, id: callId, type: 'function', function: { name, arguments: '' } }] }, finish_reason: null }] })
     send(response, { ...common, choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: args } }] }, finish_reason: null }] })
     send(response, { ...common, choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] })
   } else {
     if (body.model === 'fixture-slow') {
       for (const part of ['The fixture ', 'observation was ', 'returned.']) {
         send(response, { ...common, choices: [{ index: 0, delta: { role: 'assistant', content: part }, finish_reason: null }] })
-        await new Promise(resolve => setTimeout(resolve, 500))
+        await new Promise(resolve => setTimeout(resolve, 1500))
       }
     } else send(response, { ...common, choices: [{ index: 0, delta: { role: 'assistant', content: 'The fixture observation was returned.' }, finish_reason: null }] })
     send(response, { ...common, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })

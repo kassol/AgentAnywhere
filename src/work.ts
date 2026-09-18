@@ -68,6 +68,10 @@ export async function createWorkStore(databaseUrl: string) {
     role text NOT NULL CHECK (role = 'user'), content text NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now()
   )`
+  await db`ALTER TABLE work_messages ADD COLUMN IF NOT EXISTS run_id uuid REFERENCES work_runs(id)`
+  await db`ALTER TABLE work_messages ADD COLUMN IF NOT EXISTS command_id uuid UNIQUE`
+  await db`ALTER TABLE work_messages ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'applied'`
+  await db`ALTER TABLE work_messages ADD COLUMN IF NOT EXISTS applied_at timestamptz`
   await db`CREATE TABLE IF NOT EXISTS work_artifacts (
     id uuid PRIMARY KEY, task_id uuid NOT NULL REFERENCES work_tasks(id),
     kind text NOT NULL, name text NOT NULL, UNIQUE (task_id, kind, name)
@@ -86,7 +90,7 @@ export async function createWorkStore(databaseUrl: string) {
       FROM work_tasks t JOIN work_runs r ON r.task_id = t.id JOIN work_threads h ON h.task_id = t.id
       WHERE t.id = ${id} AND t.owner_id = 'owner' ORDER BY r.created_at DESC, r.id DESC LIMIT 1`
     if (!row) return null
-    const messages = await db`SELECT role, content FROM work_messages WHERE thread_id = ${row.threadId} ORDER BY created_at, id`
+    const messages = await db`SELECT id, role, content, status FROM work_messages WHERE thread_id = ${row.threadId} ORDER BY created_at, id`
     const artifacts = await db`SELECT a.id, a.kind, a.name, v.id AS "versionId", v.run_id AS "runId",
       v.sha256, v.size_bytes AS "sizeBytes", v.mime_type AS "mimeType", v.created_at AS "createdAt"
       FROM work_artifacts a JOIN work_artifact_versions v ON v.artifact_id = a.id
@@ -162,6 +166,57 @@ export async function createWorkStore(databaseUrl: string) {
     return { task: await detail(winner.id), created: false }
   }
 
+  async function appendRunMessage(runId: string, body: unknown) {
+    if (!body || typeof body !== 'object' || Array.isArray(body)) throw new WorkInputError('追加要求无效')
+    const input = body as Record<string, unknown>
+    if (typeof input.commandId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(input.commandId)) throw new WorkInputError('命令 ID 无效')
+    if (input.kind !== 'steer') throw new WorkInputError('追加类型无效')
+    const content = typeof input.content === 'string' ? input.content.trim() : ''
+    if (!content || content.length > 4000) throw new WorkInputError('追加要求须为 1–4000 字')
+    return db.begin(async sql => {
+      const [run] = await sql`SELECT r.status, r.active, r.epoch, h.id AS "threadId" FROM work_runs r
+        JOIN work_tasks t ON t.id = r.task_id JOIN work_threads h ON h.task_id = t.id
+        WHERE r.id = ${runId} AND t.owner_id = 'owner' FOR UPDATE OF r`
+      if (!run) return null
+      const [existing] = await sql`SELECT id, run_id AS "runId", content, status FROM work_messages WHERE command_id = ${input.commandId}`
+      if (existing) {
+        if (existing.runId !== runId || existing.content !== content) throw new WorkConflictError('命令 ID 已用于其他追加要求')
+        return { message: existing, created: false }
+      }
+      if (run.status !== 'running' || !run.active) throw new WorkConflictError('当前 Run 不在执行中')
+      const id = crypto.randomUUID()
+      const rows = await sql`INSERT INTO work_messages (id, thread_id, run_id, command_id, role, content, status)
+        VALUES (${id}, ${run.threadId}, ${runId}, ${input.commandId}, 'user', ${content}, 'pending')
+        ON CONFLICT (command_id) DO NOTHING RETURNING id, run_id AS "runId", content, status`
+      if (rows.length) return { message: rows[0], created: true }
+      const [winner] = await sql`SELECT id, run_id AS "runId", content, status FROM work_messages WHERE command_id = ${input.commandId}`
+      if (!winner || winner.runId !== runId || winner.content !== content) throw new WorkConflictError('命令 ID 已用于其他追加要求')
+      return { message: winner, created: false }
+    })
+  }
+
+  async function pendingRunMessages(runId: string, epoch: number, token: string) {
+    const hash = createHash('sha256').update(token).digest('hex')
+    const rows = await db`SELECT m.id, m.content FROM work_messages m JOIN work_runs r ON r.id = m.run_id
+      WHERE r.id = ${runId} AND r.epoch = ${epoch} AND r.active AND r.status = 'running'
+      AND r.run_token_hash = ${hash} AND m.status = 'pending' ORDER BY m.created_at, m.id`
+    return rows
+  }
+
+  async function acknowledgeRunMessage(runId: string, epoch: number, token: string, id: string) {
+    const hash = createHash('sha256').update(token).digest('hex')
+    return db.begin(async sql => {
+      const [run] = await sql`SELECT id FROM work_runs WHERE id = ${runId} AND epoch = ${epoch}
+        AND active AND status = 'running' AND run_token_hash = ${hash} FOR UPDATE`
+      if (!run) return false
+      const rows = await sql`UPDATE work_messages SET status = 'applied', applied_at = now()
+        WHERE id = ${id} AND run_id = ${runId} AND status = 'pending' RETURNING id`
+      if (rows.length) return true
+      const [message] = await sql`SELECT status FROM work_messages WHERE id = ${id} AND run_id = ${runId}`
+      return message?.status === 'applied'
+    })
+  }
+
   async function resolveRunModelConnection(runId: string, resolveCredential: (ref: string) => { endpoint: string; apiKey: string }) {
     const [row] = await db`SELECT credential_ref AS "credentialRef", model_snapshot AS "model" FROM work_runs WHERE id = ${runId}`
     if (!row?.credentialRef) throw new Error('Run 凭证版本不存在')
@@ -191,5 +246,5 @@ export async function createWorkStore(databaseUrl: string) {
       WHERE EXISTS (SELECT 1 FROM work_runs WHERE id = ${runId} AND epoch = ${epoch} AND active)`
   }
 
-  return { list, detail, events, create, artifactVersion, requestCleanupRetry, resolveRunModelConnection, authorizeModelProxy, recordModelUsage }
+  return { list, detail, events, create, appendRunMessage, pendingRunMessages, acknowledgeRunMessage, artifactVersion, requestCleanupRetry, resolveRunModelConnection, authorizeModelProxy, recordModelUsage }
 }
