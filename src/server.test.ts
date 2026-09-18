@@ -35,7 +35,7 @@ function websocketStatus(cookie?: string): Promise<number> {
 test('anonymous, login, work list, live connection and logout use one session boundary', async () => {
   const anonymousPage = await fetch(base, { redirect: 'manual' })
   expect(anonymousPage.status).toBe(302)
-  expect(anonymousPage.headers.get('location')).toBe(`${base}/login`)
+  expect(anonymousPage.headers.get('location')).toBe('/login')
   expect((await fetch(`${base}/api/tasks`)).status).toBe(401)
   expect(await websocketStatus()).toBe(401)
   expect((await fetch(`${base}/login`)).status).toBe(200)
@@ -87,5 +87,27 @@ test('login limits repeated guesses', async () => {
     expect((await guess()).status).toBe(429)
   } finally {
     limited.stop(true)
+  }
+})
+
+test('proxy redirects retain the browser HTTPS origin', async () => {
+  const proxied = await startServer({ password, port: 0, publicOrigin: 'https://agent.example', secureCookie: true })
+  const proxyHeaders = { host: 'agent.example', 'x-forwarded-proto': 'https' }
+  try {
+    const anonymous = await fetch(proxied.url, { headers: proxyHeaders, redirect: 'manual' })
+    expect(anonymous.headers.get('location')).toBe('/login')
+    const login = await fetch(new URL('/api/auth', proxied.url), {
+      method: 'POST', headers: { ...proxyHeaders, origin: 'https://agent.example', 'content-type': 'application/json' },
+      body: JSON.stringify({ password }),
+    })
+    expect(login.status).toBe(204)
+    const cookie = login.headers.get('set-cookie')!
+    expect(cookie).toContain('Secure')
+    const signedIn = await fetch(new URL('/login', proxied.url), {
+      headers: { ...proxyHeaders, cookie }, redirect: 'manual',
+    })
+    expect(signedIn.headers.get('location')).toBe('/')
+  } finally {
+    proxied.stop(true)
   }
 })

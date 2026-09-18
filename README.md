@@ -2,7 +2,9 @@
 
 自托管的个人委托工作台。通过一个管家入口组织可配置 Agent，在隔离环境中执行工作；用户可以查看过程、补充要求、审批操作和接管浏览器，成果独立于执行环境保存。
 
-当前处于 W0 基线验证阶段，已收录产品文档、独立验证脚本和执行证据。应用集成尚未开始；已验证能力与待办见 [W0 证据](docs/evidence/w0/README.md)。
+已实现独立 Web 登录与空工作列表；模型、执行和成果闭环仍在实施。W0 已验证能力与待办见 [W0 证据](docs/evidence/w0/README.md)，当前应用验收见 [R1-01 证据](docs/evidence/r1-01.md)。
+
+本地启动：`bun install --frozen-lockfile && bun run build`，再以 `AGENTANYWHERE_PASSWORD='本机专用的至少十二位密码' bun run start` 启动。类型检查与测试分别运行 `bun run typecheck`、`bun test`。
 
 ## 文档
 
@@ -22,7 +24,7 @@
 
 基于固定 Craft 版本精简派生 WebApp，使用 Pi 执行、sub2api 模型网关、OpenSandbox/Docker 隔离环境、OpenConnector 账号工具，以及 PostgreSQL/pg-boss 持久化与调度。控制面部署于自有 VPS；Cloudflare 执行后端留待后续验证。
 
-W0 在指定主机 `cc-la` 的独立环境执行，再进入裁剪和业务开发。HTTPS 反代已验证，sub2api 连接测试已通过，正在验证会话内工具、取消与用量。
+W0 在指定主机 `cc-la` 的独立环境执行；独立应用的登录基线已开始实施。HTTPS 反代和 W0 sub2api 连接测试已验证，正式模型与工作闭环仍需验收。
 
 ## 材料说明
 

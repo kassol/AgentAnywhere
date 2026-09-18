@@ -25,7 +25,7 @@
 
 - `bun install --frozen-lockfile`：安装固定依赖。
 - `bun run build && bun run typecheck && bun test`：构建、类型检查与应用回归。
-- `AGENTANYWHERE_PASSWORD=<至少十二位密码> bun run start`：本地启动；部署配置见 `docs/evidence/r1-01.md`。
+- `AGENTANYWHERE_PASSWORD='本机专用的至少十二位密码' bun run start`：本地启动；部署配置见 `docs/evidence/r1-01.md`。
 
 ## 全局规范
 

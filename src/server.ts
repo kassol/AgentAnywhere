@@ -37,9 +37,12 @@ export async function startServer(config: Config) {
     sessions.delete(token)
   }
 
+  function sessionToken(request: Request): string | undefined {
+    return request.headers.get('cookie')?.split(';').map(part => part.trim()).find(part => part.startsWith(`${cookieName}=`))?.slice(cookieName.length + 1)
+  }
+
   function session(request: Request): Session | null {
-    const cookie = request.headers.get('cookie')?.split(';').map(part => part.trim()).find(part => part.startsWith(`${cookieName}=`))
-    const token = cookie?.slice(cookieName.length + 1)
+    const token = sessionToken(request)
     const value = token ? sessions.get(token) : undefined
     if (!value || value.expires <= Date.now()) { if (token) endSession(token); return null }
     return value
@@ -57,6 +60,7 @@ export async function startServer(config: Config) {
 
   const common = { 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' }
   const json = (body: unknown, status = 200) => Response.json(body, { status, headers: common })
+  const redirect = (path: '/' | '/login') => new Response(null, { status: 302, headers: { ...common, location: path } })
 
   return Bun.serve<{ token: string }>({
     hostname: config.host ?? '127.0.0.1',
@@ -86,7 +90,7 @@ export async function startServer(config: Config) {
       }
 
       if (path === '/login' && request.method === 'GET') {
-        if (authenticated) return Response.redirect(new URL('/', request.url), 302)
+        if (authenticated) return redirect('/')
         return html()
       }
       if (path.startsWith('/assets/') && request.method === 'GET' && /^\/assets\/[a-zA-Z0-9._-]+$/.test(path)) {
@@ -95,13 +99,13 @@ export async function startServer(config: Config) {
       }
       if (!authenticated) {
         if (path.startsWith('/api/')) return json({ error: 'Unauthorized' }, 401)
-        return Response.redirect(new URL('/login', request.url), 302)
+        return redirect('/login')
       }
       if (path === '/api/session' && request.method === 'GET') return json({ authenticated: true })
       if (path === '/api/tasks' && request.method === 'GET') return json([])
       if (path === '/api/logout' && request.method === 'POST') {
         if (!sameOrigin(request)) return json({ error: 'Forbidden' }, 403)
-        const token = request.headers.get('cookie')?.split(';').map(part => part.trim()).find(part => part.startsWith(`${cookieName}=`))?.slice(cookieName.length + 1)
+        const token = sessionToken(request)
         if (token) {
           endSession(token)
         }
@@ -109,7 +113,7 @@ export async function startServer(config: Config) {
       }
       if (path === '/api/live' && request.method === 'GET') {
         if (!sameOrigin(request)) return json({ error: 'Forbidden' }, 403)
-        const token = request.headers.get('cookie')?.split(';').map(part => part.trim()).find(part => part.startsWith(`${cookieName}=`))?.slice(cookieName.length + 1)
+        const token = sessionToken(request)
         if (token && server.upgrade(request, { data: { token } })) return undefined
         return json({ error: 'WebSocket upgrade required' }, 426)
       }
