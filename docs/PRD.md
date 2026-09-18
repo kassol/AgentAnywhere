@@ -104,6 +104,7 @@ MVP 不要求一次性支持全部平台。身份操作优先以自有 GitHub �
 | SandboxProfile | 逻辑环境配置，如 worker-basic、worker-coding、browser-interactive；不是任意 Docker 参数。 |
 | SandboxLease | Run 与实际供应商资源的绑定、角色、租约、续租和回收记录。 |
 | Connection | 指向 OpenConnector 中明确账号的引用及安全展示信息。 |
+| ModelConnection（模型连接） | 模型网关的端点、凭证引用与可用模型配置；与第三方账号 Connection 分开。 |
 | RunGrant | 本次执行可用的账号、Action、资源范围、有效期、浏览器模式和预算。 |
 | Interaction | 问题、审批、接管或异常核查；包含等待状态和用户回答。 |
 | Operation | 外部副作用的独立记录，包含请求内容哈希、审批、幂等键和回执。 |
