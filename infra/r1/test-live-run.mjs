@@ -98,7 +98,7 @@ try {
     assert.ok(failedEvents.some(event => event.type === 'run.failed'))
     assert.ok(!failedEvents.some(event => event.type === 'run.finished'))
 
-    const usage = history.filter(event => event.type === 'usage').map(event => event.payload)
+    const usage = [...new Map(history.filter(event => event.type === 'usage').map(event => [event.payload.callId, event.payload])).values()]
     results.push({ protocol, toolRun: success.run.id, streamedDeltas: history.filter(event => event.type === 'message.delta').length,
       usage: usage.length ? { calls: usage.length, inputTokens: usage.every(item => typeof item.inputTokens === 'number') ? usage.reduce((sum, item) => sum + item.inputTokens, 0) : 'unknown',
         outputTokens: usage.every(item => typeof item.outputTokens === 'number') ? usage.reduce((sum, item) => sum + item.outputTokens, 0) : 'unknown' } : 'unknown',
