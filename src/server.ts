@@ -267,6 +267,22 @@ export async function startServer(config: Config) {
           return json({ error: '创建工作失败' }, 500)
         }
       }
+      const continueMatch = /^\/api\/tasks\/([0-9a-f-]{36})\/runs$/i.exec(path)
+      if (continueMatch && request.method === 'POST') {
+        if (!sameOrigin(request)) return json({ error: 'Forbidden' }, 403)
+        if (!work) return json({ error: '工作存储未配置' }, 503)
+        const body = await readLimited(request, 8 * 1024)
+        if (body === null) return json({ error: '请求内容过大' }, 413)
+        try {
+          const result = await work.continueTask(continueMatch[1], JSON.parse(body), modelConnection.forRun())
+          return result ? json(result.task, result.created ? 201 : 200) : json({ error: 'Not found' }, 404)
+        } catch (error) {
+          if (error instanceof SyntaxError) return json({ error: 'JSON 格式无效' }, 400)
+          if (error instanceof WorkInputError) return json({ error: error.message }, 400)
+          if (error instanceof WorkConflictError) return json({ error: error.message }, 409)
+          return json({ error: '继续工作失败' }, 500)
+        }
+      }
       const appendMatch = /^\/api\/runs\/([0-9a-f-]{36})\/messages$/i.exec(path)
       if (appendMatch && request.method === 'POST') {
         if (!sameOrigin(request)) return json({ error: 'Forbidden' }, 403)

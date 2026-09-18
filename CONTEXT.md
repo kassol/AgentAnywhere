@@ -1,6 +1,6 @@
 # AgentAnywhere 领域定义
 
-状态：从 [PRD 第 4 节](docs/PRD.md#4-核心领域模型) 提取的设计基线。Task、Thread 和 Run 的首次创建、Chat Completions 与 Responses 最小执行、事件持久化、报告成果保存和执行中追加要求已实现，并经真实 PostgreSQL、pg-boss、Pi 和 OpenSandbox 隔离回归验证；追加要求在真实工具运行中的时序仍待搜索工具接通后验收。等待、执行重试和审批仍属设计要求。术语变更时同步维护 PRD 对应定义。
+状态：从 [PRD 第 4 节](docs/PRD.md#4-核心领域模型) 提取的设计基线。Task、Thread 和 Run 的首次创建、Chat Completions 与 Responses 最小执行、事件持久化、报告成果保存和执行中追加要求已实现，并经真实 PostgreSQL、pg-boss、Pi 和 OpenSandbox 隔离回归验证；追加要求在真实工具运行中的时序仍待搜索工具接通后验收。完成后继续工作创建同一 Task/Thread 的新 Run，固定新配置并引用已交付报告版本；当前仅通过公开 API 与真实 PostgreSQL 本地验证，完整隔离链路待验。等待、执行重试和审批仍属设计要求。术语变更时同步维护 PRD 对应定义。
 
 ## 产品
 
@@ -28,6 +28,8 @@
 一个 Run 通常分配一个 Worker Sandbox，按需额外分配一个 Browser Sandbox，因此数据关系是 Run 对多个 SandboxLease，而不是永久一对一。
 
 Run 等待后恢复仍可使用同一 Run ID，但执行代次 epoch 增加；失败后由用户重试则创建新 Run，保留 retryOfRunId。模型消息与过程审计不能代替业务数据库。
+
+完成后的修改要求在原 Task/Thread 创建新 Run。新 Run 固定选定模型、协议、连接凭证版本，保存前次已交付报告版本引用及当时的用户要求快照。旧报告作为新执行输入；每次交付的报告版本关联来源 Run，失败的新执行不改变旧版。
 
 
 ## 决策

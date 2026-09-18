@@ -52,6 +52,10 @@ export async function createWorkStore(databaseUrl: string) {
   await db`ALTER TABLE work_runs ADD COLUMN IF NOT EXISTS finished_at timestamptz`
   await db`ALTER TABLE work_runs ADD COLUMN IF NOT EXISTS pending_status text`
   await db`ALTER TABLE work_runs ADD COLUMN IF NOT EXISTS pending_failure text`
+  await db`ALTER TABLE work_runs ADD COLUMN IF NOT EXISTS request_id uuid UNIQUE`
+  await db`ALTER TABLE work_runs ADD COLUMN IF NOT EXISTS request_hash text`
+  await db`ALTER TABLE work_runs ADD COLUMN IF NOT EXISTS previous_report_version_id uuid`
+  await db`ALTER TABLE work_runs ADD COLUMN IF NOT EXISTS context_snapshot jsonb`
   await db`CREATE UNIQUE INDEX IF NOT EXISTS one_active_work_run ON work_runs (active) WHERE active`
   await db`CREATE TABLE IF NOT EXISTS work_outbox (
     run_id uuid PRIMARY KEY REFERENCES work_runs(id), created_at timestamptz NOT NULL DEFAULT now()
@@ -86,18 +90,22 @@ export async function createWorkStore(databaseUrl: string) {
   async function detail(id: string) {
     const [row] = await db`SELECT t.id, t.goal, t.source_url AS "sourceUrl", t.status, t.created_at AS "createdAt",
       r.id AS "runId", r.status AS "runStatus", r.model_snapshot AS "model", r.epoch,
-      r.cleanup_state AS "cleanupState", r.failure, r.started_at AS "startedAt", r.finished_at AS "finishedAt", h.id AS "threadId"
+      r.cleanup_state AS "cleanupState", r.failure, r.started_at AS "startedAt", r.finished_at AS "finishedAt",
+      r.previous_report_version_id AS "previousReportVersionId", h.id AS "threadId"
       FROM work_tasks t JOIN work_runs r ON r.task_id = t.id JOIN work_threads h ON h.task_id = t.id
       WHERE t.id = ${id} AND t.owner_id = 'owner' ORDER BY r.created_at DESC, r.id DESC LIMIT 1`
     if (!row) return null
     const messages = await db`SELECT id, role, content, status FROM work_messages WHERE thread_id = ${row.threadId} ORDER BY created_at, id`
-    const artifacts = await db`SELECT a.id, a.kind, a.name, v.id AS "versionId", v.run_id AS "runId",
+    const runs = await db`SELECT id, status, created_at AS "createdAt", finished_at AS "finishedAt", previous_report_version_id AS "previousReportVersionId"
+      FROM work_runs WHERE task_id = ${id} ORDER BY created_at, id`
+    const artifacts = await db`SELECT a.id, a.kind, a.name, v.id AS "versionId", v.run_id AS "runId", r.status AS "runStatus",
       v.sha256, v.size_bytes AS "sizeBytes", v.mime_type AS "mimeType", v.created_at AS "createdAt"
-      FROM work_artifacts a JOIN work_artifact_versions v ON v.artifact_id = a.id
+      FROM work_artifacts a JOIN work_artifact_versions v ON v.artifact_id = a.id JOIN work_runs r ON r.id=v.run_id
       WHERE a.task_id = ${id} ORDER BY v.created_at DESC, v.id DESC`
     return { id: row.id, goal: row.goal, sourceUrl: row.sourceUrl, status: row.status, createdAt: row.createdAt,
       run: { id: row.runId, status: row.runStatus, model: typeof row.model === 'string' ? JSON.parse(row.model) : row.model,
-        epoch: row.epoch, cleanupState: row.cleanupState, failure: row.failure, startedAt: row.startedAt, finishedAt: row.finishedAt }, thread: { id: row.threadId, messages }, artifacts }
+        epoch: row.epoch, cleanupState: row.cleanupState, failure: row.failure, startedAt: row.startedAt, finishedAt: row.finishedAt,
+        previousReportVersionId: row.previousReportVersionId }, runs, thread: { id: row.threadId, messages }, artifacts }
   }
 
   async function artifactVersion(versionId: string) {
@@ -196,6 +204,58 @@ export async function createWorkStore(databaseUrl: string) {
     return { task: await detail(winner.id), created: false }
   }
 
+  async function continueTask(taskId: string, body: unknown, connection: RunConnection) {
+    if (!body || typeof body !== 'object' || Array.isArray(body)) throw new WorkInputError('修改要求无效')
+    const input = body as Record<string, unknown>
+    if (typeof input.requestId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(input.requestId)) throw new WorkInputError('请求 ID 无效')
+    const content = typeof input.content === 'string' ? input.content.trim() : ''
+    if (!content || content.length > 4000) throw new WorkInputError('修改要求须为 1–4000 字')
+    if (typeof input.modelId !== 'string' || !input.modelId.trim()) throw new WorkInputError('请选择模型')
+    if (input.protocol !== undefined && input.protocol !== null && input.protocol !== 'chat-completions' && input.protocol !== 'responses') throw new WorkInputError('协议无效')
+    const requestHash = createHash('sha256').update(JSON.stringify({ taskId, content, modelId: input.modelId, protocol: input.protocol ?? null })).digest('hex')
+    const created = await db.begin(async sql => {
+      await sql`SELECT pg_advisory_xact_lock(720, hashtext(${taskId}))`
+      const [task] = await sql`SELECT t.id, h.id AS "threadId" FROM work_tasks t JOIN work_threads h ON h.task_id=t.id
+        WHERE t.id=${taskId} AND t.owner_id='owner'`
+      if (!task) return null
+      const [existing] = await sql`SELECT id, task_id AS "taskId", request_hash AS "requestHash" FROM work_runs WHERE request_id=${input.requestId}`
+      if (existing) {
+        if (existing.taskId !== taskId || existing.requestHash !== requestHash) throw new WorkConflictError('请求 ID 已用于其他修改')
+        return false
+      }
+      const [previous] = await sql`SELECT id, status, active, cleanup_state AS "cleanupState" FROM work_runs
+        WHERE task_id=${taskId} ORDER BY created_at DESC, id DESC LIMIT 1 FOR UPDATE`
+      if (!previous || previous.active || previous.cleanupState !== 'cleaned' || !['succeeded', 'failed', 'lost', 'cancelled'].includes(previous.status)) throw new WorkConflictError('当前工作尚未完成')
+      const [report] = await sql`SELECT v.id FROM work_artifact_versions v JOIN work_artifacts a ON a.id=v.artifact_id
+        JOIN work_runs source ON source.id=v.run_id
+        WHERE a.task_id=${taskId} AND a.kind='report' AND source.status='succeeded'
+        ORDER BY v.created_at DESC, v.id DESC LIMIT 1`
+      if (!report) throw new WorkConflictError('当前工作尚无可修改报告')
+      const model = connection.models.find(item => item.id === input.modelId)
+      if (!connection.endpoint || !connection.hasCredential || !connection.credentialRef || !model) throw new WorkInputError('请先选择可用模型并配置连接')
+      if (!model.contextWindow || !model.maxTokens || !model.input?.includes('text') || typeof model.reasoning !== 'boolean') throw new WorkInputError('请补充模型的上下文、输出上限、文本输入和推理配置')
+      const snapshot = { ...model, protocol: input.protocol ?? model.protocol, endpoint: connection.endpoint }
+      const messages = await sql`SELECT content FROM work_messages WHERE thread_id=${task.threadId} ORDER BY created_at, id`
+      const runId = crypto.randomUUID()
+      const inserted = await sql`INSERT INTO work_runs (id, task_id, status, model_snapshot, credential_ref, request_id, request_hash,
+        previous_report_version_id, context_snapshot) VALUES (${runId}, ${taskId}, 'queued', ${JSON.stringify(snapshot)}::jsonb,
+        ${connection.credentialRef}, ${input.requestId}, ${requestHash}, ${report.id}, ${JSON.stringify({ messages: messages.map((row: { content: string }) => row.content), instruction: content })}::jsonb)
+        ON CONFLICT (request_id) DO NOTHING RETURNING id`
+      if (!inserted.length) {
+        const [winner] = await sql`SELECT task_id AS "taskId", request_hash AS "requestHash" FROM work_runs WHERE request_id=${input.requestId}`
+        if (!winner || winner.taskId !== taskId || winner.requestHash !== requestHash) throw new WorkConflictError('请求 ID 已用于其他修改')
+        return false
+      }
+      await sql`INSERT INTO work_outbox (run_id) VALUES (${runId})`
+      await sql`UPDATE work_messages SET status='carried' WHERE thread_id=${task.threadId} AND status='pending'`
+      await sql`INSERT INTO work_messages (id, thread_id, run_id, role, content, status)
+        VALUES (${crypto.randomUUID()}, ${task.threadId}, ${runId}, 'user', ${content}, 'applied')`
+      await sql`UPDATE work_tasks SET status='queued' WHERE id=${taskId}`
+      return true
+    })
+    return created === null ? null : { task: await detail(taskId), created }
+  }
+
   async function appendRunMessage(runId: string, body: unknown) {
     if (!body || typeof body !== 'object' || Array.isArray(body)) throw new WorkInputError('追加要求无效')
     const input = body as Record<string, unknown>
@@ -276,5 +336,5 @@ export async function createWorkStore(databaseUrl: string) {
       WHERE EXISTS (SELECT 1 FROM work_runs WHERE id = ${runId} AND epoch = ${epoch} AND active)`
   }
 
-  return { list, detail, events, create, appendRunMessage, pendingRunMessages, acknowledgeRunMessage, cancel, isRunStopped, artifactVersion, requestCleanupRetry, resolveRunModelConnection, authorizeModelProxy, recordModelUsage }
+  return { list, detail, events, create, continueTask, appendRunMessage, pendingRunMessages, acknowledgeRunMessage, cancel, isRunStopped, artifactVersion, requestCleanupRetry, resolveRunModelConnection, authorizeModelProxy, recordModelUsage }
 }

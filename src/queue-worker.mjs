@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { lookup } from 'node:dns/promises'
 import http from 'node:http'
-import { mkdir, open, rename, rm } from 'node:fs/promises'
+import { mkdir, open, readFile, rename, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { PgBoss } from 'pg-boss'
 import pg from 'pg'
@@ -65,7 +65,8 @@ async function claim(runId, token) {
     await db.query('BEGIN')
     const result = await db.query(`UPDATE work_runs SET status='provisioning', active=true, epoch=epoch+1,
       run_token_hash=$2, started_at=now(), cleanup_state='pending'
-      WHERE id=$1 AND status='queued' AND NOT active RETURNING id, task_id, epoch, model_snapshot`,
+      WHERE id=$1 AND status='queued' AND NOT active RETURNING id, task_id, epoch, model_snapshot,
+        previous_report_version_id, context_snapshot`,
       [runId, createHash('sha256').update(token).digest('hex')])
     if (!result.rowCount) { await db.query('ROLLBACK'); return null }
     await db.query("UPDATE work_tasks SET status='provisioning' WHERE id=$1", [result.rows[0].task_id])
@@ -257,6 +258,23 @@ async function execute(run, token) {
   }
   try {
     await ensureActive()
+    const row = await pool.query('SELECT goal, source_url FROM work_tasks WHERE id=$1', [run.task_id])
+    let goal = [row.rows[0].goal, row.rows[0].source_url && `指定来源：${row.rows[0].source_url}`].filter(Boolean).join('\n\n')
+    if (run.previous_report_version_id) {
+      const previous = await pool.query(`SELECT v.storage_key, v.sha256, v.size_bytes, v.run_id
+        FROM work_artifact_versions v JOIN work_artifacts a ON a.id=v.artifact_id
+        WHERE v.id=$1 AND a.task_id=$2 AND a.kind='report'`, [run.previous_report_version_id, run.task_id])
+      const version = previous.rows[0]
+      if (!version || version.storage_key !== `${version.run_id}/report.md` || !Number.isSafeInteger(Number(version.size_bytes))
+        || Number(version.size_bytes) < 1 || Number(version.size_bytes) > 2_000_000) throw new Error('旧报告校验失败')
+      let report
+      try { report = await readFile(join(artifactDir, version.storage_key)) } catch { throw new Error('旧报告校验失败') }
+      if (report.length !== Number(version.size_bytes) || createHash('sha256').update(report).digest('hex') !== version.sha256) throw new Error('旧报告校验失败')
+      const context = typeof run.context_snapshot === 'string' ? JSON.parse(run.context_snapshot) : run.context_snapshot
+      if (!Array.isArray(context?.messages) || !context.messages.every(item => typeof item === 'string') || typeof context.instruction !== 'string') throw new Error('保留上下文无效')
+      goal = `${goal}\n\n既往用户要求：\n${context.messages.map((message, index) => `${index + 1}. ${message}`).join('\n')}\n\n上一版报告（作为修改输入）：\n${new TextDecoder('utf-8', { fatal: true }).decode(report)}\n\n本次修改要求：\n${context.instruction}`
+    }
+    await ensureActive()
     sandbox = await Sandbox.create({
       connectionConfig: sandboxConnection, image, entrypoint: ['node', '/app/agent-worker.mjs'],
       env: { RUN_TOKEN: token }, metadata: { runId: run.id, epoch: String(run.epoch) },
@@ -276,8 +294,6 @@ async function execute(run, token) {
     }
     if (!ready) throw new Error('Pi 进程未能启动')
     await ensureActive()
-    const row = await pool.query('SELECT goal, source_url FROM work_tasks WHERE id=$1', [run.task_id])
-    const goal = [row.rows[0].goal, row.rows[0].source_url && `指定来源：${row.rows[0].source_url}`].filter(Boolean).join('\n\n')
     const proxyOrigin = new URL(process.env.MODEL_PROXY_ORIGIN || 'http://web:3000')
     proxyOrigin.hostname = (await lookup(proxyOrigin.hostname, { family: 4 })).address
     const proxyBase = `${proxyOrigin.origin}/internal/runs/${run.id}/${run.epoch}/v1`
@@ -290,7 +306,7 @@ async function execute(run, token) {
     if (!started.ok) throw new Error('Pi 启动请求失败')
     endpoint = { ...endpoint, endpoint: base }
     result = await liveEvents(endpoint, token, run, AbortSignal.any([eventsAbort.signal, AbortSignal.timeout(50 * 60_000)]))
-  } catch { result = cancelled ? { status: 'cancelled', failure: null } : { status: 'failed', failure: 'Pi 启动或执行中断' } }
+  } catch (error) { result = cancelled ? { status: 'cancelled', failure: null } : { status: 'failed', failure: error?.message === '旧报告校验失败' ? error.message : 'Pi 启动或执行中断' } }
   finally {
     clearInterval(watch)
     try {

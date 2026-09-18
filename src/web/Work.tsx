@@ -4,8 +4,8 @@ import Markdown from 'react-markdown'
 
 type Model = { id: string; protocol: 'chat-completions' | 'responses' }
 type Task = { id: string; goal: string; sourceUrl: string | null; status: string; createdAt: string }
-type Artifact = { id: string; kind: 'report' | 'attachment'; name: string; versionId: string; runId: string; sha256: string; sizeBytes: number; createdAt: string }
-type Detail = Task & { run: { id: string; status: string; model: Model; cleanupState: string; failure: string | null; startedAt: string | null; finishedAt: string | null }; thread: { id: string; messages: { role: 'user'; content: string; status: 'pending' | 'applied' }[] }; artifacts: Artifact[] }
+type Artifact = { id: string; kind: 'report' | 'attachment'; name: string; versionId: string; runId: string; runStatus: string; sha256: string; sizeBytes: number; createdAt: string }
+type Detail = Task & { run: { id: string; status: string; model: Model; cleanupState: string; failure: string | null; startedAt: string | null; finishedAt: string | null; previousReportVersionId: string | null }; runs: { id: string; status: string; createdAt: string; previousReportVersionId: string | null }[]; thread: { id: string; messages: { role: 'user'; content: string; status: 'pending' | 'applied' | 'carried' }[] }; artifacts: Artifact[] }
 type RunEvent = { serverSeq: number; type: string; payload: Record<string, any>; occurredAt: string }
 const statusLabel: Record<string, string> = { queued: '待执行', provisioning: '准备环境', running: '执行中', cancelling: '正在取消', cancelled: '已取消', succeeded: '已完成', failed: '失败', lost: '执行中断', save_failed: '成果保存失败' }
 const safeLink = (url: string) => {
@@ -31,6 +31,7 @@ export function Work() {
   const [loadedVersion, setLoadedVersion] = useState<string | null>(null)
   const [events, setEvents] = useState<RunEvent[]>([])
   const cursor = useRef(0)
+  const currentRun = useRef<string | null>(null)
   const [models, setModels] = useState<Model[]>([])
   const [modelId, setModelId] = useState('')
   const [protocol, setProtocol] = useState('default')
@@ -39,6 +40,8 @@ export function Work() {
   const [busy, setBusy] = useState(false)
   const [steerContent, setSteerContent] = useState('')
   const [steerCommandId, setSteerCommandId] = useState(() => crypto.randomUUID())
+  const [continuation, setContinuation] = useState('')
+  const [continueRequestId, setContinueRequestId] = useState(() => crypto.randomUUID())
 
   useEffect(() => {
     const path = detailId ? `/api/tasks/${detailId}` : '/api/tasks'
@@ -52,6 +55,7 @@ export function Work() {
         if (disposed) return
         if (Array.isArray(value)) setTasks(value)
         else {
+          if (currentRun.current !== value.run.id) { currentRun.current = value.run.id; cursor.current = 0; setEvents([]) }
           setDetail(value)
           const additions = await read<RunEvent[]>(await fetch(`${path}/events?after=${cursor.current}`))
           if (disposed) return
@@ -65,14 +69,14 @@ export function Work() {
     }
     void refresh().catch(error => setError(error.message))
     const timer = detailId ? setInterval(() => void refresh().catch(error => setError(error.message)), 1000) : undefined
-    if (!detailId) fetch('/api/model-connection').then(response => read<{ models: Model[]; defaultModel: string | null }>(response)).then(value => {
+    fetch('/api/model-connection').then(response => read<{ models: Model[]; defaultModel: string | null }>(response)).then(value => {
       setModels(value.models)
       setModelId(value.defaultModel ?? value.models[0]?.id ?? '')
     }).catch(error => setError(error.message))
     return () => { disposed = true; if (timer) clearInterval(timer) }
   }, [detailId])
 
-  const currentVersion = selectedVersion ?? detail?.artifacts.find(item => item.kind === 'report')?.versionId
+  const currentVersion = selectedVersion ?? detail?.artifacts.find(item => item.kind === 'report' && item.runStatus === 'succeeded')?.versionId
   useEffect(() => {
     if (!currentVersion) return
     let disposed = false
@@ -138,6 +142,26 @@ export function Work() {
     finally { setBusy(false) }
   }
 
+  async function submitContinuation(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!detail) return
+    setBusy(true)
+    setError('')
+    try {
+      const updated = await read<Detail>(await fetch(`/api/tasks/${detail.id}/runs`, { method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ requestId: continueRequestId, content: continuation, modelId,
+          ...(protocol === 'default' ? {} : { protocol }) }) }))
+      setDetail(updated)
+      setSelectedVersion(null)
+      currentRun.current = updated.run.id
+      cursor.current = 0
+      setEvents([])
+      setContinuation('')
+      setContinueRequestId(crypto.randomUUID())
+    } catch (error) { setError(error instanceof Error ? error.message : '继续工作失败') }
+    finally { setBusy(false) }
+  }
+
   async function retryCleanup() {
     try { await read(await fetch(`/api/tasks/${detailId}/cleanup-retry`, { method: 'POST' })) }
     catch (error) { setError(error instanceof Error ? error.message : '重试失败') }
@@ -164,10 +188,18 @@ export function Work() {
       {detail.sourceUrl && <p><a href={detail.sourceUrl} target="_blank" rel="noopener noreferrer">{detail.sourceUrl}</a></p>}
       <p className="muted">模型：{detail.run.model.id} · 协议：{detail.run.model.protocol}</p>
       <h3>工作对话</h3>
-      {detail.thread.messages.map((message, index) => <p className="work-message" key={index}>{message.content}{message.status === 'pending' && <span className="muted">（待处理{detail.run.status === 'running' ? '，将在下一模型步骤生效' : '，本次执行已结束，等待继续处理'}）</span>}</p>)}
+      {detail.thread.messages.map((message, index) => <p className="work-message" key={index}>{message.content}{message.status === 'pending' && <span className="muted">（待处理{detail.run.status === 'running' ? '，将在下一模型步骤生效' : '，本次执行已结束，等待继续处理'}）</span>}{message.status === 'carried' && <span className="muted">（已纳入新 Run）</span>}</p>)}
       {detail.run.status === 'running' && <form className="work-form" onSubmit={submitSteer}>
         <label>追加要求<textarea value={steerContent} onChange={event => { setSteerContent(event.target.value); setSteerCommandId(crypto.randomUUID()) }} maxLength={4000} required rows={3} /></label>
         <button disabled={busy || !steerContent.trim()} type="submit">{busy ? '正在保存…' : '发送追加要求'}</button>
+      </form>}
+      {['succeeded', 'failed', 'lost', 'cancelled'].includes(detail.run.status) && detail.run.cleanupState === 'cleaned' && detail.artifacts.some(item => item.kind === 'report' && item.runStatus === 'succeeded') && <form className="work-form" onSubmit={submitContinuation}>
+        <h3>继续这项工作</h3>
+        <p className="muted">将原目标、既往要求和上一版报告交给新 Run；旧报告保留。</p>
+        <label>修改要求<textarea value={continuation} onChange={event => { setContinuation(event.target.value); setContinueRequestId(crypto.randomUUID()) }} maxLength={4000} required rows={3} /></label>
+        <label>模型<select value={modelId} onChange={event => setModelId(event.target.value)} required><option value="">请选择模型</option>{models.map(model => <option key={model.id} value={model.id}>{model.id}</option>)}</select></label>
+        <label>协议<select value={protocol} onChange={event => setProtocol(event.target.value)}><option value="default">使用模型默认协议</option><option value="chat-completions">Chat Completions</option><option value="responses">Responses</option></select></label>
+        <button disabled={busy || !continuation.trim() || !modelId} type="submit">{busy ? '正在保存…' : '创建新 Run'}</button>
       </form>}
       {activity.map(item => <p className="work-message" key={item.id}>{item.kind === 'tool' ? '工具：' : 'Agent：'}{item.text}{!item.done && '…'}</p>)}
       <p className="muted">用量：输入 {tokens('inputTokens') ?? '未知'} / 输出 {tokens('outputTokens') ?? '未知'} token</p>
@@ -176,10 +208,10 @@ export function Work() {
       {detail.run.failure && <p className="error" role="alert">{detail.run.failure}</p>}
       {(detail.run.cleanupState === 'failed' || detail.run.cleanupState === 'blocked') && <p className="error" role="alert">{detail.run.cleanupState === 'blocked' ? '成果尚未安全保存；沙箱已保留。' : '沙箱回收失败，请重试。'} <button type="button" onClick={retryCleanup}>重试保存与回收</button></p>}
       {detail.artifacts.length > 0 && <section className="artifacts"><h3>成果</h3>
-        {detail.artifacts.filter(item => item.kind === 'report').map(item => <button type="button" key={item.versionId} onClick={() => setSelectedVersion(item.versionId)} aria-pressed={currentVersion === item.versionId}>报告版本 · {new Date(item.createdAt).toLocaleString('zh-CN')}</button>)}
+        {detail.artifacts.filter(item => item.kind === 'report').map((item, index, reports) => <button type="button" key={item.versionId} onClick={() => setSelectedVersion(item.versionId)} aria-pressed={currentVersion === item.versionId}>第 {reports.length - index} 版 · {new Date(item.createdAt).toLocaleString('zh-CN')} · Run {item.runId.slice(0, 8)}{item.runStatus !== 'succeeded' && ' · 未完成'}</button>)}
         {currentVersion && <><p><a href={`/api/artifacts/${currentVersion}/download`}>下载 Markdown 报告</a></p>
           <div className="report-markdown">{loadedVersion === currentVersion ? <Markdown skipHtml urlTransform={safeLink} components={{ a: props => <a {...props} target="_blank" rel="noopener noreferrer" />, img: () => null }}>{report}</Markdown> : <p role="status">正在加载报告…</p>}</div></>}
-        {detail.artifacts.filter(item => item.kind === 'attachment').length > 0 && <><h4>附件</h4><ul>{detail.artifacts.filter(item => item.kind === 'attachment').map(item => <li key={item.versionId}><a href={`/api/artifacts/${item.versionId}/download`}>{item.name}</a></li>)}</ul></>}
+        {detail.artifacts.some(item => item.kind === 'attachment' && item.runId === detail.artifacts.find(report => report.versionId === currentVersion)?.runId) && <><h4>该版本附件</h4><ul>{detail.artifacts.filter(item => item.kind === 'attachment' && item.runId === detail.artifacts.find(report => report.versionId === currentVersion)?.runId).map(item => <li key={item.versionId}><a href={`/api/artifacts/${item.versionId}/download`}>{item.name}</a></li>)}</ul></>}
       </section>}
     </section>}
   </>
