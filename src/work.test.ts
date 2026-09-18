@@ -118,6 +118,27 @@ test.skipIf(!databaseUrl)('owner creates one persisted queued work request throu
     expect(publicConnection).not.toContain('credentialVersions')
     expect(await (await send(`/api/tasks/${task.id}`)).text()).not.toContain('private-secret')
     expect(await (await send(`/api/tasks/${newTask.id}`)).text()).not.toContain('new-private-secret')
+    const upstream = Bun.serve({ port: 0, fetch: () => new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('data: {"choices":[]}\n\n'))
+        setTimeout(() => controller.error(new Error('upstream stream failed')), 20)
+      },
+    }), { headers: { 'content-type': 'text/event-stream' } }) })
+    const proxyDb = new SQL(testDatabaseUrl)
+    try {
+      expect((await send('/api/model-connection', 'PUT', { endpoint: `${upstream.url.origin}/v1`, apiKey: 'stream-secret' })).status).toBe(200)
+      expect((await send('/api/model-connection/models', 'PUT', { defaultModel: 'test-model', models: [{ id: 'test-model', protocol: 'chat-completions', contextWindow: 128000, maxTokens: 8192, input: ['text'], reasoning: false, tools: true }] })).status).toBe(200)
+      const broken = await (await send('/api/tasks', 'POST', { ...body, requestId: crypto.randomUUID() })).json()
+      const token = 'stream-test-token'
+      await proxyDb`UPDATE work_runs SET status='running', active=true, epoch=1,
+        run_token_hash=${createHash('sha256').update(token).digest('hex')} WHERE id=${broken.run.id}`
+      const proxy = `/internal/runs/${broken.run.id}/1/v1/chat/completions`
+      const streamed = await fetch(`${base}${proxy}`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ model: 'test-model', stream: true }) })
+      expect(streamed.status).toBe(200)
+      await expect(streamed.text()).rejects.toThrow()
+      expect((await send(`/api/tasks/${broken.id}/cancel`, 'POST')).status).toBe(202)
+      expect((await fetch(`${base}${proxy}`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ model: 'test-model', stream: true }) })).status).toBe(401)
+    } finally { upstream.stop(true); await proxyDb.close() }
     expect((await send('/api/model-connection/models', 'PUT', { defaultModel: null, models: [] })).status).toBe(200)
     expect((await send(`/api/tasks/${task.id}`)).json()).resolves.toMatchObject({ run: { model: { id: 'test-model', protocol: 'chat-completions', endpoint, contextWindow: 128000, maxTokens: 8192, input: ['text'], reasoning: false, tools: true } } })
   } finally {

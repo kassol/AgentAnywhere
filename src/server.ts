@@ -43,6 +43,29 @@ function observeUsage(body: ReadableStream<Uint8Array>, save: (usage: { inputTok
   }))
 }
 
+function closeWith(body: ReadableStream<Uint8Array>, cleanup: () => void) {
+  const reader = body.getReader()
+  let closed = false
+  const finish = () => {
+    if (closed) return
+    closed = true
+    cleanup()
+    reader.releaseLock()
+  }
+  return new ReadableStream<Uint8Array>({
+    async pull(output) {
+      try {
+        const chunk = await reader.read()
+        if (chunk.done) { finish(); output.close() }
+        else output.enqueue(chunk.value)
+      } catch (error) { finish(); output.error(error) }
+    },
+    async cancel(reason) {
+      try { await reader.cancel(reason) } finally { finish() }
+    },
+  })
+}
+
 type Config = { password: string; host?: string; port?: number; secureCookie?: boolean; publicOrigin?: string; dataDir?: string; artifactDir?: string; modelTimeoutMs?: number; directoryUrl?: string; databaseUrl?: string }
 type Session = { expires: number; sockets: Set<ServerWebSocket<{ token: string }>> }
 
@@ -146,9 +169,9 @@ export async function startServer(config: Config) {
         const controller = new AbortController()
         const runId = proxyMatch[1]
         const epoch = Number(proxyMatch[2])
-        if (await work.isRunCancelled(runId, epoch)) return json({ error: 'Run cancelled' }, 409)
-        const timer = setInterval(() => void work.isRunCancelled(runId, epoch).then(cancelled => {
-          if (cancelled) { controller.abort(); stopWatching() }
+        if (await work.isRunStopped(runId, epoch)) return json({ error: 'Run stopped' }, 409)
+        const timer = setInterval(() => void work.isRunStopped(runId, epoch).then(stopped => {
+          if (stopped) { controller.abort(); stopWatching() }
         }).catch(() => { controller.abort(); stopWatching() }), 200)
         const stopWatching = () => clearInterval(timer)
         request.signal.addEventListener('abort', stopWatching, { once: true })
@@ -165,7 +188,7 @@ export async function startServer(config: Config) {
             ? observeUsage(upstream.body!, usage => usage.inputTokens !== null || usage.outputTokens !== null || usage.totalTokens !== null
               ? work.recordModelUsage(proxyMatch[1], Number(proxyMatch[2]), { callId, ...usage }) : Promise.resolve()) : upstream.body
           if (!stream) stopWatching()
-          return new Response(stream?.pipeThrough(new TransformStream({ transform(chunk, output) { output.enqueue(chunk) }, flush: stopWatching })), { status: upstream.status, headers: { ...common, 'content-type': contentType } })
+          return new Response(stream ? closeWith(stream, stopWatching) : null, { status: upstream.status, headers: { ...common, 'content-type': contentType } })
         } catch { stopWatching(); return json({ error: 'Model gateway unavailable' }, 502) }
       }
 

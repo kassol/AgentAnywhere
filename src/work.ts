@@ -142,9 +142,9 @@ export async function createWorkStore(databaseUrl: string) {
     })
   }
 
-  async function isRunCancelled(runId: string, epoch: number) {
+  async function isRunStopped(runId: string, epoch: number) {
     const [row] = await db`SELECT status FROM work_runs WHERE id = ${runId} AND epoch = ${epoch}`
-    return !row || row.status === 'cancelling' || row.status === 'cancelled'
+    return !row || !['provisioning', 'running'].includes(row.status)
   }
 
   async function events(taskId: string, after: number) {
@@ -276,5 +276,5 @@ export async function createWorkStore(databaseUrl: string) {
       WHERE EXISTS (SELECT 1 FROM work_runs WHERE id = ${runId} AND epoch = ${epoch} AND active)`
   }
 
-  return { list, detail, events, create, appendRunMessage, pendingRunMessages, acknowledgeRunMessage, cancel, isRunCancelled, artifactVersion, requestCleanupRetry, resolveRunModelConnection, authorizeModelProxy, recordModelUsage }
+  return { list, detail, events, create, appendRunMessage, pendingRunMessages, acknowledgeRunMessage, cancel, isRunStopped, artifactVersion, requestCleanupRetry, resolveRunModelConnection, authorizeModelProxy, recordModelUsage }
 }

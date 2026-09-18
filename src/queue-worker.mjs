@@ -253,7 +253,7 @@ async function execute(run, token) {
       body: JSON.stringify({ goal, model: run.model_snapshot, proxyBase }), signal: AbortSignal.timeout(10_000) })
     if (!started.ok) throw new Error('Pi 启动请求失败')
     endpoint = { ...endpoint, endpoint: base }
-    result = await liveEvents(endpoint, token, run, eventsAbort.signal)
+    result = await liveEvents(endpoint, token, run, AbortSignal.any([eventsAbort.signal, AbortSignal.timeout(50 * 60_000)]))
   } catch { result = cancelled ? { status: 'cancelled', failure: null } : { status: 'failed', failure: 'Pi 启动或执行中断' } }
   finally {
     clearInterval(watch)
