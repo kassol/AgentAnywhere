@@ -2,17 +2,18 @@
 
 ## 项目概述
 
-自托管的个人委托工作台。当前处于文档与基线验证阶段；产品要求见 [PRD](docs/PRD.md)，实施范围见 [MVP](docs/MVP.md)。
+自托管的个人委托工作台。已实现独立 Web 登录与空工作列表；模型接入、执行及成果能力仍在实施中。产品要求见 [PRD](docs/PRD.md)，实施范围见 [MVP](docs/MVP.md)。
 
 ## 技术栈
 
-拟采用 React/TypeScript、Bun 控制服务、Node.js 队列进程、PostgreSQL/pg-boss、Pi、OpenSandbox、OpenConnector 与 sub2api。具体版本和兼容性以 W0 验证结果为准。
+已使用 React/TypeScript 与 Bun 实现 Web 登录基线；Node.js 队列进程、PostgreSQL/pg-boss、Pi、OpenSandbox、OpenConnector 与 sub2api 仍属后续实施范围。具体版本和兼容性以各阶段实测为准。
 
 ## 目录索引
 
 - `docs/`：产品、实施、工程流程与决策文档。
 - `diagrams/`：架构与浏览器隔离图。
 - `infra/w0/`：独立基线验证脚本与运行配置；执行证据位于 `docs/evidence/w0/`。
+- `src/server.ts`：Web/API 服务与登录鉴权；`src/web/`：精简 Web；`docs/evidence/r1-01.md`：来源及本票验证。
 - `CONTEXT.md`：领域定义。
 
 ## 常用命令
@@ -22,7 +23,9 @@
 - `gh issue view <number> --comments`：读取任务及讨论。
 - `PYTHONDONTWRITEBYTECODE=1 python3 infra/w0/sandbox/check.py`：检查 W0 runtime 配置合并与补丁保护。
 
-应用构建与测试命令在引入实际工程后确定。
+- `bun install --frozen-lockfile`：安装固定依赖。
+- `bun run build && bun run typecheck && bun test`：构建、类型检查与应用回归。
+- `AGENTANYWHERE_PASSWORD=<至少十二位密码> bun run start`：本地启动；部署配置见 `docs/evidence/r1-01.md`。
 
 ## 全局规范
 
@@ -49,3 +52,4 @@
 
 - 2026-09-18：建立公开仓库与工程技能配置。
 - 2026-09-18：加入独立 W0 验证目录；远程复现与清理流程见 `infra/w0/README.md`。
+- 2026-09-18：加入 R1-01 独立 Web 登录与精简工作台。
