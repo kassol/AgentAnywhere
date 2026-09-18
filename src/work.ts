@@ -239,20 +239,23 @@ export async function createWorkStore(databaseUrl: string) {
     const answer = typeof (body as Record<string, unknown>).answer === 'string' ? (body as Record<string, string>).answer.trim() : ''
     if (!answer || answer.length > 4000) throw new WorkInputError('回答须为 1–4000 字')
     return db.begin(async sql => {
-      const [interaction] = await sql`SELECT i.id, i.run_id AS "runId", i.status, i.answer, r.task_id AS "taskId",
-        r.status AS "runStatus", r.active, r.cleanup_state AS "cleanupState", r.checkpoint_ref AS "checkpointRef"
-        FROM work_interactions i JOIN work_runs r ON r.id=i.run_id JOIN work_tasks t ON t.id=r.task_id
-        WHERE i.id=${id} AND t.owner_id='owner' FOR UPDATE OF i, r`
-      if (!interaction) return null
+      const [target] = await sql`SELECT i.run_id AS "runId" FROM work_interactions i
+        JOIN work_runs r ON r.id=i.run_id JOIN work_tasks t ON t.id=r.task_id
+        WHERE i.id=${id} AND t.owner_id='owner'`
+      if (!target) return null
+      const [run] = await sql`SELECT task_id AS "taskId", status, active, cleanup_state AS "cleanupState", checkpoint_ref AS "checkpointRef"
+        FROM work_runs WHERE id=${target.runId} FOR UPDATE`
+      const [interaction] = await sql`SELECT status, answer FROM work_interactions WHERE id=${id} AND run_id=${target.runId} FOR UPDATE`
+      if (!interaction || !run) return null
       if (interaction.status === 'answered') {
         if (interaction.answer !== answer) throw new WorkConflictError('问题已用不同内容回答')
         return { created: false }
       }
-      if (interaction.status !== 'pending' || interaction.runStatus !== 'waiting' || interaction.active || interaction.cleanupState !== 'cleaned' || !interaction.checkpointRef) throw new WorkConflictError('问题尚未准备好回答')
+      if (interaction.status !== 'pending' || run.status !== 'waiting' || run.active || run.cleanupState !== 'cleaned' || !run.checkpointRef) throw new WorkConflictError('问题尚未准备好回答')
       await sql`UPDATE work_interactions SET status='answered', answer=${answer}, answered_at=now() WHERE id=${id}`
-      await sql`UPDATE work_runs SET status='queued', cleanup_state='none' WHERE id=${interaction.runId}`
-      await sql`UPDATE work_tasks SET status='queued' WHERE id=${interaction.taskId}`
-      await sql`INSERT INTO work_outbox (run_id) VALUES (${interaction.runId}) ON CONFLICT DO NOTHING`
+      await sql`UPDATE work_runs SET status='queued', cleanup_state='none' WHERE id=${target.runId}`
+      await sql`UPDATE work_tasks SET status='queued' WHERE id=${run.taskId}`
+      await sql`INSERT INTO work_outbox (run_id) VALUES (${target.runId}) ON CONFLICT DO NOTHING`
       return { created: true }
     })
   }

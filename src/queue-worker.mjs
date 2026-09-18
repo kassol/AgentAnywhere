@@ -184,7 +184,7 @@ async function saveCheckpoint(run, sandbox, question) {
   try {
     for (const item of paths) {
       const info = await optionalFileInfo(sandbox, item.source)
-      if (info?.type !== 'file' || !Number.isSafeInteger(info.size) || info.size < 1 || info.size > item.limit) throw new Error('检查点文件缺失或过大')
+      if (info?.type !== 'file' || !Number.isSafeInteger(info.size) || info.size < (item.name.includes('/attachment-') ? 0 : 1) || info.size > item.limit) throw new Error('检查点文件缺失或过大')
       const bytes = await sandbox.files.readBytes(item.source, { limit: item.limit + 1 })
       if (bytes.length !== info.size || (await optionalFileInfo(sandbox, item.source))?.size !== info.size) throw new Error('检查点文件复制时变化')
       const path = join(temporary, item.name)

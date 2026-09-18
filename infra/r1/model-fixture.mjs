@@ -104,12 +104,12 @@ http.createServer(async (request, response) => {
   if (body.model === 'fixture-ask') {
     const asked = observation.some(item => item.includes('问题已交给用户'))
     const answer = userMessages.find(message => message.includes('ANSWER_MARKER_13'))
-    const name = submitted ? null : !echoed ? 'echo_observation' : !asked ? 'ask_user' : 'submit_report'
+    const name = !echoed ? 'echo_observation' : !submitted ? 'submit_report' : !asked ? 'ask_user' : submissions === 1 ? 'submit_report' : null
     const args = name === 'echo_observation' ? '{"text":"fixture observation"}'
       : name === 'ask_user' ? '{"question":"请确认研究方向？"}'
-      : JSON.stringify({ markdown: `# 恢复报告\n\n${answer ?? '回答缺失'}\n\nfixture observation` })
+      : !asked ? emptyAttachmentArgs : JSON.stringify({ markdown: `# 恢复报告\n\n${answer ?? '回答缺失'}\n\nfixture observation` })
     if (name) {
-      send(response, { ...common, choices: [{ index: 0, delta: { role: 'assistant', tool_calls: [{ index: 0, id: `call_${name}`, type: 'function', function: { name, arguments: '' } }] }, finish_reason: null }] })
+      send(response, { ...common, choices: [{ index: 0, delta: { role: 'assistant', tool_calls: [{ index: 0, id: name === 'submit_report' && asked ? 'call_report_revision' : `call_${name}`, type: 'function', function: { name, arguments: '' } }] }, finish_reason: null }] })
       send(response, { ...common, choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: args } }] }, finish_reason: null }] })
       send(response, { ...common, choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] })
     } else {
