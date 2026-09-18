@@ -131,8 +131,12 @@ export async function startServer(config: Config) {
             body, redirect: 'manual', signal: request.signal,
           })
           const contentType = upstream.headers.get('content-type') ?? 'application/json'
-          const stream = upstream.body && upstream.ok && contentType.includes('text/event-stream')
-            ? observeUsage(upstream.body, usage => work.recordModelUsage(proxyMatch[1], Number(proxyMatch[2]), usage)) : upstream.body
+          const metered = upstream.body && upstream.ok && contentType.includes('text/event-stream')
+          const callId = crypto.randomUUID()
+          if (metered) await work.recordModelUsage(proxyMatch[1], Number(proxyMatch[2]), { callId, inputTokens: null, outputTokens: null, totalTokens: null })
+          const stream = metered
+            ? observeUsage(upstream.body!, usage => usage.inputTokens !== null || usage.outputTokens !== null || usage.totalTokens !== null
+              ? work.recordModelUsage(proxyMatch[1], Number(proxyMatch[2]), { callId, ...usage }) : Promise.resolve()) : upstream.body
           return new Response(stream, { status: upstream.status, headers: { ...common, 'content-type': contentType } })
         } catch { return json({ error: 'Model gateway unavailable' }, 502) }
       }
@@ -204,9 +208,11 @@ export async function startServer(config: Config) {
         if (body === null) return json({ error: '请求内容过大' }, 413)
         let input: { modelId?: unknown; protocol?: unknown }
         try { input = JSON.parse(body) } catch { return json({ error: 'JSON 格式无效' }, 400) }
+        if (!input || typeof input !== 'object' || Array.isArray(input)) return json({ error: '模型或协议无效' }, 400)
         const connection = modelConnection.forRun()
         const selected = connection.models.find(model => model.id === input.modelId)
-        const protocol = input.protocol ?? selected?.protocol
+        const protocol = selected?.protocol
+        if (input.protocol !== undefined && input.protocol !== protocol) return json({ error: '模型或协议无效' }, 400)
         if (!selected || (protocol !== 'chat-completions' && protocol !== 'responses') || !connection.credentialRef) return json({ error: '模型或协议无效' }, 400)
         const credential = modelConnection.resolveCredential(connection.credentialRef)
         const requestBody = protocol === 'chat-completions'

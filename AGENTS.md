@@ -2,11 +2,11 @@
 
 ## 项目概述
 
-自托管的个人委托工作台。已实现独立 Web 登录、工作创建与待执行持久化，以及单套模型连接配置；模型推断、执行及成果能力仍在实施中。产品要求见 [PRD](docs/PRD.md)，实施范围见 [MVP](docs/MVP.md)。
+自托管的个人委托工作台。已实现独立 Web 登录、模型连接、工作创建，以及 Chat Completions 的最小隔离执行与持久事件；搜索、交互和成果能力仍在实施中。产品要求见 [PRD](docs/PRD.md)，实施范围见 [MVP](docs/MVP.md)。
 
 ## 技术栈
 
-已使用 React/TypeScript、Bun 与 PostgreSQL 实现 Web 登录、模型配置和待执行工作持久化；Node.js 队列进程、pg-boss、Pi、OpenSandbox 与 OpenConnector 仍属后续实施范围。sub2api 已用于模型列表发现，推断能力尚未接通。具体版本和兼容性以各阶段实测为准。
+React/TypeScript、Bun、PostgreSQL、Node.js 24.21、pg-boss 12.26.3、Pi 0.85.1 与 OpenSandbox SDK 0.1.11 用于最小执行链路。sub2api 已用于模型列表发现；真实 Chat Completions 调用仍需在正式 R1 验收。Responses 与 OpenConnector 属后续实施范围。
 
 ## 目录索引
 
@@ -26,7 +26,7 @@
 - `bun install --frozen-lockfile`：安装固定依赖。
 - `bun run build && bun run typecheck && bun test`：构建、类型检查与应用回归。
 - `AGENTANYWHERE_TEST_DATABASE_URL='独立测试库连接串' bun test src/work.test.ts`：工作创建的公开 API 与真实 PostgreSQL 回归。
-- `AGENTANYWHERE_PASSWORD='本机专用的至少十二位密码' DATABASE_URL='PostgreSQL 连接串' bun run start`：本地启动；模型配置目录通过 `AGENTANYWHERE_DATA_DIR` 指定，默认 `./data`。部署配置见 `docs/evidence/r1-01.md`、`docs/evidence/r1-02.md` 和 `docs/evidence/r1-04.md`。
+- `AGENTANYWHERE_PASSWORD='本机专用的至少十二位密码' DATABASE_URL='PostgreSQL 连接串' bun run start`：本地启动；模型配置目录通过 `AGENTANYWHERE_DATA_DIR` 指定，默认 `./data`。R1 部署与隔离回归见 `infra/r1/README.md`。
 
 ## 全局规范
 
@@ -56,3 +56,4 @@
 - 2026-09-18：加入 R1-01 独立 Web 登录与精简工作台。
 - 2026-09-18：加入 R1-02 单套模型连接配置、持久化与网关模型发现。
 - 2026-09-18：加入 R1-04 工作创建、待执行 Run 快照和 PostgreSQL 持久化。
+- 2026-09-18：加入 R1-05 Chat Completions 最小执行、队列、沙箱与事件持久化。

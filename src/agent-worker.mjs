@@ -13,10 +13,10 @@ let finished = false
 let session
 
 function authorized(request) {
-  const supplied = request.headers.authorization?.slice(7) || ''
+  const supplied = request.headers['x-run-token'] || ''
   const left = Buffer.from(supplied)
   const right = Buffer.from(token)
-  return request.headers.authorization?.startsWith('Bearer ') && left.length === right.length && timingSafeEqual(left, right)
+  return left.length === right.length && timingSafeEqual(left, right)
 }
 
 function emit(type, payload = {}) {
@@ -94,12 +94,14 @@ http.createServer(async (request, response) => {
   if (request.url === '/run' && request.method === 'POST') {
     if (started) return send(response, 200, { started: true })
     let body = ''
+    request.setEncoding('utf8')
     for await (const chunk of request) {
       body += chunk
       if (body.length > 16_384) return send(response, 413, { error: 'Run configuration too large' })
     }
     let parsed
     try { parsed = JSON.parse(body) } catch { return send(response, 400, { error: 'Invalid JSON' }) }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return send(response, 400, { error: 'Invalid run configuration' })
     started = true
     void execute(parsed)
     return send(response, 202, { started: true })

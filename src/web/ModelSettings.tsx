@@ -49,6 +49,14 @@ export function ModelSettings() {
     catch (error) { setMessage((error as Error).message) } finally { setBusy(false) }
   }
 
+  async function testModel(model: Model) {
+    setBusy(true); setMessage('')
+    try {
+      await send('/api/model-connection/test', 'POST', { modelId: model.id, protocol: model.protocol })
+      setMessage(`${model.id} 的 ${model.protocol} 连接测试成功。`)
+    } catch (error) { setMessage(`${model.id} 连接测试失败：${(error as Error).message}`) } finally { setBusy(false) }
+  }
+
   function addModel(id: string) {
     const trimmed = id.trim()
     if (!trimmed || !state || state.models.some(model => model.id === trimmed)) return
@@ -109,6 +117,7 @@ export function ModelSettings() {
         {state.models.map(model => <div className="selected-model" key={model.id}>
           <div className="model-heading"><strong>{model.id}</strong><button type="button" className="secondary" onClick={() => { setDirtyModels(true); setState({ ...state, models: state.models.filter(item => item.id !== model.id), defaultModel: state.defaultModel === model.id ? null : state.defaultModel }) }}>移除</button></div>
           <label>默认协议（人工）<select value={model.protocol} onChange={event => changeModel(model.id, { protocol: event.target.value as Model['protocol'] })}><option value="chat-completions">Chat Completions</option><option value="responses">Responses</option></select></label>
+          <button type="button" className="secondary" onClick={() => testModel(model)} disabled={busy || dirtyModels || !state.hasCredential || endpoint !== state.endpoint || apiKey.length > 0}>测试已保存连接与协议</button>
           <label className="mapping-label">目录显式映射（供应商/模型 ID；留空则仅按网关供应商与完整 ID 匹配）<input value={model.catalogId ?? ''} placeholder="openai/gpt-6-astra" onChange={event => changeModel(model.id, { catalogId: event.target.value || undefined })} /></label>
           <p className="muted">{model.catalogMatch ? `目录匹配：${model.catalogMatch}（${model.catalogId ? '显式映射' : '当前网关身份'}）` : '目录匹配：未知'}</p>
           <div className="model-fields">

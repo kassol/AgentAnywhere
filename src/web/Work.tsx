@@ -75,7 +75,9 @@ export function Work() {
     }
   }
   if (draft) activity.push({ id: 'stream', kind: 'message', text: draft, done: false })
-  const usage = events.filter(event => event.type === 'usage').map(event => event.payload)
+  const usageByCall = new Map<string, Record<string, any>>()
+  for (const event of events) if (event.type === 'usage') usageByCall.set(String(event.payload.callId ?? event.serverSeq), event.payload)
+  const usage = [...usageByCall.values()]
   const tokens = (field: string) => usage.length && usage.every(item => typeof item[field] === 'number')
     ? usage.reduce((sum, item) => sum + item[field], 0) : null
 
@@ -109,6 +111,7 @@ export function Work() {
       {detail.thread.messages.map((message, index) => <p className="work-message" key={index}>{message.content}</p>)}
       {activity.map(item => <p className="work-message" key={item.id}>{item.kind === 'tool' ? '工具：' : 'Agent：'}{item.text}{!item.done && '…'}</p>)}
       <p className="muted">用量：输入 {tokens('inputTokens') ?? '未知'} / 输出 {tokens('outputTokens') ?? '未知'} token</p>
+      <p className="muted">实际费用：未知</p>
       <p className="muted">耗时：{detail.run.startedAt && detail.run.finishedAt ? `${Math.round((Date.parse(detail.run.finishedAt) - Date.parse(detail.run.startedAt)) / 1000)} 秒` : '未知'}</p>
       {detail.run.failure && <p className="error" role="alert">{detail.run.failure}</p>}
       {detail.run.cleanupState === 'failed' && <p className="error" role="alert">沙箱回收失败，需要核查。</p>}

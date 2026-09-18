@@ -4,6 +4,11 @@ services:
     image: agentanywhere-r1-web:r1-05
     ports: ["127.0.0.1:19112:3000"]
     env_file: ./test.env
+    healthcheck:
+      test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:3000/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
     environment:
       AGENTANYWHERE_HOST: 0.0.0.0
       AGENTANYWHERE_PORT: 3000
@@ -16,6 +21,9 @@ services:
   queue:
     image: agentanywhere-r1-queue:r1-05
     env_file: ./test.env
+    depends_on:
+      web:
+        condition: service_healthy
     environment:
       AGENT_IMAGE: agentanywhere-r1-agent:r1-05
       OPEN_SANDBOX_DOMAIN: opensandbox:8080
@@ -23,6 +31,7 @@ services:
     networks: [app, sandbox]
   model-fixture:
     image: agentanywhere-r1-model-fixture:r1-05
+    ports: ["127.0.0.1:19113:3002"]
     networks:
       sandbox:
         aliases: [model-fixture]

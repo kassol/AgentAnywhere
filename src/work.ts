@@ -84,9 +84,10 @@ export async function createWorkStore(databaseUrl: string) {
     const [run] = await db`SELECT r.id FROM work_tasks t JOIN work_runs r ON r.task_id = t.id
       WHERE t.id = ${taskId} AND t.owner_id = 'owner' ORDER BY r.created_at DESC, r.id DESC LIMIT 1`
     if (!run) return null
-    return db`SELECT server_seq AS "serverSeq", epoch, producer_seq AS "producerSeq", event_id AS "eventId",
+    const rows = await db`SELECT server_seq AS "serverSeq", epoch, producer_seq AS "producerSeq", event_id AS "eventId",
       type, payload, occurred_at AS "occurredAt" FROM work_events
       WHERE run_id = ${run.id} AND server_seq > ${after} ORDER BY server_seq LIMIT 500`
+    return rows.map((row: { payload: unknown }) => ({ ...row, payload: typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload }))
   }
 
   async function list() {
@@ -150,9 +151,10 @@ export async function createWorkStore(databaseUrl: string) {
     return credential
   }
 
-  async function recordModelUsage(runId: string, epoch: number, usage: { inputTokens: number | null; outputTokens: number | null; totalTokens: number | null }) {
+  async function recordModelUsage(runId: string, epoch: number, usage: { callId: string; inputTokens: number | null; outputTokens: number | null; totalTokens: number | null }) {
     await db`INSERT INTO work_events (run_id, epoch, event_id, type, payload, occurred_at)
-      SELECT ${runId}, ${epoch}, ${crypto.randomUUID()}, 'usage', ${JSON.stringify(usage)}::jsonb, now()
+      SELECT ${runId}, ${epoch}, ${crypto.randomUUID()}, 'usage',
+        jsonb_build_object('callId', ${usage.callId}::text, 'inputTokens', ${usage.inputTokens}::bigint, 'outputTokens', ${usage.outputTokens}::bigint, 'totalTokens', ${usage.totalTokens}::bigint), now()
       WHERE EXISTS (SELECT 1 FROM work_runs WHERE id = ${runId} AND epoch = ${epoch} AND active)`
   }
 

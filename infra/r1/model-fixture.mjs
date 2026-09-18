@@ -10,10 +10,12 @@ http.createServer(async (request, response) => {
   }
   if (!request.url?.endsWith('/v1/chat/completions') || request.method !== 'POST') { response.writeHead(404); return response.end() }
   let raw = ''
+  request.setEncoding('utf8')
   for await (const chunk of request) raw += chunk
   const body = JSON.parse(raw)
-  const toolResult = body.messages.some(message => message.role === 'tool')
-  calls.push({ model: body.model, toolResult, stream: body.stream })
+  const observation = body.messages.filter(message => message.role === 'tool').flatMap(message => typeof message.content === 'string' ? [message.content] : message.content?.filter?.(part => part.type === 'text').map(part => part.text) || [])
+  const toolResult = observation.length > 0
+  calls.push({ model: body.model, toolResult, observation, stream: body.stream })
   response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' })
   const common = { id: `fixture-${calls.length}`, object: 'chat.completion.chunk', created: 1, model: body.model }
   if (!toolResult) {
@@ -21,7 +23,12 @@ http.createServer(async (request, response) => {
     send(response, { ...common, choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: '{"text":"fixture observation"}' } }] }, finish_reason: null }] })
     send(response, { ...common, choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] })
   } else {
-    send(response, { ...common, choices: [{ index: 0, delta: { role: 'assistant', content: 'The fixture observation was returned.' }, finish_reason: null }] })
+    if (body.model === 'fixture-slow') {
+      for (const part of ['The fixture ', 'observation was ', 'returned.']) {
+        send(response, { ...common, choices: [{ index: 0, delta: { role: 'assistant', content: part }, finish_reason: null }] })
+        await new Promise(resolve => setTimeout(resolve, 500))
+      }
+    } else send(response, { ...common, choices: [{ index: 0, delta: { role: 'assistant', content: 'The fixture observation was returned.' }, finish_reason: null }] })
     send(response, { ...common, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })
   }
   if (body.model !== 'fixture-mixed' || toolResult) {

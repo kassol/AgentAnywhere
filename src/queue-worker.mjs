@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto'
-import PgBoss from 'pg-boss'
+import { lookup } from 'node:dns/promises'
+import { PgBoss } from 'pg-boss'
 import pg from 'pg'
 import { Sandbox, SandboxManager } from '@alibaba-group/opensandbox'
 
@@ -10,7 +11,7 @@ if (!databaseUrl || !sandboxKey || !image) throw new Error('DATABASE_URL, OPEN_S
 const pool = new pg.Pool({ connectionString: databaseUrl, max: 4 })
 const sandboxConnection = { domain: process.env.OPEN_SANDBOX_DOMAIN || 'opensandbox:8080', protocol: 'http', apiKey: sandboxKey, useServerProxy: true, disableMetrics: true }
 const manager = SandboxManager.create({ connectionConfig: sandboxConnection })
-const boss = new PgBoss({ connectionString: databaseUrl })
+const boss = new PgBoss({ connectionString: databaseUrl, schema: process.env.QUEUE_SCHEMA || 'pgboss' })
 const active = new Set()
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms))
 
@@ -26,7 +27,7 @@ async function claim(runId, token) {
     await db.query("UPDATE work_tasks SET status='provisioning' WHERE id=$1", [result.rows[0].task_id])
     await db.query('DELETE FROM work_outbox WHERE run_id=$1', [runId])
     await db.query('COMMIT')
-    return result.rows[0]
+    return { ...result.rows[0], model_snapshot: typeof result.rows[0].model_snapshot === 'string' ? JSON.parse(result.rows[0].model_snapshot) : result.rows[0].model_snapshot }
   } catch (error) {
     await db.query('ROLLBACK')
     if (error.code === '23505') return null
@@ -56,7 +57,7 @@ async function record(run, event) {
 async function liveEvents(endpoint, token, run) {
   let after = 0
   for (;;) {
-    const response = await fetch(`${endpoint.endpoint}/events?after=${after}`, { headers: { ...endpoint.headers, authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(50 * 60_000) })
+    const response = await fetch(`${endpoint.endpoint}/events?after=${after}`, { headers: { ...endpoint.headers, 'x-run-token': token }, signal: AbortSignal.timeout(50 * 60_000) })
     if (!response.ok || !response.body) throw new Error('Pi 事件连接失败')
     const reader = response.body.getReader()
     const decoder = new TextDecoder()
@@ -105,7 +106,7 @@ async function finish(run, result, sandboxId) {
   try {
     await db.query('BEGIN')
     const updated = await db.query(`UPDATE work_runs SET status=$3, failure=$4, cleanup_state=$5, active=$6,
-      run_token_hash=NULL, finished_at=now() WHERE id=$1 AND epoch=$2 AND active RETURNING task_id`,
+      run_token_hash=NULL, finished_at=COALESCE(finished_at, now()) WHERE id=$1 AND epoch=$2 AND active RETURNING task_id`,
       [run.id, run.epoch, result.status, result.failure, cleanupState, cleanupState !== 'cleaned'])
     if (updated.rowCount) await db.query('UPDATE work_tasks SET status=$2 WHERE id=$1', [updated.rows[0].task_id, result.status])
     await db.query('COMMIT')
@@ -133,10 +134,12 @@ async function execute(run, token) {
     }
     if (!ready) throw new Error('Pi 进程未能启动')
     const row = await pool.query('SELECT goal, source_url FROM work_tasks WHERE id=$1', [run.task_id])
-    const goal = row.rows[0].goal || row.rows[0].source_url
-    const proxyBase = `${process.env.MODEL_PROXY_ORIGIN || 'http://web:3000'}/internal/runs/${run.id}/${run.epoch}/v1`
+    const goal = [row.rows[0].goal, row.rows[0].source_url && `指定来源：${row.rows[0].source_url}`].filter(Boolean).join('\n\n')
+    const proxyOrigin = new URL(process.env.MODEL_PROXY_ORIGIN || 'http://web:3000')
+    proxyOrigin.hostname = (await lookup(proxyOrigin.hostname, { family: 4 })).address
+    const proxyBase = `${proxyOrigin.origin}/internal/runs/${run.id}/${run.epoch}/v1`
     const base = `${sandbox.connectionConfig.protocol}://${endpoint.endpoint}`
-    const started = await fetch(`${base}/run`, { method: 'POST', headers: { ...endpoint.headers, authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    const started = await fetch(`${base}/run`, { method: 'POST', headers: { ...endpoint.headers, 'x-run-token': token, 'content-type': 'application/json' },
       body: JSON.stringify({ goal, model: run.model_snapshot, proxyBase }), signal: AbortSignal.timeout(10_000) })
     if (!started.ok) throw new Error('Pi 启动请求失败')
     result = await liveEvents({ ...endpoint, endpoint: base }, token, run)
@@ -151,8 +154,13 @@ async function execute(run, token) {
 }
 
 async function reconcile() {
-  const rows = await pool.query('SELECT id, task_id, epoch, sandbox_id FROM work_runs WHERE active')
-  for (const run of rows.rows) await finish(run, { status: 'lost', failure: '执行服务中断；请手动重试' }, run.sandbox_id)
+  const rows = await pool.query('SELECT id, task_id, epoch, sandbox_id, status, failure FROM work_runs WHERE active')
+  for (const run of rows.rows) {
+    const result = ['succeeded', 'failed', 'lost'].includes(run.status)
+      ? { status: run.status, failure: run.failure }
+      : { status: 'lost', failure: '执行服务中断；请手动重试' }
+    await finish(run, result, run.sandbox_id)
+  }
 }
 
 async function dispatchPending() {
