@@ -13,7 +13,8 @@ services:
       AGENTANYWHERE_HOST: 0.0.0.0
       AGENTANYWHERE_PORT: 3000
       AGENTANYWHERE_DATA_DIR: /data
-    volumes: ["./test-data:/data"]
+      AGENTANYWHERE_ARTIFACT_DIR: /artifacts
+    volumes: ["./test-data:/data", "./test-artifacts:/artifacts:ro"]
     networks:
       app: {}
       sandbox:
@@ -28,6 +29,8 @@ services:
       AGENT_IMAGE: agentanywhere-r1-agent:r1-06
       OPEN_SANDBOX_DOMAIN: opensandbox:8080
       MODEL_PROXY_ORIGIN: http://test-web:3000
+      AGENTANYWHERE_ARTIFACT_DIR: /artifacts
+    volumes: ["./test-artifacts:/artifacts"]
     networks: [app, sandbox]
   model-fixture:
     image: agentanywhere-r1-model-fixture:r1-06

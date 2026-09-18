@@ -74,5 +74,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .work-list { max-width: 720px; margin-top: 32px; }
 .work-status { justify-self: start; margin: 0; padding: 6px 10px; border-radius: 6px; color: #573b73; background: #eee8f4; }
 .work-message { margin: 0; padding: 14px; border: 1px solid var(--border); border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.artifacts { display: grid; gap: 12px; min-width: 0; }
+.artifacts button { justify-self: start; cursor: pointer; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; background: #fff; }
+.artifacts button[aria-pressed="true"] { background: #eee8f4; }
+.report-markdown { overflow-wrap: anywhere; line-height: 1.6; }
+.report-markdown pre { overflow: auto; padding: 12px; background: #f4f1f7; border-radius: 8px; }
 @media (max-width: 650px) { .shell { grid-template-columns: 1fr; grid-template-rows: auto 1fr; } .sidebar { padding: 15px 20px; border-right: 0; border-bottom: 1px solid var(--border); } .brand { padding: 0 0 12px; } .sidebar nav { display: flex; } .content { padding: 28px 20px; } }
 @media (max-width: 650px) { .model-fields { grid-template-columns: 1fr; } .manual-add { align-items: stretch; flex-direction: column; } }

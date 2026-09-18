@@ -1,4 +1,6 @@
 import { join } from 'node:path'
+import { createHash } from 'node:crypto'
+import { readFile } from 'node:fs/promises'
 import type { ServerWebSocket } from 'bun'
 import { createModelConnectionStore } from './model-connection'
 import { createWorkStore, WorkConflictError, WorkInputError } from './work'
@@ -41,7 +43,7 @@ function observeUsage(body: ReadableStream<Uint8Array>, save: (usage: { inputTok
   }))
 }
 
-type Config = { password: string; host?: string; port?: number; secureCookie?: boolean; publicOrigin?: string; dataDir?: string; modelTimeoutMs?: number; directoryUrl?: string; databaseUrl?: string }
+type Config = { password: string; host?: string; port?: number; secureCookie?: boolean; publicOrigin?: string; dataDir?: string; artifactDir?: string; modelTimeoutMs?: number; directoryUrl?: string; databaseUrl?: string }
 type Session = { expires: number; sockets: Set<ServerWebSocket<{ token: string }>> }
 
 const cookieName = 'agentanywhere_session'
@@ -69,6 +71,7 @@ export async function startServer(config: Config) {
   const modelConnection = createModelConnectionStore(config.dataDir ?? join(process.cwd(), 'data'), config.modelTimeoutMs, config.directoryUrl)
   await modelConnection.load()
   const work = config.databaseUrl ? await createWorkStore(config.databaseUrl) : null
+  const artifactDir = config.artifactDir ?? join(config.dataDir ?? join(process.cwd(), 'data'), 'artifacts')
   const sessions = new Map<string, Session>()
   const attempts = new Map<string, { count: number; until: number }>()
   const secure = config.secureCookie ?? false
@@ -188,7 +191,26 @@ export async function startServer(config: Config) {
         return redirect('/login')
       }
       if (path === '/api/session' && request.method === 'GET') return json({ authenticated: true })
+      const artifactMatch = /^\/api\/artifacts\/([0-9a-f-]{36})\/(content|download)$/i.exec(path)
+      if (artifactMatch && request.method === 'GET') {
+        const artifact = await work?.artifactVersion(artifactMatch[1])
+        if (!artifact || !/^[0-9a-f-]{36}\/(report\.md|attachment-[0-4]\.(txt|csv|json|md))$/i.test(artifact.storageKey)
+          || !Number.isSafeInteger(Number(artifact.sizeBytes)) || Number(artifact.sizeBytes) < 1 || Number(artifact.sizeBytes) > 10_000_000
+          || !['text/markdown', 'text/plain'].includes(artifact.mimeType)) return json({ error: 'Not found' }, 404)
+        if (artifactMatch[2] === 'content' && artifact.kind !== 'report') return json({ error: 'Not found' }, 404)
+        try {
+          const bytes = await readFile(join(artifactDir, artifact.storageKey))
+          if (bytes.length !== Number(artifact.sizeBytes) || createHash('sha256').update(bytes).digest('hex') !== artifact.sha256) return json({ error: '成果校验失败' }, 409)
+          if (artifactMatch[2] === 'content') return json({ markdown: new TextDecoder('utf-8', { fatal: true }).decode(bytes) })
+          const name = artifact.kind === 'report' ? 'report.md' : artifact.name
+          return new Response(bytes, { headers: { ...common, 'content-type': 'application/octet-stream', 'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(name)}`, 'content-security-policy': "default-src 'none'; sandbox" } })
+        } catch { return json({ error: '成果文件不可读取' }, 503) }
+      }
       if (path === '/api/tasks' && request.method === 'GET') return json(work ? await work.list() : [])
+      if (/^\/api\/tasks\/[0-9a-f-]{36}\/cleanup-retry$/i.test(path) && request.method === 'POST') {
+        if (!sameOrigin(request)) return json({ error: 'Forbidden' }, 403)
+        return await work?.requestCleanupRetry(path.split('/')[3]) ? json({ retrying: true }, 202) : json({ error: 'Not found' }, 404)
+      }
       if (path === '/api/tasks' && request.method === 'POST') {
         if (!sameOrigin(request)) return json({ error: 'Forbidden' }, 403)
         if (!work) return json({ error: '工作存储未配置' }, 503)
@@ -338,6 +360,7 @@ if (import.meta.main) {
     secureCookie: process.env.AGENTANYWHERE_SECURE_COOKIE === 'true',
     publicOrigin: process.env.AGENTANYWHERE_PUBLIC_ORIGIN,
     dataDir: process.env.AGENTANYWHERE_DATA_DIR,
+    artifactDir: process.env.AGENTANYWHERE_ARTIFACT_DIR,
     databaseUrl: process.env.DATABASE_URL,
   })
   console.log(`AgentAnywhere listening on ${server.url.origin}`)
