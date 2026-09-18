@@ -1,6 +1,6 @@
 import http from 'node:http'
 import { timingSafeEqual } from 'node:crypto'
-import { mkdir, rename, rm, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { createAgentSession, ModelRuntime, SessionManager } from '@earendil-works/pi-coding-agent'
 import { Type } from 'typebox'
 
@@ -15,6 +15,7 @@ let session
 let reportSubmitted = false
 let cancelRequested = false
 const outputDir = '/tmp/agentanywhere-output'
+const sessionDir = '/tmp/agentanywhere-session'
 
 function authorized(request) {
   const supplied = request.headers['x-run-token'] || ''
@@ -40,11 +41,13 @@ function send(response, status, body) {
   response.end(JSON.stringify(body))
 }
 
-async function execute({ goal, model, proxyBase }) {
+async function execute({ goal, model, proxyBase, resume = false, answer }) {
   let messageTimer
   let acceptingMessages = false
+  let question = null
   try {
-    if (typeof goal !== 'string' || !goal || !model || typeof model.id !== 'string' || !['chat-completions', 'responses'].includes(model.protocol) || !/^http:\/\/[a-z0-9.-]+(?::\d+)?\/internal\/runs\/[0-9a-f-]+\/\d+\/v1$/i.test(proxyBase)) throw new Error('Run 配置无效')
+    if (typeof goal !== 'string' || !goal || !model || typeof model.id !== 'string' || !['chat-completions', 'responses'].includes(model.protocol) || !/^http:\/\/[a-z0-9.-]+(?::\d+)?\/internal\/runs\/[0-9a-f-]+\/\d+\/v1$/i.test(proxyBase)
+      || (resume && (typeof answer !== 'string' || !answer.trim() || answer.length > 4000))) throw new Error('Run 配置无效')
     const runtime = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false })
     runtime.registerProvider('agentanywhere', {
       baseUrl: proxyBase, api: model.protocol === 'responses' ? 'openai-responses' : 'openai-completions', authHeader: true,
@@ -54,9 +57,23 @@ async function execute({ goal, model, proxyBase }) {
     await runtime.setRuntimeApiKey('agentanywhere', token)
     const selected = runtime.getModel('agentanywhere', model.id)
     if (!selected) throw new Error('Pi 模型注册失败')
+    await mkdir(sessionDir, { recursive: true, mode: 0o700 })
+    const sessionManager = resume ? SessionManager.open(`${sessionDir}/checkpoint.jsonl`, sessionDir, '/tmp/agentanywhere-work') : SessionManager.create('/tmp/agentanywhere-work', sessionDir)
     const created = await createAgentSession({
-      model: selected, modelRuntime: runtime, sessionManager: SessionManager.inMemory(), tools: ['echo_observation', 'submit_report'],
+      model: selected, modelRuntime: runtime, sessionManager, tools: ['echo_observation', 'submit_report', 'ask_user'],
       customTools: [{
+        name: 'ask_user', label: 'Ask user', description: 'Ask the user one question when their decision is needed. Execution stops until they answer.',
+        parameters: Type.Object({ question: Type.String() }),
+        execute: async (_id, params, signal) => {
+          if (cancelRequested || signal?.aborted) throw new Error('Run cancelled')
+          const value = params.question.trim()
+          if (!value || value.length > 4000) throw new Error('问题内容无效')
+          question = value
+          acceptingMessages = false
+          session.agent.clearAllQueues()
+          return { content: [{ type: 'text', text: '问题已交给用户；等待回答。' }], details: {} }
+        },
+      }, {
         name: 'echo_observation', label: 'Echo observation', description: 'Return a supplied test observation without external access.',
         parameters: Type.Object({ text: Type.String() }),
         execute: async (_id, params, signal) => {
@@ -96,6 +113,8 @@ async function execute({ goal, model, proxyBase }) {
       }],
     })
     session = created.session
+    if (resume) reportSubmitted = await stat(`${outputDir}/manifest.json`).then(info => info.isFile(), () => false)
+    session.agent.shouldStopAfterTurn = () => question !== null
     if (cancelRequested) throw new Error('Run cancelled')
     const messageUrl = `${proxyBase.slice(0, -3)}/messages`
     const queued = new Map()
@@ -146,7 +165,7 @@ async function execute({ goal, model, proxyBase }) {
         result: event.result?.content?.filter(part => part.type === 'text').map(part => part.text).join('') ?? '', isError: event.isError })
     })
     emit('worker.ready')
-    const execution = session.prompt(`${goal}\n\n完成后调用 submit_report 保存 Markdown 报告。只引用实际获得的来源；目前没有搜索工具，无法核查的事实须写明。最后简短回复已提交。测试要求使用 echo_observation 时可以调用。`)
+    const execution = session.prompt(resume ? answer : `${goal}\n\n完成后调用 submit_report 保存 Markdown 报告。只引用实际获得的来源；目前没有搜索工具，无法核查的事实须写明。最后简短回复已提交。测试要求使用 echo_observation 时可以调用。`)
     messageTimer = setInterval(() => void pollMessages().catch(() => {}), 200)
     await pollMessages()
     await execution
@@ -155,6 +174,11 @@ async function execute({ goal, model, proxyBase }) {
     clearInterval(messageTimer)
     await Promise.all(acknowledgements)
     if (cancelRequested) throw new Error('Run cancelled')
+    if (question !== null) {
+      if (sessionManager.getSessionFile() !== `${sessionDir}/checkpoint.jsonl`) await copyFile(sessionManager.getSessionFile(), `${sessionDir}/checkpoint.jsonl`)
+      emit('interaction.requested', { question })
+      return
+    }
     const last = [...session.messages].reverse().find(message => message.role === 'assistant')
     if (!last || last.stopReason === 'error' || last.stopReason === 'aborted') throw new Error(last?.errorMessage || '模型执行未完成')
     if (!reportSubmitted) throw new Error('未提交报告')

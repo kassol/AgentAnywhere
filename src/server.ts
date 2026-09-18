@@ -230,7 +230,7 @@ export async function startServer(config: Config) {
       const artifactMatch = /^\/api\/artifacts\/([0-9a-f-]{36})\/(content|download)$/i.exec(path)
       if (artifactMatch && request.method === 'GET') {
         const artifact = await work?.artifactVersion(artifactMatch[1])
-        if (!artifact || !/^[0-9a-f-]{36}\/(report\.md|attachment-[0-4]\.(txt|csv|json|md))$/i.test(artifact.storageKey)
+        if (!artifact || !/^[0-9a-f-]{36}\/(?:epoch-\d+\/)?(report\.md|attachment-[0-4]\.(txt|csv|json|md))$/i.test(artifact.storageKey)
           || !Number.isSafeInteger(Number(artifact.sizeBytes)) || Number(artifact.sizeBytes) < (artifact.kind === 'report' ? 1 : 0) || Number(artifact.sizeBytes) > 10_000_000
           || !['text/markdown', 'text/plain'].includes(artifact.mimeType)) return json({ error: 'Not found' }, 404)
         if (artifactMatch[2] === 'content' && artifact.kind !== 'report') return json({ error: 'Not found' }, 404)
@@ -251,6 +251,22 @@ export async function startServer(config: Config) {
       if (/^\/api\/tasks\/[0-9a-f-]{36}\/cleanup-retry$/i.test(path) && request.method === 'POST') {
         if (!sameOrigin(request)) return json({ error: 'Forbidden' }, 403)
         return await work?.requestCleanupRetry(path.split('/')[3]) ? json({ retrying: true }, 202) : json({ error: 'Not found' }, 404)
+      }
+      const resolveMatch = /^\/api\/interactions\/([0-9a-f-]{36})\/resolve$/i.exec(path)
+      if (resolveMatch && request.method === 'POST') {
+        if (!sameOrigin(request)) return json({ error: 'Forbidden' }, 403)
+        if (!work) return json({ error: '工作存储未配置' }, 503)
+        const body = await readLimited(request, 8 * 1024)
+        if (body === null) return json({ error: '请求内容过大' }, 413)
+        try {
+          const result = await work.resolveInteraction(resolveMatch[1], JSON.parse(body))
+          return result ? json({ accepted: true }, result.created ? 202 : 200) : json({ error: 'Not found' }, 404)
+        } catch (error) {
+          if (error instanceof SyntaxError) return json({ error: 'JSON 格式无效' }, 400)
+          if (error instanceof WorkInputError) return json({ error: error.message }, 400)
+          if (error instanceof WorkConflictError) return json({ error: error.message }, 409)
+          return json({ error: '回答失败' }, 500)
+        }
       }
       if (path === '/api/tasks' && request.method === 'POST') {
         if (!sameOrigin(request)) return json({ error: 'Forbidden' }, 403)

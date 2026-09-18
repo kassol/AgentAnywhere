@@ -52,6 +52,7 @@ export async function createWorkStore(databaseUrl: string) {
   await db`ALTER TABLE work_runs ADD COLUMN IF NOT EXISTS finished_at timestamptz`
   await db`ALTER TABLE work_runs ADD COLUMN IF NOT EXISTS pending_status text`
   await db`ALTER TABLE work_runs ADD COLUMN IF NOT EXISTS pending_failure text`
+  await db`ALTER TABLE work_runs ADD COLUMN IF NOT EXISTS checkpoint_ref jsonb`
   await db`CREATE UNIQUE INDEX IF NOT EXISTS one_active_work_run ON work_runs (active) WHERE active`
   await db`CREATE TABLE IF NOT EXISTS work_outbox (
     run_id uuid PRIMARY KEY REFERENCES work_runs(id), created_at timestamptz NOT NULL DEFAULT now()
@@ -72,6 +73,12 @@ export async function createWorkStore(databaseUrl: string) {
   await db`ALTER TABLE work_messages ADD COLUMN IF NOT EXISTS command_id uuid UNIQUE`
   await db`ALTER TABLE work_messages ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'applied'`
   await db`ALTER TABLE work_messages ADD COLUMN IF NOT EXISTS applied_at timestamptz`
+  await db`CREATE TABLE IF NOT EXISTS work_interactions (
+    id uuid PRIMARY KEY, run_id uuid NOT NULL REFERENCES work_runs(id), epoch integer NOT NULL,
+    question text NOT NULL, status text NOT NULL, answer text,
+    created_at timestamptz NOT NULL DEFAULT now(), answered_at timestamptz,
+    UNIQUE (run_id, epoch)
+  )`
   await db`CREATE TABLE IF NOT EXISTS work_artifacts (
     id uuid PRIMARY KEY, task_id uuid NOT NULL REFERENCES work_tasks(id),
     kind text NOT NULL, name text NOT NULL, UNIQUE (task_id, kind, name)
@@ -91,13 +98,14 @@ export async function createWorkStore(databaseUrl: string) {
       WHERE t.id = ${id} AND t.owner_id = 'owner' ORDER BY r.created_at DESC, r.id DESC LIMIT 1`
     if (!row) return null
     const messages = await db`SELECT id, role, content, status FROM work_messages WHERE thread_id = ${row.threadId} ORDER BY created_at, id`
+    const [interaction] = await db`SELECT id, question, status, answer FROM work_interactions WHERE run_id = ${row.runId} ORDER BY epoch DESC LIMIT 1`
     const artifacts = await db`SELECT a.id, a.kind, a.name, v.id AS "versionId", v.run_id AS "runId",
       v.sha256, v.size_bytes AS "sizeBytes", v.mime_type AS "mimeType", v.created_at AS "createdAt"
       FROM work_artifacts a JOIN work_artifact_versions v ON v.artifact_id = a.id
       WHERE a.task_id = ${id} ORDER BY v.created_at DESC, v.id DESC`
     return { id: row.id, goal: row.goal, sourceUrl: row.sourceUrl, status: row.status, createdAt: row.createdAt,
       run: { id: row.runId, status: row.runStatus, model: typeof row.model === 'string' ? JSON.parse(row.model) : row.model,
-        epoch: row.epoch, cleanupState: row.cleanupState, failure: row.failure, startedAt: row.startedAt, finishedAt: row.finishedAt }, thread: { id: row.threadId, messages }, artifacts }
+        epoch: row.epoch, cleanupState: row.cleanupState, failure: row.failure, startedAt: row.startedAt, finishedAt: row.finishedAt }, interaction: interaction ?? null, thread: { id: row.threadId, messages }, artifacts }
   }
 
   async function artifactVersion(versionId: string) {
@@ -124,7 +132,7 @@ export async function createWorkStore(databaseUrl: string) {
         ORDER BY r.created_at DESC, r.id DESC LIMIT 1 FOR UPDATE OF r`
       if (!run) return null
       if (run.status === 'cancelling' || run.status === 'cancelled') return { accepted: false }
-      if (!['queued', 'provisioning', 'running'].includes(run.status)) return { accepted: false }
+      if (!['queued', 'provisioning', 'running', 'waiting'].includes(run.status)) return { accepted: false }
       if (run.active) {
         const [terminal] = await sql`SELECT 1 FROM work_events WHERE run_id = ${run.id} AND epoch = ${run.epoch}
           AND type IN ('run.finished', 'run.failed') LIMIT 1`
@@ -135,6 +143,7 @@ export async function createWorkStore(databaseUrl: string) {
         finished_at = CASE WHEN ${status} = 'cancelled' THEN now() ELSE finished_at END
         WHERE id = ${run.id}`
       await sql`UPDATE work_tasks SET status = ${status} WHERE id = ${taskId}`
+      if (run.status === 'waiting') await sql`UPDATE work_interactions SET status='cancelled' WHERE run_id=${run.id} AND status='pending'`
       if (!run.active) await sql`DELETE FROM work_outbox WHERE run_id = ${run.id}`
       await sql`INSERT INTO work_events (run_id, epoch, event_id, type, payload, occurred_at)
         VALUES (${run.id}, ${run.epoch}, ${crypto.randomUUID()}, ${run.active ? 'run.cancel_requested' : 'run.cancelled'}, '{}'::jsonb, now())`
@@ -225,6 +234,29 @@ export async function createWorkStore(databaseUrl: string) {
     })
   }
 
+  async function resolveInteraction(id: string, body: unknown) {
+    if (!body || typeof body !== 'object' || Array.isArray(body)) throw new WorkInputError('回答无效')
+    const answer = typeof (body as Record<string, unknown>).answer === 'string' ? (body as Record<string, string>).answer.trim() : ''
+    if (!answer || answer.length > 4000) throw new WorkInputError('回答须为 1–4000 字')
+    return db.begin(async sql => {
+      const [interaction] = await sql`SELECT i.id, i.run_id AS "runId", i.status, i.answer, r.task_id AS "taskId",
+        r.status AS "runStatus", r.active, r.cleanup_state AS "cleanupState", r.checkpoint_ref AS "checkpointRef"
+        FROM work_interactions i JOIN work_runs r ON r.id=i.run_id JOIN work_tasks t ON t.id=r.task_id
+        WHERE i.id=${id} AND t.owner_id='owner' FOR UPDATE OF i, r`
+      if (!interaction) return null
+      if (interaction.status === 'answered') {
+        if (interaction.answer !== answer) throw new WorkConflictError('问题已用不同内容回答')
+        return { created: false }
+      }
+      if (interaction.status !== 'pending' || interaction.runStatus !== 'waiting' || interaction.active || interaction.cleanupState !== 'cleaned' || !interaction.checkpointRef) throw new WorkConflictError('问题尚未准备好回答')
+      await sql`UPDATE work_interactions SET status='answered', answer=${answer}, answered_at=now() WHERE id=${id}`
+      await sql`UPDATE work_runs SET status='queued', cleanup_state='none' WHERE id=${interaction.runId}`
+      await sql`UPDATE work_tasks SET status='queued' WHERE id=${interaction.taskId}`
+      await sql`INSERT INTO work_outbox (run_id) VALUES (${interaction.runId}) ON CONFLICT DO NOTHING`
+      return { created: true }
+    })
+  }
+
   async function pendingRunMessages(runId: string, epoch: number, token: string) {
     const hash = createHash('sha256').update(token).digest('hex')
     const rows = await db`SELECT m.id, m.content FROM work_messages m JOIN work_runs r ON r.id = m.run_id
@@ -276,5 +308,5 @@ export async function createWorkStore(databaseUrl: string) {
       WHERE EXISTS (SELECT 1 FROM work_runs WHERE id = ${runId} AND epoch = ${epoch} AND active)`
   }
 
-  return { list, detail, events, create, appendRunMessage, pendingRunMessages, acknowledgeRunMessage, cancel, isRunStopped, artifactVersion, requestCleanupRetry, resolveRunModelConnection, authorizeModelProxy, recordModelUsage }
+  return { list, detail, events, create, appendRunMessage, resolveInteraction, pendingRunMessages, acknowledgeRunMessage, cancel, isRunStopped, artifactVersion, requestCleanupRetry, resolveRunModelConnection, authorizeModelProxy, recordModelUsage }
 }

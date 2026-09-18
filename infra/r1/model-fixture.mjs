@@ -101,6 +101,24 @@ http.createServer(async (request, response) => {
     send(response, { ...common, choices: [], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } })
     return response.end('data: [DONE]\n\n')
   }
+  if (body.model === 'fixture-ask') {
+    const asked = observation.some(item => item.includes('问题已交给用户'))
+    const answer = userMessages.find(message => message.includes('ANSWER_MARKER_13'))
+    const name = submitted ? null : !echoed ? 'echo_observation' : !asked ? 'ask_user' : 'submit_report'
+    const args = name === 'echo_observation' ? '{"text":"fixture observation"}'
+      : name === 'ask_user' ? '{"question":"请确认研究方向？"}'
+      : JSON.stringify({ markdown: `# 恢复报告\n\n${answer ?? '回答缺失'}\n\nfixture observation` })
+    if (name) {
+      send(response, { ...common, choices: [{ index: 0, delta: { role: 'assistant', tool_calls: [{ index: 0, id: `call_${name}`, type: 'function', function: { name, arguments: '' } }] }, finish_reason: null }] })
+      send(response, { ...common, choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: args } }] }, finish_reason: null }] })
+      send(response, { ...common, choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] })
+    } else {
+      send(response, { ...common, choices: [{ index: 0, delta: { role: 'assistant', content: '报告已提交。' }, finish_reason: null }] })
+      send(response, { ...common, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })
+    }
+    send(response, { ...common, choices: [], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } })
+    return response.end('data: [DONE]\n\n')
+  }
   if (!submitted || (steered && submissions === 1)) {
     const name = steered && submitted ? 'submit_report' : echoed ? 'submit_report' : 'echo_observation'
     const args = steered && submitted ? JSON.stringify({ markdown: `${report}\nSTEERING_MARKER_12\n` }) : echoed ? reportArgs : '{"text":"fixture observation"}'
