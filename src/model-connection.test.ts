@@ -84,7 +84,7 @@ test('owner sees field sources, can revoke overrides and explicit alias mapping,
   const directory = Bun.serve({ port: 0, fetch() {
     return Response.json({
       openai: { models: {
-        'gpt-6-astra': { limit: { context: 1050000, output: 128000 }, modalities: { input: ['text', 'image', 'pdf'] }, reasoning: true, tool_call: true, cost: { input: 10, output: 50 } },
+        'gpt-6-astra': { limit: { context: 1050000, output: 128000 }, modalities: { input: ['text', 'image', 'pdf'] }, reasoning: true, tool_call: true, cost: { input: 10, output: 50, tiers: [{ input: 20, output: 75 }] } },
       } },
       other: { models: { 'gpt-6-astra': { limit: { context: 2000 } } } },
     }, { status: directoryStatus })
@@ -132,11 +132,27 @@ test('owner sees field sources, can revoke overrides and explicit alias mapping,
     expect(main.inputPrice).toBe(0)
     expect(main.outputPrice).toBe(50)
     expect(main.catalogMatch).toBe('openai/gpt-6-astra')
+    expect(main.priceNote).toContain('阶梯价格')
     expect(main.sources.outputPrice.updatedAt).toBeTruthy()
     expect(current.models[1]?.contextWindow).toBe(1050000)
     expect(current.models[1]?.catalogMatch).toBe('openai/gpt-6-astra')
     expect(current.models[2]?.contextWindow).toBeUndefined()
     expect(current.models[3]?.contextWindow).toBeUndefined()
+    const manualTime = main.sources.contextWindow.updatedAt
+    const toolsTime = main.sources.tools.updatedAt
+    expect((await selections({ input: ['text', 'audio'] })).status).toBe(400)
+    expect((await get()).models[0]?.contextWindow).toBe(9000)
+    await Bun.sleep(10)
+    expect((await request('/api/model-connection/models', 'PUT', { defaultModel: null, models: current.models.map(({ id, protocol, catalogId, overrides }) => ({ id, protocol: id === 'gpt-6-astra' ? 'chat-completions' : protocol, catalogId, overrides })) })).status).toBe(200)
+    current = await get()
+    expect(current.models[0]?.sources.contextWindow.updatedAt).toBe(manualTime)
+    expect(current.models[0]?.sources.tools.updatedAt).toBe(toolsTime)
+    await Bun.sleep(10)
+    expect((await selections({ contextWindow: 9001, tools: false, inputPrice: 0, outputPrice: 2 })).status).toBe(200)
+    current = await get()
+    expect(current.models[0]?.sources.contextWindow.updatedAt).not.toBe(manualTime)
+    expect(current.models[0]?.sources.tools.updatedAt).toBe(toolsTime)
+    expect(current.models[0]?.priceNote).toBeUndefined()
     expect((await selections({}, false)).status).toBe(200)
     current = await get()
     expect(current.models[0]?.contextWindow).toBe(300000)

@@ -9,7 +9,7 @@ export type ModelSelection = Metadata & { id: string; protocol: Protocol; catalo
 type CatalogModel = { id: string; name: string; ownedBy?: string; type?: string; created?: number; metadata?: Metadata }
 type Discovery = { status: 'never' | 'ok' | 'stale' | 'unauthorized' | 'timeout' | 'empty' | 'error'; updatedAt?: string; successAt?: string }
 type Directory = { status: 'never' | 'ok' | 'stale' | 'timeout' | 'error'; updatedAt?: string; successAt?: string; models: Record<string, Metadata> }
-type StoredModel = { id: string; protocol: Protocol; catalogId?: string; overrides: Partial<Metadata>; updatedAt?: string }
+type StoredModel = { id: string; protocol: Protocol; catalogId?: string; overrides: Partial<Metadata>; overrideUpdatedAt?: Partial<Record<Field, string>>; updatedAt?: string }
 type Stored = { endpoint: string; apiKey: string; catalog: CatalogModel[]; catalogSourceEndpoint: string | null; catalogCurrent?: boolean; models: StoredModel[]; defaultModel: string | null; discovery: Discovery; directory?: Directory }
 
 const fields: Field[] = ['contextWindow', 'maxTokens', 'input', 'reasoning', 'tools', 'inputPrice', 'outputPrice']
@@ -56,7 +56,9 @@ export function createModelConnectionStore(dataDir: string, timeoutMs = 10_000, 
     // R1-02 saved effective fields directly; those values were entered by the owner.
     state.models = state.models.map(model => {
       const legacy = model as StoredModel & Metadata
-      return { ...model, overrides: model.overrides ?? Object.fromEntries(fields.filter(field => legacy[field] !== undefined).map(field => [field, legacy[field]])) }
+      const overrides = model.overrides ?? Object.fromEntries(fields.filter(field => legacy[field] !== undefined).map(field => [field, legacy[field]]))
+      const overrideUpdatedAt = model.overrideUpdatedAt ?? Object.fromEntries(fields.filter(field => overrides[field] !== undefined && model.updatedAt).map(field => [field, model.updatedAt]))
+      return { ...model, overrides, overrideUpdatedAt }
     })
   }
 
@@ -68,7 +70,7 @@ export function createModelConnectionStore(dataDir: string, timeoutMs = 10_000, 
       const source = catalogId ? directory?.models[catalogId] : undefined
       const result: ModelSelection = { id: model.id, protocol: model.protocol, ...(model.catalogId ? { catalogId: model.catalogId } : {}), ...(source ? { catalogMatch: catalogId } : {}), overrides: model.overrides, sources: {} }
       for (const field of fields) {
-        const candidate = model.overrides[field] !== undefined ? [model.overrides[field], 'manual', model.updatedAt] as const
+        const candidate = model.overrides[field] !== undefined ? [model.overrides[field], 'manual', model.overrideUpdatedAt?.[field]] as const
           : gateway?.metadata?.[field] !== undefined ? [gateway.metadata[field], 'gateway', state.discovery.successAt] as const
           : source?.[field] !== undefined ? [source[field], 'models.dev', directory?.successAt] as const : undefined
         if (candidate) {
@@ -77,7 +79,7 @@ export function createModelConnectionStore(dataDir: string, timeoutMs = 10_000, 
         }
       }
       if (model.overrides.input === undefined && source?.inputModalities) result.inputModalities = source.inputModalities
-      if (source?.priceNote) result.priceNote = source.priceNote
+      if (source?.priceNote && (result.sources?.inputPrice?.source === 'models.dev' || result.sources?.outputPrice?.source === 'models.dev')) result.priceNote = source.priceNote
       return result
     })
     return { ...rest, models: selected, directory: { status: directory!.status, updatedAt: directory!.updatedAt, successAt: directory!.successAt, cachedModels: Object.keys(directory!.models).length }, hasCredential: apiKey.length > 0 }
@@ -140,7 +142,7 @@ export function createModelConnectionStore(dataDir: string, timeoutMs = 10_000, 
         if (v === undefined || v === null || v === '') continue
         if (field === 'contextWindow' || field === 'maxTokens') { if (positive(v) === undefined) throw new Error(`${field} 无效`); Object.assign(overrides, { [field]: v }) }
         else if (field === 'inputPrice' || field === 'outputPrice') { if (price(v) === undefined) throw new Error(`${field} 无效`); Object.assign(overrides, { [field]: v }) }
-        else if (field === 'input') { if (!input(v)) throw new Error('输入模态无效'); overrides.input = input(v) }
+        else if (field === 'input') { if (!Array.isArray(v) || !v.length || !v.every(x => x === 'text' || x === 'image')) throw new Error('输入模态无效'); overrides.input = input(v) }
         else { if (typeof v !== 'boolean') throw new Error(`${field} 无效`); Object.assign(overrides, { [field]: v }) }
       }
       return { id: item.id.trim(), protocol: item.protocol as Protocol, ...(item.catalogId ? { catalogId: item.catalogId as string } : {}), overrides }
@@ -148,7 +150,20 @@ export function createModelConnectionStore(dataDir: string, timeoutMs = 10_000, 
     if (new Set(models.map(model => model.id)).size !== models.length) throw new Error('模型 ID 重复')
     const defaultModel = value.defaultModel
     if (defaultModel !== null && (typeof defaultModel !== 'string' || !models.some(model => model.id === defaultModel))) throw new Error('默认模型必须已选择')
-    return update(current => ({ ...current, models: models.map(model => ({ ...model, updatedAt: new Date().toISOString() })), defaultModel: defaultModel as string | null }))
+    return update(current => {
+      const now = new Date().toISOString()
+      return { ...current, models: models.map(model => {
+        const previous = current.models.find(item => item.id === model.id)
+        const overrideUpdatedAt = Object.fromEntries(fields.flatMap(field => {
+          const value = model.overrides[field]
+          if (value === undefined) return []
+          const unchanged = JSON.stringify(value) === JSON.stringify(previous?.overrides[field])
+          const timestamp = unchanged ? previous?.overrideUpdatedAt?.[field] : now
+          return timestamp ? [[field, timestamp]] : []
+        })) as Partial<Record<Field, string>>
+        return { ...model, overrideUpdatedAt }
+      }), defaultModel: defaultModel as string | null }
+    })
   }
 
   async function refresh() {
