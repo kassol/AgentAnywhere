@@ -96,7 +96,7 @@ http.createServer(async (request, response) => {
     if (body.model === 'fixture-slow') {
       for (const part of ['The fixture ', 'observation was ', 'returned.']) {
         send(response, { ...common, choices: [{ index: 0, delta: { role: 'assistant', content: part }, finish_reason: null }] })
-        await new Promise(resolve => setTimeout(resolve, 500))
+        await new Promise(resolve => setTimeout(resolve, 1500))
       }
     } else send(response, { ...common, choices: [{ index: 0, delta: { role: 'assistant', content: 'The fixture observation was returned.' }, finish_reason: null }] })
     send(response, { ...common, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })
