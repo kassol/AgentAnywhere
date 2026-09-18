@@ -20,3 +20,5 @@ docker build -t agentanywhere-r1-agent:r1-05 -f build-r1-05/infra/r1/Dockerfile.
 
 R1-08 的 queue 同时连接 `agentanywhere-r1-search` 专用网络，从固定 `http://agentanywhere-r1-searxng:8080` 查询 JSON；沙箱仅凭本次 Run 短 token 调用 queue 的 `search_web` 与 `open_public_page` 工具入口。queue 从 `service.env` 读取 `AGENTANYWHERE_PUBLIC_ORIGIN`，以主机名和实时解析地址拒绝控制面 URL。公开网页逐跳校验 DNS 解析地址并固定连接目标，仅提取 HTTP 文本；搜索结果包含部分失败的引擎。测试环境将 `SEARCH_ORIGIN` 指向同网络的模型/搜索 HTTP fixture；`node infra/r1/test-research.mjs` 从公开 API 验证主题、指定 URL、私网与控制面公网 IP 拒绝，并通过 `/waiting-search`、`/release-search` 控制真实工具执行中的搜索响应。该脚本需要 `TEST_PASSWORD_FILE`、与 queue 环境一致的 `TEST_CONTROL_PLANE_ORIGIN` 和固定的 19112/19113 隔离端口。
 完成后继续工作通过 `POST /api/tasks/:id/runs` 在原 Task/Thread 创建新 Run；新执行读取并校验前次已交付报告，保留旧版本。隔离回归脚本为 `node infra/r1/test-continuation.mjs`，覆盖新旧报告、失败保留、Web 重启和沙箱回收；执行结果记录在 [R1-13](../../docs/evidence/r1-13.md)。
+
+真实模型与搜索验收使用另一个隔离 schema 和 `19114` 端口。Web 只读挂载既有模型连接，queue 连接 `agentanywhere-r1-search`，执行 `TEST_PASSWORD_FILE=... node infra/r1/test-live-research.mjs`；脚本从公开 API 提交主题与指定 URL 工作，核查工具结果、报告引用和沙箱回收。证据见 [R1-08](../../docs/evidence/r1-08.md)。
