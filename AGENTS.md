@@ -2,7 +2,7 @@
 
 ## 项目概述
 
-自托管的个人委托工作台。已实现独立 Web 登录、模型连接、工作创建、两种协议的最小隔离执行与持久事件、报告成果保存和阅读，以及执行中追加要求的持久化和流式续跑；搜索与其他交互能力仍在实施中。产品要求见 [PRD](docs/PRD.md)，实施范围见 [MVP](docs/MVP.md)。
+自托管的个人委托工作台。已实现独立 Web 登录、模型连接、工作创建、两种协议的最小隔离执行与持久事件、报告成果保存和阅读，以及执行中追加要求的持久化和流式续跑。完成后继续工作已通过本地公开 API 验证，完整隔离链路待验；搜索与其他交互能力仍在实施中。产品要求见 [PRD](docs/PRD.md)，实施范围见 [MVP](docs/MVP.md)。
 
 ## 技术栈
 
@@ -27,7 +27,7 @@ React/TypeScript、Bun、PostgreSQL、Node.js 24.21、pg-boss 12.26.3、Pi 0.85.
 
 - `bun install --frozen-lockfile`：安装固定依赖。
 - `bun run build && bun run typecheck && bun test`：构建、类型检查与应用回归。
-- `AGENTANYWHERE_TEST_DATABASE_URL='独立测试库连接串' bun test src/work.test.ts`：工作创建、追加要求的公开 API 与真实 PostgreSQL 回归。
+- `AGENTANYWHERE_TEST_DATABASE_URL='独立测试库连接串' bun test src/work.test.ts`：工作创建、追加要求和完成后继续工作的公开 API 与真实 PostgreSQL 回归。
 - `AGENTANYWHERE_PASSWORD='本机专用的至少十二位密码' DATABASE_URL='PostgreSQL 连接串' bun run start`：本地启动；模型配置目录通过 `AGENTANYWHERE_DATA_DIR` 指定，默认 `./data`。R1 部署与隔离回归见 `infra/r1/README.md`。
 
 ## 全局规范
@@ -62,3 +62,4 @@ React/TypeScript、Bun、PostgreSQL、Node.js 24.21、pg-boss 12.26.3、Pi 0.85.
 - 2026-09-18：加入 R1-06 Responses 执行与双协议隔离验收。
 - 2026-09-18：加入 R1-09 执行中追加要求的持久化、待处理状态与流式续跑。
 - 2026-09-18：加入 R1-07 报告成果保存、校验、阅读、下载与失败回收重试。
+- 2026-09-18：加入 R1-13 完成后继续工作与报告版本历史，完整隔离链路待验。

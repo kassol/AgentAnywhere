@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { SQL } from 'bun'
@@ -114,6 +114,41 @@ test.skipIf(!databaseUrl)('owner creates one persisted queued work request throu
     expect(await (await send(`/api/tasks/${newTask.id}`)).text()).not.toContain('new-private-secret')
     expect((await send('/api/model-connection/models', 'PUT', { defaultModel: null, models: [] })).status).toBe(200)
     expect((await send(`/api/tasks/${task.id}`)).json()).resolves.toMatchObject({ run: { model: { id: 'test-model', protocol: 'chat-completions', endpoint, contextWindow: 128000, maxTokens: 8192, input: ['text'], reasoning: false, tools: true } } })
+    const versionDb = new SQL(testDatabaseUrl)
+    const artifactId = crypto.randomUUID()
+    const versionId = crypto.randomUUID()
+    const previousReport = '# 初版报告\n\n结论 A。\n'
+    const storageKey = `${task.run.id}/report.md`
+    await mkdir(join(dataDir, 'artifacts', task.run.id), { recursive: true })
+    await writeFile(join(dataDir, 'artifacts', storageKey), previousReport)
+    await versionDb`UPDATE work_runs SET status='succeeded', cleanup_state='cleaned', active=false WHERE id=${task.run.id}`
+    await versionDb`UPDATE work_tasks SET status='succeeded' WHERE id=${task.id}`
+    await versionDb`INSERT INTO work_artifacts (id, task_id, kind, name) VALUES (${artifactId}, ${task.id}, 'report', 'report.md')`
+    await versionDb`INSERT INTO work_artifact_versions (id, artifact_id, run_id, storage_key, sha256, size_bytes, mime_type)
+      VALUES (${versionId}, ${artifactId}, ${task.run.id}, ${storageKey}, ${createHash('sha256').update(previousReport).digest('hex')}, ${Buffer.byteLength(previousReport)}, 'text/markdown')`
+    await send('/api/model-connection/models', 'PUT', { defaultModel: 'test-model', models: [{ id: 'test-model', protocol: 'responses', contextWindow: 128000, maxTokens: 8192, input: ['text'], reasoning: false, tools: true }] })
+    const continueBody = { requestId: crypto.randomUUID(), content: '补充结论 B 与 A 的对比', modelId: 'test-model' }
+    const continued = await send(`/api/tasks/${task.id}/runs`, 'POST', continueBody)
+    expect(continued.status).toBe(201)
+    const continuedTask = await continued.json()
+    expect(continuedTask).toMatchObject({ id: task.id, status: 'queued', run: { status: 'queued', model: { protocol: 'responses', endpoint: 'https://replacement.example/v1' }, previousReportVersionId: versionId }, thread: { id: task.thread.id } })
+    expect(continuedTask.run.id).not.toBe(task.run.id)
+    expect(continuedTask.runs).toHaveLength(2)
+    expect(continuedTask.artifacts).toMatchObject([{ versionId, runId: task.run.id }])
+    expect(continuedTask.thread.messages.at(-1)).toMatchObject({ content: continueBody.content })
+    expect((await send(`/api/tasks/${task.id}/runs`, 'POST', continueBody)).status).toBe(200)
+    expect((await send(`/api/tasks/${task.id}/runs`, 'POST', { ...continueBody, content: '另一要求' })).status).toBe(409)
+    expect((await (await send(`/api/artifacts/${versionId}/content`)).json()).markdown).toBe(previousReport)
+    await versionDb`UPDATE work_runs SET status='failed', cleanup_state='cleaned', active=false WHERE id=${continuedTask.run.id}`
+    await versionDb`UPDATE work_tasks SET status='failed' WHERE id=${task.id}`
+    expect((await (await send(`/api/artifacts/${versionId}/content`)).json()).markdown).toBe(previousReport)
+    const another = await Promise.all([
+      send(`/api/tasks/${task.id}/runs`, 'POST', { ...continueBody, requestId: crypto.randomUUID(), content: '第二次修改 A' }),
+      send(`/api/tasks/${task.id}/runs`, 'POST', { ...continueBody, requestId: crypto.randomUUID(), content: '第二次修改 B' }),
+    ])
+    expect(another.map(item => item.status).sort()).toEqual([201, 409])
+    expect((await (await send(`/api/tasks/${task.id}`)).json()).runs).toHaveLength(3)
+    await versionDb.close()
   } finally {
     app.stop(true)
     await admin.unsafe(`DROP SCHEMA ${schema} CASCADE`)

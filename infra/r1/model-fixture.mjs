@@ -68,6 +68,7 @@ http.createServer(async (request, response) => {
   const userMessages = body.messages.filter(message => message.role === 'user').map(message => typeof message.content === 'string'
     ? message.content : message.content?.filter?.(part => part.type === 'text').map(part => part.text).join('') || '')
   const steered = body.model === 'fixture-slow' && userMessages.some(message => message.includes('STEERING_MARKER_12'))
+  const continued = body.model === 'fixture-continuation' && userMessages.some(message => message.includes('CONTINUATION_MARKER_16'))
   calls.push({ model: body.model, toolResult, observation, userMessages, stream: body.stream })
   response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' })
   const common = { id: `fixture-${calls.length}`, object: 'chat.completion.chunk', created: 1, model: body.model }
@@ -87,7 +88,7 @@ http.createServer(async (request, response) => {
   }
   if (!submitted || (steered && submissions === 1)) {
     const name = steered && submitted ? 'submit_report' : echoed ? 'submit_report' : 'echo_observation'
-    const args = steered && submitted ? JSON.stringify({ markdown: `${report}\nSTEERING_MARKER_12\n` }) : echoed ? reportArgs : '{"text":"fixture observation"}'
+    const args = steered && submitted ? JSON.stringify({ markdown: `${report}\nSTEERING_MARKER_12\n` }) : echoed ? continued ? JSON.stringify({ markdown: `${report}\nCONTINUATION_MARKER_16\n`, attachments: [{ name: 'notes.txt', content: 'continued attachment\n' }] }) : reportArgs : '{"text":"fixture observation"}'
     const callId = steered && submitted ? 'call_report_revision' : echoed ? 'call_report' : 'call_echo'
     send(response, { ...common, choices: [{ index: 0, delta: { role: 'assistant', tool_calls: [{ index: 0, id: callId, type: 'function', function: { name, arguments: '' } }] }, finish_reason: null }] })
     send(response, { ...common, choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: args } }] }, finish_reason: null }] })
