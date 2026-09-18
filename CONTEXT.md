@@ -12,7 +12,7 @@
 | --- | --- |
 | Thread | 管家对话或工作对话；不等于任务状态。 |
 | Task | 目标、输入、完成条件、父任务、当前状态；可以有多个 Run。 |
-| Run | 一次任务执行，固定 Agent/Skill/环境配置版本、授权和预算。 |
+| Run | 一次任务执行，固定 Agent/Skill/环境配置版本、授权和预算；模型连接凭证版本由私有引用固定。 |
 | AgentDefinition / Version | 职责、模型、工具上限、Skill 引用、默认环境、交付约束。 |
 | SandboxProfile | 逻辑环境配置，如 worker-basic、worker-coding、browser-interactive；不是任意 Docker 参数。 |
 | SandboxLease | Run 与实际供应商资源的绑定、角色、租约、续租和回收记录。 |

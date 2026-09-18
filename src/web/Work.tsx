@@ -19,7 +19,7 @@ export function Work() {
   const [models, setModels] = useState<Model[]>([])
   const [modelId, setModelId] = useState('')
   const [protocol, setProtocol] = useState('default')
-  const [requestId, setRequestId] = useState(crypto.randomUUID)
+  const [requestId, setRequestId] = useState(() => crypto.randomUUID())
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
 

@@ -13,6 +13,7 @@ RUN bun install --frozen-lockfile --production
 COPY --from=build /app/dist ./dist
 COPY src/server.ts ./src/server.ts
 COPY src/model-connection.ts ./src/model-connection.ts
+COPY src/work.ts ./src/work.ts
 COPY licenses ./licenses
 USER bun
 ENV AGENTANYWHERE_HOST=0.0.0.0 AGENTANYWHERE_PORT=3000

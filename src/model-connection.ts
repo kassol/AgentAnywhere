@@ -10,7 +10,7 @@ type CatalogModel = { id: string; name: string; ownedBy?: string; type?: string;
 type Discovery = { status: 'never' | 'ok' | 'stale' | 'unauthorized' | 'timeout' | 'empty' | 'error'; updatedAt?: string; successAt?: string }
 type Directory = { status: 'never' | 'ok' | 'stale' | 'timeout' | 'error'; updatedAt?: string; successAt?: string; models: Record<string, Metadata> }
 type StoredModel = { id: string; protocol: Protocol; catalogId?: string; overrides: Partial<Metadata>; overrideUpdatedAt?: Partial<Record<Field, string>>; updatedAt?: string }
-type Stored = { endpoint: string; apiKey: string; catalog: CatalogModel[]; catalogSourceEndpoint: string | null; catalogCurrent?: boolean; models: StoredModel[]; defaultModel: string | null; discovery: Discovery; directory?: Directory }
+type Stored = { endpoint: string; apiKey: string; credentialVersion?: string; credentialVersions?: Record<string, { endpoint: string; apiKey: string }>; catalog: CatalogModel[]; catalogSourceEndpoint: string | null; catalogCurrent?: boolean; models: StoredModel[]; defaultModel: string | null; discovery: Discovery; directory?: Directory }
 
 const fields: Field[] = ['contextWindow', 'maxTokens', 'input', 'reasoning', 'tools', 'inputPrice', 'outputPrice']
 const initial: Stored = { endpoint: '', apiKey: '', catalog: [], catalogSourceEndpoint: null, models: [], defaultModel: null, discovery: { status: 'never' }, directory: { status: 'never', models: {} } }
@@ -60,10 +60,14 @@ export function createModelConnectionStore(dataDir: string, timeoutMs = 10_000, 
       const overrideUpdatedAt = model.overrideUpdatedAt ?? Object.fromEntries(fields.filter(field => overrides[field] !== undefined && model.updatedAt).map(field => [field, model.updatedAt]))
       return { ...model, overrides, overrideUpdatedAt }
     })
+    if (state.endpoint && state.apiKey && !state.credentialVersion) await update(current => {
+      const credentialVersion = crypto.randomUUID()
+      return { ...current, credentialVersion, credentialVersions: { ...current.credentialVersions, [credentialVersion]: { endpoint: current.endpoint, apiKey: current.apiKey } } }
+    })
   }
 
   function visible() {
-    const { apiKey, models, directory, catalogCurrent, ...rest } = state
+    const { apiKey, credentialVersion, credentialVersions, models, directory, catalogCurrent, ...rest } = state
     const selected: ModelSelection[] = models.map(model => {
       const gateway = catalogCurrent && state.catalogSourceEndpoint === state.endpoint ? state.catalog.find(entry => entry.id === model.id) : undefined
       const catalogId = model.catalogId ?? (gateway?.ownedBy && directory?.models[`${gateway.ownedBy}/${model.id}`] ? `${gateway.ownedBy}/${model.id}` : undefined)
@@ -83,6 +87,16 @@ export function createModelConnectionStore(dataDir: string, timeoutMs = 10_000, 
       return result
     })
     return { ...rest, models: selected, directory: { status: directory!.status, updatedAt: directory!.updatedAt, successAt: directory!.successAt, cachedModels: Object.keys(directory!.models).length }, hasCredential: apiKey.length > 0 }
+  }
+
+  function forRun() {
+    return { ...visible(), credentialRef: state.credentialVersion ?? null }
+  }
+
+  function resolveCredential(ref: string) {
+    const credential = state.credentialVersions?.[ref]
+    if (!credential) throw new Error('Run 凭证版本不存在')
+    return { ...credential }
   }
 
   function update(change: (current: Stored) => Stored) {
@@ -116,8 +130,11 @@ export function createModelConnectionStore(dataDir: string, timeoutMs = 10_000, 
       if (!apiKey && (!current.apiKey || (current.endpoint && new URL(current.endpoint).origin !== url.origin))) throw new Error('更换端点主机时请重新填写凭证')
       const nextKey = apiKey || current.apiKey
       const changed = endpoint !== current.endpoint || nextKey !== current.apiKey
+      const credentialVersion = changed ? crypto.randomUUID() : current.credentialVersion
       return {
         ...current, endpoint, apiKey: nextKey,
+        credentialVersion,
+        credentialVersions: changed ? { ...current.credentialVersions, [credentialVersion!]: { endpoint, apiKey: nextKey } } : current.credentialVersions,
         catalogCurrent: changed ? false : current.catalogCurrent,
         catalogSourceEndpoint: current.catalogSourceEndpoint ?? (current.catalog.length ? current.endpoint : null),
         discovery: changed ? { ...current.discovery, status: current.catalog.length || current.models.length ? 'stale' : 'never' } : current.discovery,
@@ -224,5 +241,5 @@ export function createModelConnectionStore(dataDir: string, timeoutMs = 10_000, 
     return status
   }
 
-  return { load, visible, connection, selections, refresh, refreshDirectory }
+  return { load, visible, forRun, resolveCredential, connection, selections, refresh, refreshDirectory }
 }

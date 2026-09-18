@@ -114,7 +114,7 @@ export async function startServer(config: Config) {
         const body = await readLimited(request, 8 * 1024)
         if (body === null) return json({ error: '请求内容过大' }, 413)
         try {
-          const result = await work.create(JSON.parse(body), modelConnection.visible())
+          const result = await work.create(JSON.parse(body), modelConnection.forRun())
           return json(result.task, result.created ? 201 : 200)
         } catch (error) {
           if (error instanceof SyntaxError) return json({ error: 'JSON 格式无效' }, 400)

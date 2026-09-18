@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { SQL } from 'bun'
 import type { ModelSelection, Protocol } from './model-connection'
 
-type VisibleConnection = { endpoint: string; hasCredential: boolean; models: ModelSelection[] }
+type RunConnection = { endpoint: string; hasCredential: boolean; credentialRef: string | null; models: ModelSelection[] }
 type CreateRequest = { requestId: string; goal: string; sourceUrl: string | null; modelId: string; protocol: Protocol | null }
 
 export class WorkInputError extends Error {}
@@ -39,8 +39,9 @@ export async function createWorkStore(databaseUrl: string) {
   )`
   await db`CREATE TABLE IF NOT EXISTS work_runs (
     id uuid PRIMARY KEY, task_id uuid NOT NULL REFERENCES work_tasks(id),
-    status text NOT NULL, model_snapshot jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now()
+    status text NOT NULL, model_snapshot jsonb NOT NULL, credential_ref text, created_at timestamptz NOT NULL DEFAULT now()
   )`
+  await db`ALTER TABLE work_runs ADD COLUMN IF NOT EXISTS credential_ref text`
   await db`CREATE TABLE IF NOT EXISTS work_messages (
     id uuid PRIMARY KEY, thread_id uuid NOT NULL REFERENCES work_threads(id),
     role text NOT NULL CHECK (role = 'user'), content text NOT NULL,
@@ -63,7 +64,7 @@ export async function createWorkStore(databaseUrl: string) {
       FROM work_tasks WHERE owner_id = 'owner' ORDER BY created_at DESC, id DESC`
   }
 
-  async function create(body: unknown, connection: VisibleConnection) {
+  async function create(body: unknown, connection: RunConnection) {
     const input = parseRequest(body)
     const requestHash = createHash('sha256').update(JSON.stringify(input)).digest('hex')
     const [existing] = await db`SELECT id, request_hash FROM work_tasks WHERE request_id = ${input.requestId} AND owner_id = 'owner'`
@@ -72,7 +73,7 @@ export async function createWorkStore(databaseUrl: string) {
       return { task: await detail(existing.id), created: false }
     }
     const model = connection.models.find(item => item.id === input.modelId)
-    if (!connection.endpoint || !connection.hasCredential || !model) throw new WorkInputError('请先选择可用模型并配置连接')
+    if (!connection.endpoint || !connection.hasCredential || !connection.credentialRef || !model) throw new WorkInputError('请先选择可用模型并配置连接')
     if (!model.contextWindow || !model.maxTokens || !model.input?.includes('text') || typeof model.reasoning !== 'boolean') throw new WorkInputError('请补充模型的上下文、输出上限、文本输入和推理配置')
     const snapshot = { ...model, protocol: input.protocol ?? model.protocol, endpoint: connection.endpoint }
     const taskId = crypto.randomUUID()
@@ -83,8 +84,8 @@ export async function createWorkStore(databaseUrl: string) {
       if (!rows.length) return false
       const threadId = crypto.randomUUID()
       await sql`INSERT INTO work_threads (id, task_id) VALUES (${threadId}, ${taskId})`
-      await sql`INSERT INTO work_runs (id, task_id, status, model_snapshot)
-        VALUES (${crypto.randomUUID()}, ${taskId}, 'queued', ${JSON.stringify(snapshot)}::jsonb)`
+      await sql`INSERT INTO work_runs (id, task_id, status, model_snapshot, credential_ref)
+        VALUES (${crypto.randomUUID()}, ${taskId}, 'queued', ${JSON.stringify(snapshot)}::jsonb, ${connection.credentialRef})`
       await sql`INSERT INTO work_messages (id, thread_id, role, content)
         VALUES (${crypto.randomUUID()}, ${threadId}, 'user', ${input.goal || input.sourceUrl!})`
       return true
@@ -95,5 +96,14 @@ export async function createWorkStore(databaseUrl: string) {
     return { task: await detail(winner.id), created: false }
   }
 
-  return { list, detail, create }
+  async function resolveRunModelConnection(runId: string, resolveCredential: (ref: string) => { endpoint: string; apiKey: string }) {
+    const [row] = await db`SELECT credential_ref AS "credentialRef", model_snapshot AS "model" FROM work_runs WHERE id = ${runId}`
+    if (!row?.credentialRef) throw new Error('Run 凭证版本不存在')
+    const credential = resolveCredential(row.credentialRef)
+    const model = typeof row.model === 'string' ? JSON.parse(row.model) : row.model
+    if (credential.endpoint !== model.endpoint) throw new Error('Run 凭证版本与端点不一致')
+    return credential
+  }
+
+  return { list, detail, create, resolveRunModelConnection }
 }
