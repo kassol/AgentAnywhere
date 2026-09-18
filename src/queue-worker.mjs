@@ -75,7 +75,7 @@ async function claim(runId, token) {
   try {
     await db.query('BEGIN')
     const result = await db.query(`UPDATE work_runs SET status='provisioning', active=true, epoch=epoch+1,
-      run_token_hash=$2, started_at=now(), cleanup_state='pending'
+      run_token_hash=$2, started_at=COALESCE(started_at,now()), active_since=now(), active_heartbeat_at=now(), cleanup_state='pending', budget_reason=NULL
       WHERE id=$1 AND status='queued' AND NOT active RETURNING id, task_id, epoch, model_snapshot,
         previous_report_version_id, context_snapshot, checkpoint_ref`,
       [runId, createHash('sha256').update(token).digest('hex')])
@@ -205,8 +205,8 @@ async function persistArtifacts(run, sandbox) {
   } catch (error) { await db.query('ROLLBACK'); throw error } finally { db.release() }
 }
 
-async function saveCheckpoint(run, sandbox, question) {
-  if (typeof question !== 'string' || !question.trim() || question.length > 4000) throw new Error('问题无效')
+async function saveCheckpoint(run, sandbox, question = null, kind = 'question') {
+  if (question !== null && (typeof question !== 'string' || !question.trim() || question.length > 4000)) throw new Error('问题无效')
   const paths = [{ source: '/tmp/agentanywhere-session/checkpoint.jsonl', name: 'session.jsonl', limit: 10_000_000 }]
   const artifacts = []
   const manifestPath = `${outputDir}/manifest.json`
@@ -250,10 +250,14 @@ async function saveCheckpoint(run, sandbox, question) {
       await db.query('BEGIN')
       const current = await db.query("SELECT status FROM work_runs WHERE id=$1 AND epoch=$2 AND active FOR UPDATE", [run.id, run.epoch])
       if (current.rows[0]?.status === 'cancelling') { await db.query('ROLLBACK'); return false }
-      if (!['running', 'save_failed'].includes(current.rows[0]?.status)) throw new Error('Run 执行代次已失效')
-      await db.query('INSERT INTO work_interactions (id, run_id, epoch, question, status) VALUES ($1,$2,$3,$4,$5)', [randomUUID(), run.id, run.epoch, question, 'pending'])
-      await db.query("UPDATE work_runs SET status='waiting', checkpoint_ref=$3, run_token_hash=NULL, failure=NULL, pending_status=NULL WHERE id=$1 AND epoch=$2", [run.id, run.epoch, JSON.stringify({ epoch: run.epoch, files, artifacts })])
-      await db.query("UPDATE work_tasks SET status='waiting' WHERE id=$1", [run.task_id])
+      if (!['provisioning', 'running', 'save_failed'].includes(current.rows[0]?.status)) throw new Error('Run 执行代次已失效')
+      if (question !== null) {
+        await db.query('INSERT INTO work_interactions (id, run_id, epoch, question, status, kind) VALUES ($1,$2,$3,$4,$5,$6)', [randomUUID(), run.id, run.epoch, question, 'pending', kind])
+        await db.query(`UPDATE work_runs SET status='waiting', checkpoint_ref=$3, run_token_hash=NULL, failure=NULL, pending_status=NULL,
+          active_ms=active_ms + COALESCE(GREATEST(0, EXTRACT(EPOCH FROM (now()-active_since))*1000)::bigint,0), active_since=NULL
+          WHERE id=$1 AND epoch=$2`, [run.id, run.epoch, JSON.stringify({ epoch: run.epoch, files, artifacts })])
+        await db.query("UPDATE work_tasks SET status='waiting' WHERE id=$1", [run.task_id])
+      } else await db.query('UPDATE work_runs SET checkpoint_ref=$3 WHERE id=$1 AND epoch=$2', [run.id, run.epoch, JSON.stringify({ epoch: run.epoch, files, artifacts })])
       await db.query('COMMIT')
       return true
     } catch (error) { await db.query('ROLLBACK'); throw error } finally { db.release() }
@@ -263,8 +267,10 @@ async function saveCheckpoint(run, sandbox, question) {
 async function restoreCheckpoint(run, sandbox) {
   const checkpoint = run.checkpoint_ref
   if (!checkpoint) return null
-  if (!Number.isSafeInteger(checkpoint.epoch) || checkpoint.epoch >= run.epoch || !Array.isArray(checkpoint.files)) throw new Error('检查点引用无效')
-  const root = join(artifactDir, run.id, `checkpoint-${checkpoint.epoch}`)
+  const sourceRunId = checkpoint.sourceRunId || run.id
+  if (!/^[0-9a-f-]{36}$/i.test(sourceRunId) || !Number.isSafeInteger(checkpoint.epoch)
+    || (sourceRunId === run.id && checkpoint.epoch >= run.epoch) || !Array.isArray(checkpoint.files)) throw new Error('检查点引用无效')
+  const root = join(artifactDir, sourceRunId, `checkpoint-${checkpoint.epoch}`)
   const entries = []
   for (const file of checkpoint.files) {
     if (file.name !== 'session.jsonl' && file.name !== 'manifest.json' && !/^generation-[0-9a-f-]{36}\/(report\.md|attachment-[0-4]\.(txt|csv|json|md))$/.test(file.name)) throw new Error('检查点路径无效')
@@ -277,9 +283,10 @@ async function restoreCheckpoint(run, sandbox) {
   await sandbox.files.createDirectories([{ path: '/tmp/agentanywhere-session', mode: 700 }, { path: outputDir, mode: 700 },
     ...generationDirs.map(path => ({ path, mode: 700 }))])
   await sandbox.files.writeFiles(entries)
-  const [interaction] = (await pool.query("SELECT answer FROM work_interactions WHERE run_id=$1 AND epoch=$2 AND status='answered'", [run.id, checkpoint.epoch])).rows
-  if (!interaction?.answer) throw new Error('检查点回答缺失')
-  return interaction.answer
+  if (sourceRunId !== run.id) return { resume: true, answer: null }
+  const [interaction] = (await pool.query("SELECT answer, kind FROM work_interactions WHERE run_id=$1 AND epoch=$2 AND status='answered'", [run.id, checkpoint.epoch])).rows
+  if (!interaction) throw new Error('检查点回答缺失')
+  return { resume: true, answer: interaction.kind === 'limit' ? null : interaction.answer }
 }
 
 async function releaseWaiting(run, sandboxId) {
@@ -289,9 +296,13 @@ async function releaseWaiting(run, sandboxId) {
     await db.query('BEGIN')
     const current = await db.query('SELECT status FROM work_runs WHERE id=$1 AND epoch=$2 AND active FOR UPDATE', [run.id, run.epoch])
     if (current.rows[0]?.status === 'waiting') {
-      await db.query("UPDATE work_runs SET cleanup_state=$3, active=$4, sandbox_id=CASE WHEN $4 THEN sandbox_id ELSE NULL END WHERE id=$1 AND epoch=$2", [run.id, run.epoch, state, state !== 'cleaned'])
+      await db.query(`UPDATE work_runs SET cleanup_state=$3, active=$4, sandbox_id=CASE WHEN $4 THEN sandbox_id ELSE NULL END,
+        active_ms=active_ms + COALESCE(GREATEST(0, EXTRACT(EPOCH FROM (now()-active_since))*1000)::bigint,0), active_since=NULL
+        WHERE id=$1 AND epoch=$2`, [run.id, run.epoch, state, state !== 'cleaned'])
     } else if (current.rows[0]?.status === 'cancelling' && state === 'cleaned') {
-      await db.query("UPDATE work_runs SET status='cancelled', cleanup_state='cleaned', active=false, sandbox_id=NULL, finished_at=now() WHERE id=$1 AND epoch=$2", [run.id, run.epoch])
+      await db.query(`UPDATE work_runs SET status='cancelled', cleanup_state='cleaned', active=false, sandbox_id=NULL, finished_at=now(),
+        active_ms=active_ms + COALESCE(GREATEST(0, EXTRACT(EPOCH FROM (now()-active_since))*1000)::bigint,0), active_since=NULL
+        WHERE id=$1 AND epoch=$2`, [run.id, run.epoch])
       await db.query("UPDATE work_tasks SET status='cancelled' WHERE id=$1", [run.task_id])
       await db.query("INSERT INTO work_events (run_id, epoch, event_id, type, payload, occurred_at) VALUES ($1,$2,$3,'run.cancelled','{}'::jsonb,now())", [run.id, run.epoch, randomUUID()])
     } else if (current.rows[0]?.status === 'cancelling') {
@@ -337,7 +348,9 @@ async function finish(run, result, sandboxId) {
     const current = await db.query('SELECT status FROM work_runs WHERE id=$1 AND epoch=$2 FOR UPDATE', [run.id, run.epoch])
     if (current.rows[0]?.status === 'cancelling') result = { status: 'cancelled', failure: null }
     const updated = await db.query(`UPDATE work_runs SET status=$3, failure=$4, cleanup_state=$5, active=$6,
-      run_token_hash=NULL, finished_at=COALESCE(finished_at, now()) WHERE id=$1 AND epoch=$2 AND active RETURNING task_id`,
+      run_token_hash=NULL, finished_at=COALESCE(finished_at, now()),
+      active_ms=active_ms + COALESCE(GREATEST(0, EXTRACT(EPOCH FROM (now()-active_since))*1000)::bigint,0), active_since=NULL
+      WHERE id=$1 AND epoch=$2 AND active RETURNING task_id`,
       [run.id, run.epoch, result.status, result.failure, cleanupState, cleanupState !== 'cleaned'])
     if (updated.rowCount) await db.query('UPDATE work_tasks SET status=$2 WHERE id=$1', [updated.rows[0].task_id, result.status])
     await db.query('COMMIT')
@@ -350,9 +363,19 @@ async function execute(run, token) {
   let cancelled = false
   let endpoint
   const eventsAbort = new AbortController()
-  const watch = setInterval(() => void pool.query('SELECT status FROM work_runs WHERE id=$1 AND epoch=$2', [run.id, run.epoch]).then(async ({ rows }) => {
-    if (cancelled || rows[0]?.status !== 'cancelling') return
-    cancelled = true
+  let stopSent = false
+  const watch = setInterval(() => void pool.query(`UPDATE work_runs SET active_heartbeat_at=now()
+    WHERE id=$1 AND epoch=$2 AND active RETURNING status, budget_reason, active_since, active_ms, active_limit_ms`, [run.id, run.epoch]).then(async ({ rows }) => {
+    const state = rows[0]
+    if (!state || stopSent) return
+    const elapsed = Number(state.active_ms) + (state.active_since ? Math.max(0, Date.now() - new Date(state.active_since).getTime()) : 0)
+    if (state.status !== 'cancelling' && !state.budget_reason && elapsed >= Number(state.active_limit_ms)) {
+      await pool.query("UPDATE work_runs SET budget_reason='time' WHERE id=$1 AND epoch=$2 AND active AND budget_reason IS NULL", [run.id, run.epoch])
+      state.budget_reason = 'time'
+    }
+    if (state.status !== 'cancelling' && !state.budget_reason) return
+    stopSent = true
+    cancelled = state.status === 'cancelling'
     if (endpoint) {
       const base = endpoint.endpoint.startsWith('http') ? endpoint.endpoint : `${sandbox.connectionConfig.protocol}://${endpoint.endpoint}`
       try { await fetch(`${base}/cancel`, { method: 'POST', headers: { ...endpoint.headers, 'x-run-token': token }, signal: AbortSignal.timeout(3000) }) }
@@ -368,7 +391,7 @@ async function execute(run, token) {
     await ensureActive()
     const row = await pool.query('SELECT goal, source_url FROM work_tasks WHERE id=$1', [run.task_id])
     let goal = [row.rows[0].goal, row.rows[0].source_url && `指定来源：${row.rows[0].source_url}`].filter(Boolean).join('\n\n')
-    if (run.previous_report_version_id) {
+    if (run.previous_report_version_id && !run.checkpoint_ref) {
       const previous = await pool.query(`SELECT v.storage_key, v.sha256, v.size_bytes, v.run_id
         FROM work_artifact_versions v JOIN work_artifacts a ON a.id=v.artifact_id
         WHERE v.id=$1 AND a.task_id=$2 AND a.kind='report'`, [run.previous_report_version_id, run.task_id])
@@ -390,7 +413,7 @@ async function execute(run, token) {
     })
     run.sandbox_id = sandbox.id
     await pool.query('UPDATE work_runs SET sandbox_id=$3 WHERE id=$1 AND epoch=$2 AND active', [run.id, run.epoch, sandbox.id])
-    const answer = await restoreCheckpoint(run, sandbox)
+    const checkpoint = await restoreCheckpoint(run, sandbox)
     await ensureActive()
     endpoint = await sandbox.getEndpoint(3001)
     let ready = false
@@ -411,7 +434,7 @@ async function execute(run, token) {
     const base = `${sandbox.connectionConfig.protocol}://${endpoint.endpoint}`
     await ensureActive()
     const started = await fetch(`${base}/run`, { method: 'POST', headers: { ...endpoint.headers, 'x-run-token': token, 'content-type': 'application/json' },
-      body: JSON.stringify({ goal, model: run.model_snapshot, proxyBase, toolBase: `${toolOrigin.origin}/internal/research/${run.id}/${run.epoch}`, resume: answer !== null, answer }), signal: AbortSignal.timeout(10_000) })
+      body: JSON.stringify({ goal, model: run.model_snapshot, proxyBase, toolBase: `${toolOrigin.origin}/internal/research/${run.id}/${run.epoch}`, resume: checkpoint?.resume ?? false, answer: checkpoint?.answer ?? null }), signal: AbortSignal.timeout(10_000) })
     if (!started.ok) throw new Error('Pi 启动请求失败')
     endpoint = { ...endpoint, endpoint: base }
     result = await liveEvents(endpoint, token, run, AbortSignal.any([eventsAbort.signal, AbortSignal.timeout(50 * 60_000)]))
@@ -423,6 +446,17 @@ async function execute(run, token) {
     clearInterval(watch)
     try {
       if (sandbox) {
+        const state = await pool.query('SELECT status, budget_reason, model_call_limit, active_limit_ms FROM work_runs WHERE id=$1 AND epoch=$2', [run.id, run.epoch])
+        if (state.rows[0]?.status !== 'cancelling' && state.rows[0]?.budget_reason) {
+          const question = state.rows[0].budget_reason === 'time'
+            ? `已达到 ${Math.ceil(Number(state.rows[0].active_limit_ms) / 60000)} 分钟活跃执行上限。继续会增加 45 分钟和 40 次模型调用额度；是否继续？`
+            : `已达到 ${state.rows[0].model_call_limit} 次模型调用上限。继续会增加 45 分钟和 40 次模型调用额度；是否继续？`
+          try {
+            const saved = await saveCheckpoint(run, sandbox, question, 'limit')
+            if (saved) { await releaseWaiting(run, sandbox.id); return }
+          } catch (error) { await markSaveBlocked(run, error, { status: 'waiting', failure: null }); return }
+          result = { status: 'cancelled', failure: null }
+        }
         if (result.status === 'waiting') {
           let saved
           try { saved = await saveCheckpoint(run, sandbox, result.question) }
@@ -432,6 +466,15 @@ async function execute(run, token) {
           }
           if (saved) { await releaseWaiting(run, sandbox.id); return }
           result = { status: 'cancelled', failure: null }
+        }
+        if (result.status === 'failed') {
+          let sessionInfo
+          try { sessionInfo = await optionalFileInfo(sandbox, '/tmp/agentanywhere-session/checkpoint.jsonl') }
+          catch (error) { await markSaveBlocked(run, error, result); return }
+          if (sessionInfo) {
+            try { await saveCheckpoint(run, sandbox) }
+            catch (error) { await markSaveBlocked(run, error, result); return }
+          }
         }
         const manifestPath = `${outputDir}/manifest.json`
         const reportPath = `${outputDir}/report.md`
@@ -455,10 +498,15 @@ async function execute(run, token) {
 async function reconcile() {
   const rows = await pool.query('SELECT id, task_id, epoch, sandbox_id, status, failure, cleanup_state FROM work_runs WHERE active')
   for (const run of rows.rows) {
+    await pool.query('UPDATE work_runs SET run_token_hash=NULL WHERE id=$1 AND epoch=$2 AND active', [run.id, run.epoch])
     if (run.cleanup_state === 'blocked' || run.cleanup_state === 'failed' || run.cleanup_state === 'retry_requested') continue
     if (run.status === 'waiting') { await releaseWaiting(run, run.sandbox_id); continue }
+    await pool.query(`UPDATE work_runs SET active_ms=active_ms + COALESCE(GREATEST(0, EXTRACT(EPOCH FROM (COALESCE(active_heartbeat_at,now())-active_since))*1000)::bigint,0),
+      active_since=NULL WHERE id=$1 AND epoch=$2 AND active`, [run.id, run.epoch])
     let sandbox
     try {
+      if (run.sandbox_id) sandbox = await Sandbox.connect({ connectionConfig: sandboxConnection, sandboxId: run.sandbox_id })
+      if (sandbox && run.status !== 'cancelling' && await optionalFileInfo(sandbox, '/tmp/agentanywhere-session/checkpoint.jsonl')) await saveCheckpoint(run, sandbox)
       const persisted = await pool.query('SELECT 1 FROM work_artifact_versions WHERE run_id=$1 LIMIT 1', [run.id])
       if (persisted.rowCount) {
         const terminal = await pool.query("SELECT type, payload FROM work_events WHERE run_id=$1 AND type IN ('run.finished', 'run.failed') ORDER BY server_seq DESC LIMIT 1", [run.id])
@@ -466,7 +514,6 @@ async function reconcile() {
         await finish(run, { status: last?.type === 'run.finished' ? 'succeeded' : last?.type === 'run.failed' ? 'failed' : 'lost', failure: last?.type === 'run.failed' ? last.payload?.error : last?.type === 'run.finished' ? null : '执行服务中断；请手动重试' }, run.sandbox_id)
         continue
       }
-      if (run.sandbox_id) sandbox = await Sandbox.connect({ connectionConfig: sandboxConnection, sandboxId: run.sandbox_id })
       const manifest = sandbox && await optionalFileInfo(sandbox, `${outputDir}/manifest.json`)
       const report = sandbox && await optionalFileInfo(sandbox, `${outputDir}/report.md`)
       if (run.status === 'cancelling') {
@@ -497,13 +544,17 @@ async function recoverPending() {
           sandbox = await Sandbox.connect({ connectionConfig: sandboxConnection, sandboxId: run.sandbox_id })
           if (run.pending_status === 'waiting') {
             const event = await pool.query("SELECT payload FROM work_events WHERE run_id=$1 AND epoch=$2 AND type='interaction.requested' ORDER BY server_seq DESC LIMIT 1", [run.id, run.epoch])
-            await saveCheckpoint(run, sandbox, event.rows[0]?.payload?.question)
+            const reason = (await pool.query('SELECT budget_reason FROM work_runs WHERE id=$1', [run.id])).rows[0]?.budget_reason
+            const question = event.rows[0]?.payload?.question || (reason ? '执行达到上限。是否继续？' : null)
+            if (!question) throw new Error('待保存问题缺失')
+            await saveCheckpoint(run, sandbox, question, event.rows[0] ? 'question' : 'limit')
             await releaseWaiting(run, run.sandbox_id)
             return
           }
           const manifest = await optionalFileInfo(sandbox, `${outputDir}/manifest.json`)
           const report = await optionalFileInfo(sandbox, `${outputDir}/report.md`)
-          if (run.pending_status !== 'cancelled' || manifest || report) await persistArtifacts(run, sandbox)
+          if (run.pending_status !== 'cancelled' && await optionalFileInfo(sandbox, '/tmp/agentanywhere-session/checkpoint.jsonl')) await saveCheckpoint(run, sandbox)
+          if (run.pending_status === 'succeeded' || manifest || report) await persistArtifacts(run, sandbox)
         }
         await finish(run, { status: run.pending_status || run.status, failure: run.pending_failure || (run.status === 'save_failed' ? null : run.failure) }, run.sandbox_id)
       } catch (error) { await markSaveBlocked(run, error, { status: run.pending_status || run.status, failure: run.pending_failure || run.failure }) }

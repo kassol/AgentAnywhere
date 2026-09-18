@@ -3,6 +3,8 @@ import http from 'node:http'
 const calls = []
 const waitingSearch = []
 const waiting = new Set()
+const transientFailures = new Set()
+const interrupted = new Set()
 function hold(response, data) {
   send(response, data)
   waiting.add(response)
@@ -133,8 +135,30 @@ http.createServer(async (request, response) => {
   const steered = body.model === 'fixture-slow' && userMessages.some(message => message.includes('STEERING_MARKER_12'))
   const continued = body.model === 'fixture-continuation' && userMessages.some(message => message.includes('CONTINUATION_MARKER_16'))
   calls.push({ model: body.model, toolResult, observation, userMessages, stream: body.stream })
+  if (body.model === 'fixture-retry' && echoed && !userMessages.some(message => message.includes('请根据已保存的对话'))) {
+    response.writeHead(503, { 'content-type': 'application/json' })
+    return response.end(JSON.stringify({ error: { message: 'fixture persistent failure', type: 'server_error' } }))
+  }
+  if (body.model === 'fixture-transient' && echoed && !transientFailures.has(body.model)) {
+    transientFailures.add(body.model)
+    response.writeHead(503, { 'content-type': 'application/json' })
+    return response.end(JSON.stringify({ error: { message: 'fixture transient failure', type: 'server_error' } }))
+  }
+  if (body.model === 'fixture-interrupt' && !interrupted.has(body.model)) {
+    interrupted.add(body.model)
+    response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' })
+    return hold(response, { id: `fixture-${calls.length}`, object: 'chat.completion.chunk', created: 1, model: body.model,
+      choices: [{ index: 0, delta: { role: 'assistant', content: 'Still running' }, finish_reason: null }] })
+  }
   response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' })
   const common = { id: `fixture-${calls.length}`, object: 'chat.completion.chunk', created: 1, model: body.model }
+  if (body.model === 'fixture-limit' && !userMessages.some(message => message.includes('请根据已保存的对话'))) {
+    const args = JSON.stringify({ text: `limit observation ${calls.length}` })
+    send(response, { ...common, choices: [{ index: 0, delta: { role: 'assistant', tool_calls: [{ index: 0, id: `call_limit_${calls.length}`, type: 'function', function: { name: 'echo_observation', arguments: '' } }] }, finish_reason: null }] })
+    send(response, { ...common, choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: args } }] }, finish_reason: null }] })
+    send(response, { ...common, choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] })
+    return response.end('data: [DONE]\n\n')
+  }
   if (body.model === 'fixture-cancel-chat') return hold(response, { ...common, choices: [{ index: 0, delta: { role: 'assistant', content: 'Partial response' }, finish_reason: null }] })
   if (body.model === 'fixture-cancel-after-report' && submitted) return hold(response, { ...common, choices: [{ index: 0, delta: { role: 'assistant', content: 'Saved report' }, finish_reason: null }] })
   if (body.model === 'fixture-empty-attachment' || body.model === 'fixture-duplicate-name') {
