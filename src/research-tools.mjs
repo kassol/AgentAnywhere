@@ -7,7 +7,7 @@ const blocked = new BlockList()
 for (const [range, prefix] of [['0.0.0.0', 8], ['10.0.0.0', 8], ['100.64.0.0', 10], ['127.0.0.0', 8], ['168.63.129.16', 32], ['169.254.0.0', 16], ['172.16.0.0', 12], ['192.0.0.0', 24], ['192.0.2.0', 24], ['192.88.99.0', 24], ['192.168.0.0', 16], ['198.18.0.0', 15], ['198.51.100.0', 24], ['203.0.113.0', 24], ['224.0.0.0', 4], ['240.0.0.0', 4]]) blocked.addSubnet(range, prefix, 'ipv4')
 const publicV6 = new BlockList()
 publicV6.addSubnet('2000::', 3, 'ipv6')
-for (const [range, prefix] of [['2001::', 23], ['2001:db8::', 32], ['2001:20::', 28]]) blocked.addSubnet(range, prefix, 'ipv6')
+for (const [range, prefix] of [['2001::', 23], ['2001:db8::', 32], ['2001:20::', 28], ['2002::', 16]]) blocked.addSubnet(range, prefix, 'ipv6')
 
 function publicAddress(address) {
   const family = isIP(address)
@@ -20,7 +20,7 @@ async function publicTarget(input, forbiddenHost, signal) {
   try { url = new URL(input) } catch { throw new Error('公开链接无效') }
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || !url.hostname || url.href.length > 2048) throw new Error('仅支持公开 HTTP(S) 链接')
   const host = url.hostname.replace(/^\[|\]$/g, '')
-  if (host.toLowerCase() === forbiddenHost?.toLowerCase()) throw new Error('链接指向控制面')
+  if (host.toLowerCase().replace(/\.+$/, '') === forbiddenHost?.toLowerCase().replace(/\.+$/, '')) throw new Error('链接指向控制面')
   const addresses = isIP(host) ? [{ address: host, family: isIP(host) }] : await (async () => {
     let timer
     let onAbort
@@ -91,7 +91,7 @@ export async function searchWeb(query, origin, signal) {
   if (typeof query !== 'string' || !query.trim() || query.length > 200) throw new Error('搜索词无效')
   const url = new URL('/search', origin)
   url.search = new URLSearchParams({ q: query, format: 'json', language: 'zh-CN' }).toString()
-  const response = await fetch(url, { signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(20_000)]) : AbortSignal.timeout(20_000) })
+  const response = await fetch(url, { redirect: 'error', signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(20_000)]) : AbortSignal.timeout(20_000) })
   if (!response.ok) throw new Error(`搜索服务失败：HTTP ${response.status}`)
   const reader = response.body.getReader()
   const chunks = []

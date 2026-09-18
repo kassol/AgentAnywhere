@@ -23,7 +23,7 @@ async function waitFor(check) {
   throw new Error('Research run timeout')
 }
 await api('/api/model-connection', 'PUT', { endpoint: 'http://model-fixture:3002/v1', apiKey: 'fixture-only' })
-await api('/api/model-connection/models', 'PUT', { defaultModel: 'fixture-research', models: ['fixture-research', 'fixture-url'].map(id => ({ id, protocol: 'chat-completions', overrides: { contextWindow: 128000, maxTokens: 1024, input: ['text'], reasoning: false, tools: true } })) })
+await api('/api/model-connection/models', 'PUT', { defaultModel: 'fixture-research', models: ['fixture-research', 'fixture-url', 'fixture-rejected'].map(id => ({ id, protocol: 'chat-completions', overrides: { contextWindow: 128000, maxTokens: 1024, input: ['text'], reasoning: false, tools: true } })) })
 const theme = await api('/api/tasks', 'POST', { requestId: crypto.randomUUID(), goal: '研究 Example Domain，并标出搜索引擎失败', modelId: 'fixture-research' })
 await waitFor(async () => (await (await fetch(`${fixture}/waiting-search`)).json()).count > 0)
 const during = await api(`/api/tasks/${theme.id}/events`)
@@ -31,6 +31,7 @@ assert.ok(during.some(item => item.type === 'tool.started' && item.payload.name 
 assert.ok(!during.some(item => item.type === 'tool.completed' && item.payload.name === 'search_web'))
 assert.equal((await fetch(`${fixture}/release-search`, { method: 'POST' })).status, 200)
 const url = await api('/api/tasks', 'POST', { requestId: crypto.randomUUID(), goal: '读取指定公开网页并交付引用报告', sourceUrl: 'https://example.com/', modelId: 'fixture-url' })
+const rejected = await api('/api/tasks', 'POST', { requestId: crypto.randomUUID(), goal: '验证私网链接被拒绝', modelId: 'fixture-rejected' })
 for (const item of [theme, url]) {
   const detail = await waitFor(async () => {
     const value = await api(`/api/tasks/${item.id}`)
@@ -44,4 +45,10 @@ for (const item of [theme, url]) {
   assert.ok(report)
   assert.match((await api(`/api/artifacts/${report.versionId}/content`)).markdown, /https:\/\/example.com\//)
 }
-console.log(JSON.stringify({ theme: 'succeeded', sourceUrl: 'succeeded', searchPendingObserved: true, reportPersisted: true }))
+await waitFor(async () => {
+  const detail = await api(`/api/tasks/${rejected.id}`)
+  return detail.run.status === 'succeeded' && detail.run.cleanupState === 'cleaned'
+})
+const rejectedEvents = await api(`/api/tasks/${rejected.id}/events`)
+assert.ok(rejectedEvents.some(event => event.type === 'tool.completed' && event.payload.name === 'open_public_page' && event.payload.isError && /非公开地址/.test(event.payload.result)))
+console.log(JSON.stringify({ theme: 'succeeded', sourceUrl: 'succeeded', privateUrl: 'rejected', searchPendingObserved: true, reportPersisted: true }))

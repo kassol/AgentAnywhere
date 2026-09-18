@@ -42,6 +42,7 @@ const researchServer = http.createServer(async (request, response) => {
       if (body.length > 4096) throw new Error('工具参数超过大小限制')
     }
     const input = JSON.parse(body)
+    if (!input || typeof input !== 'object' || Array.isArray(input) || typeof input[match[3] === 'search' ? 'query' : 'url'] !== 'string') throw new Error('工具参数无效')
     const result = match[3] === 'search' ? await searchWeb(input.query, searchOrigin, controller.signal) : await openPublicPage(input.url, publicHost, controller.signal)
     response.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' })
     response.end(JSON.stringify(result))
