@@ -7,9 +7,11 @@ import { startServer } from './server'
 test('connection test sends the selected model and protocol to the configured gateway', async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'agentanywhere-connection-test-'))
   const calls: { path: string; model: string; authorization: string | null }[] = []
+  let rejectProtocol = false
   const gateway = Bun.serve({ port: 0, async fetch(request) {
     const body = await request.json() as { model: string }
     calls.push({ path: new URL(request.url).pathname, model: body.model, authorization: request.headers.get('authorization') })
+    if (rejectProtocol) return Response.json({ error: { code: 'unsupported_protocol', message: 'Responses unavailable for test-key' } }, { status: 400 })
     return Response.json({ choices: [{ message: { content: 'ok' } }] })
   } })
   const app = await startServer({ password: 'test-password-12345', port: 0, dataDir })
@@ -24,6 +26,15 @@ test('connection test sends the selected model and protocol to the configured ga
     expect(result.status).toBe(200)
     expect(calls).toEqual([{ path: '/v1/chat/completions', model: 'test-model', authorization: 'Bearer test-key' }])
     expect(await result.text()).not.toContain('test-key')
+    expect((await post('/api/model-connection/models', { defaultModel: 'test-model', models: [{ id: 'test-model', protocol: 'responses' }] }, 'PUT')).status).toBe(200)
+    rejectProtocol = true
+    const rejected = await post('/api/model-connection/test', { modelId: 'test-model', protocol: 'responses' })
+    expect(rejected.status).toBe(502)
+    const error = await rejected.text()
+    expect(error).toContain('unsupported_protocol')
+    expect(error).toContain('Responses unavailable')
+    expect(error).not.toContain('test-key')
+    expect(calls.at(-1)?.path).toBe('/v1/responses')
   } finally { app.stop(true); gateway.stop(true); await rm(dataDir, { recursive: true, force: true }) }
 })
 
