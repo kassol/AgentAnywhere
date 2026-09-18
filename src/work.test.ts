@@ -59,6 +59,7 @@ test.skipIf(!databaseUrl)('owner creates one persisted queued work request throu
 
     expect((await send('/api/tasks')).json().then((list: unknown[]) => list.filter((item: any) => item.id === task.id).length)).resolves.toBe(1)
     expect((await send(`/api/tasks/${task.id}`)).json()).resolves.toMatchObject({ id: task.id, goal: body.goal, status: 'queued' })
+    expect((await send(`/api/tasks/${task.id}/events`)).json()).resolves.toEqual([])
     app.stop(true)
     app = await startServer({ password, port: 0, dataDir, databaseUrl: testDatabaseUrl })
     base = app.url.origin

@@ -4,6 +4,29 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { startServer } from './server'
 
+test('connection test sends the selected model and protocol to the configured gateway', async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'agentanywhere-connection-test-'))
+  const calls: { path: string; model: string; authorization: string | null }[] = []
+  const gateway = Bun.serve({ port: 0, async fetch(request) {
+    const body = await request.json() as { model: string }
+    calls.push({ path: new URL(request.url).pathname, model: body.model, authorization: request.headers.get('authorization') })
+    return Response.json({ choices: [{ message: { content: 'ok' } }] })
+  } })
+  const app = await startServer({ password: 'test-password-12345', port: 0, dataDir })
+  const base = app.url.origin
+  try {
+    const auth = await fetch(`${base}/api/auth`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password: 'test-password-12345' }) })
+    const cookie = auth.headers.get('set-cookie')!
+    const post = (path: string, body: unknown, method = 'POST') => fetch(`${base}${path}`, { method, headers: { cookie, 'content-type': 'application/json' }, body: JSON.stringify(body) })
+    expect((await post('/api/model-connection', { endpoint: gateway.url.origin + '/v1', apiKey: 'test-key' }, 'PUT')).status).toBe(200)
+    expect((await post('/api/model-connection/models', { defaultModel: 'test-model', models: [{ id: 'test-model', protocol: 'chat-completions', contextWindow: 4096, maxTokens: 1024, input: ['text'], reasoning: false }] }, 'PUT')).status).toBe(200)
+    const result = await post('/api/model-connection/test', { modelId: 'test-model', protocol: 'chat-completions' })
+    expect(result.status).toBe(200)
+    expect(calls).toEqual([{ path: '/v1/chat/completions', model: 'test-model', authorization: 'Bearer test-key' }])
+    expect(await result.text()).not.toContain('test-key')
+  } finally { app.stop(true); gateway.stop(true); await rm(dataDir, { recursive: true, force: true }) }
+})
+
 test('model settings survive restart; failed refresh retains selected model and never reveals the key', async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'agentanywhere-model-'))
   let gatewayStatus = 200

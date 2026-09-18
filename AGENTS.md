@@ -12,8 +12,8 @@
 
 - `docs/`：产品、实施、工程流程与决策文档。
 - `diagrams/`：架构与浏览器隔离图。
-- `infra/w0/`：独立基线验证脚本与运行配置；执行证据位于 `docs/evidence/w0/`。
-- `src/server.ts`：Web/API 服务与登录鉴权；`src/model-connection.ts`：单套模型连接配置与发现；`src/work.ts`：工作创建和 PostgreSQL 持久化；`src/web/`：精简 Web；`docs/evidence/`：实施验证。
+- `infra/w0/`：独立基线验证脚本与运行配置；执行证据位于 `docs/evidence/w0/`。`infra/r1/`：R1 镜像、队列与沙箱运行配置。
+- `src/server.ts`：Web/API 服务与登录鉴权；`src/model-connection.ts`：单套模型连接配置与发现；`src/work.ts`：工作与事件持久化；`src/queue-worker.mjs`：Node 队列与沙箱生命周期；`src/agent-worker.mjs`：沙箱内 Pi；`src/web/`：精简 Web；`docs/evidence/`：实施验证。
 - `CONTEXT.md`：领域定义。
 
 ## 常用命令

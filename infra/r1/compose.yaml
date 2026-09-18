@@ -1,0 +1,75 @@
+name: agentanywhere-r1
+services:
+  web:
+    image: agentanywhere-r1-web:r1-05
+    container_name: agentanywhere-r1-web
+    runtime: agentanywhere-w0-runsc
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:19110:3000"
+    env_file: [./service.env, ./database.env]
+    volumes:
+      - ./data:/data
+      - ./resolv.conf:/etc/resolv.conf:ro
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 128
+    mem_limit: 512m
+    cpus: 1.0
+    networks:
+      default: {}
+      sandbox:
+        aliases: [web]
+  queue:
+    image: agentanywhere-r1-queue:r1-05
+    container_name: agentanywhere-r1-queue
+    restart: unless-stopped
+    env_file: [./database.env, ./opensandbox.env]
+    environment:
+      AGENT_IMAGE: agentanywhere-r1-agent:r1-05
+      OPEN_SANDBOX_DOMAIN: opensandbox:8080
+      MODEL_PROXY_ORIGIN: http://web:3000
+    depends_on:
+      postgres:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 128
+    mem_limit: 512m
+    cpus: 1.0
+    networks: [default, sandbox]
+  postgres:
+    image: postgres:18.6-alpine@sha256:d3e1620b530c944afa6e887d22eb899824da68e19c52024bf98f5220c88a65b2
+    container_name: agentanywhere-r1-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: agentanywhere_admin
+      POSTGRES_DB: postgres
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_admin_password
+    volumes:
+      - postgres-data:/var/lib/postgresql
+      - ./postgres-admin-password:/run/secrets/postgres_admin_password:ro
+      - ./postgres-app-password:/run/secrets/postgres_app_password:ro
+      - ./postgres-init.sh:/docker-entrypoint-initdb.d/10-app.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agentanywhere_admin -d postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 128
+    mem_limit: 512m
+    cpus: 1.0
+volumes:
+  postgres-data:
+    name: agentanywhere-r1-postgres-data
+networks:
+  sandbox:
+    external: true
+    name: agentanywhere-r1-sandbox

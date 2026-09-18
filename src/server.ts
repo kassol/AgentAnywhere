@@ -3,6 +3,44 @@ import type { ServerWebSocket } from 'bun'
 import { createModelConnectionStore } from './model-connection'
 import { createWorkStore, WorkConflictError, WorkInputError } from './work'
 
+function modelPath(protocol: 'chat-completions' | 'responses') {
+  return protocol === 'chat-completions' ? 'chat/completions' : 'responses'
+}
+
+function observeUsage(body: ReadableStream<Uint8Array>, save: (usage: { inputTokens: number | null; outputTokens: number | null; totalTokens: number | null }) => Promise<void>) {
+  const decoder = new TextDecoder()
+  let pending = ''
+  let usage: Record<string, unknown> | undefined
+  function inspect(frame: string) {
+    const data = frame.split('\n').find(line => line.startsWith('data: '))?.slice(6)
+    if (!data || data === '[DONE]') return
+    try {
+      const item = JSON.parse(data) as { usage?: Record<string, unknown>; response?: { usage?: Record<string, unknown> } }
+      usage = item.usage ?? item.response?.usage ?? usage
+    } catch { /* the provider response remains untouched */ }
+  }
+  return body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      controller.enqueue(chunk)
+      pending = (pending + decoder.decode(chunk, { stream: true })).replaceAll('\r\n', '\n')
+      let boundary: number
+      while ((boundary = pending.indexOf('\n\n')) !== -1) {
+        inspect(pending.slice(0, boundary))
+        pending = pending.slice(boundary + 2)
+      }
+      if (pending.length > 1_000_000) pending = pending.slice(-1024)
+    },
+    async flush() {
+      if (pending) inspect(pending)
+      const number = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
+      const inputTokens = number(usage?.prompt_tokens ?? usage?.input_tokens)
+      const outputTokens = number(usage?.completion_tokens ?? usage?.output_tokens)
+      const totalTokens = number(usage?.total_tokens)
+      await save({ inputTokens, outputTokens, totalTokens })
+    },
+  }))
+}
+
 type Config = { password: string; host?: string; port?: number; secureCookie?: boolean; publicOrigin?: string; dataDir?: string; modelTimeoutMs?: number; directoryUrl?: string; databaseUrl?: string }
 type Session = { expires: number; sockets: Set<ServerWebSocket<{ token: string }>> }
 
@@ -75,6 +113,30 @@ export async function startServer(config: Config) {
       const path = url.pathname
       const authenticated = session(request)
 
+      const proxyMatch = /^\/internal\/runs\/([0-9a-f-]{36})\/(\d+)\/v1\/(chat\/completions|responses)$/i.exec(path)
+      if (proxyMatch && request.method === 'POST') {
+        if (!work) return json({ error: 'Unavailable' }, 503)
+        const body = await readLimited(request, 1_000_000)
+        if (body === null) return json({ error: 'Request too large' }, 413)
+        let parsed: { model?: unknown }
+        try { parsed = JSON.parse(body) } catch { return json({ error: 'Invalid JSON' }, 400) }
+        if (!parsed || typeof parsed !== 'object') return json({ error: 'Invalid JSON' }, 400)
+        const protocol = proxyMatch[3] === 'chat/completions' ? 'chat-completions' : 'responses'
+        const token = request.headers.get('authorization')?.replace(/^Bearer /, '') ?? ''
+        const credential = await work.authorizeModelProxy(proxyMatch[1], Number(proxyMatch[2]), token, parsed.model as string, protocol, modelConnection.resolveCredential)
+        if (!credential) return json({ error: 'Unauthorized' }, 401)
+        try {
+          const upstream = await fetch(`${credential.endpoint}/${modelPath(protocol)}`, {
+            method: 'POST', headers: { authorization: `Bearer ${credential.apiKey}`, 'content-type': 'application/json' },
+            body, redirect: 'manual', signal: request.signal,
+          })
+          const contentType = upstream.headers.get('content-type') ?? 'application/json'
+          const stream = upstream.body && upstream.ok && contentType.includes('text/event-stream')
+            ? observeUsage(upstream.body, usage => work.recordModelUsage(proxyMatch[1], Number(proxyMatch[2]), usage)) : upstream.body
+          return new Response(stream, { status: upstream.status, headers: { ...common, 'content-type': contentType } })
+        } catch { return json({ error: 'Model gateway unavailable' }, 502) }
+      }
+
       if (path === '/api/auth' && request.method === 'POST') {
         if (!sameOrigin(request)) return json({ error: 'Forbidden' }, 403)
         const ip = server.requestIP(request)?.address ?? 'unknown'
@@ -123,6 +185,12 @@ export async function startServer(config: Config) {
           return json({ error: '创建工作失败' }, 500)
         }
       }
+      if (/^\/api\/tasks\/[0-9a-f-]{36}\/events$/i.test(path) && request.method === 'GET') {
+        const after = Number(url.searchParams.get('after') ?? 0)
+        if (!Number.isSafeInteger(after) || after < 0) return json({ error: '事件游标无效' }, 400)
+        const events = await work?.events(path.split('/')[3], after)
+        return events ? json(events) : json({ error: 'Not found' }, 404)
+      }
       if (path.startsWith('/api/tasks/') && request.method === 'GET') {
         const id = path.slice('/api/tasks/'.length)
         if (!/^[0-9a-f-]{36}$/i.test(id)) return json({ error: 'Not found' }, 404)
@@ -130,6 +198,28 @@ export async function startServer(config: Config) {
         return task ? json(task) : json({ error: 'Not found' }, 404)
       }
       if (path === '/api/model-connection' && request.method === 'GET') return json(modelConnection.visible())
+      if (path === '/api/model-connection/test' && request.method === 'POST') {
+        if (!sameOrigin(request)) return json({ error: 'Forbidden' }, 403)
+        const body = await readLimited(request, 4096)
+        if (body === null) return json({ error: '请求内容过大' }, 413)
+        let input: { modelId?: unknown; protocol?: unknown }
+        try { input = JSON.parse(body) } catch { return json({ error: 'JSON 格式无效' }, 400) }
+        const connection = modelConnection.forRun()
+        const selected = connection.models.find(model => model.id === input.modelId)
+        const protocol = input.protocol ?? selected?.protocol
+        if (!selected || (protocol !== 'chat-completions' && protocol !== 'responses') || !connection.credentialRef) return json({ error: '模型或协议无效' }, 400)
+        const credential = modelConnection.resolveCredential(connection.credentialRef)
+        const requestBody = protocol === 'chat-completions'
+          ? { model: selected.id, messages: [{ role: 'user', content: 'Reply with OK.' }], stream: false }
+          : { model: selected.id, input: 'Reply with OK.', stream: false }
+        try {
+          const upstream = await fetch(`${credential.endpoint}/${modelPath(protocol)}`, {
+            method: 'POST', headers: { authorization: `Bearer ${credential.apiKey}`, 'content-type': 'application/json' },
+            body: JSON.stringify(requestBody), redirect: 'manual', signal: AbortSignal.timeout(30_000),
+          })
+          return upstream.ok ? json({ ok: true, modelId: selected.id, protocol }) : json({ error: '连接测试失败', status: upstream.status }, 502)
+        } catch { return json({ error: '模型网关不可用' }, 502) }
+      }
       if ((path === '/api/model-connection' || path === '/api/model-connection/models' || path === '/api/model-connection/refresh' || path === '/api/model-connection/directory') && request.method !== 'GET') {
         if (!sameOrigin(request)) return json({ error: 'Forbidden' }, 403)
         try {

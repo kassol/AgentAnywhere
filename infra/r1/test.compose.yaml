@@ -1,0 +1,35 @@
+name: agentanywhere-r1-test
+services:
+  web:
+    image: agentanywhere-r1-web:r1-05
+    ports: ["127.0.0.1:19112:3000"]
+    env_file: ./test.env
+    environment:
+      AGENTANYWHERE_HOST: 0.0.0.0
+      AGENTANYWHERE_PORT: 3000
+      AGENTANYWHERE_DATA_DIR: /data
+    volumes: ["./test-data:/data"]
+    networks:
+      app: {}
+      sandbox:
+        aliases: [test-web]
+  queue:
+    image: agentanywhere-r1-queue:r1-05
+    env_file: ./test.env
+    environment:
+      AGENT_IMAGE: agentanywhere-r1-agent:r1-05
+      OPEN_SANDBOX_DOMAIN: opensandbox:8080
+      MODEL_PROXY_ORIGIN: http://test-web:3000
+    networks: [app, sandbox]
+  model-fixture:
+    image: agentanywhere-r1-model-fixture:r1-05
+    networks:
+      sandbox:
+        aliases: [model-fixture]
+networks:
+  app:
+    external: true
+    name: agentanywhere-r1_default
+  sandbox:
+    external: true
+    name: agentanywhere-r1-sandbox

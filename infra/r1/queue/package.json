@@ -1,0 +1,9 @@
+{
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@alibaba-group/opensandbox": "0.1.11",
+    "pg": "8.16.3",
+    "pg-boss": "12.26.3"
+  }
+}

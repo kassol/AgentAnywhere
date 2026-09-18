@@ -42,6 +42,25 @@ export async function createWorkStore(databaseUrl: string) {
     status text NOT NULL, model_snapshot jsonb NOT NULL, credential_ref text, created_at timestamptz NOT NULL DEFAULT now()
   )`
   await db`ALTER TABLE work_runs ADD COLUMN IF NOT EXISTS credential_ref text`
+  await db`ALTER TABLE work_runs ADD COLUMN IF NOT EXISTS epoch integer NOT NULL DEFAULT 0`
+  await db`ALTER TABLE work_runs ADD COLUMN IF NOT EXISTS active boolean NOT NULL DEFAULT false`
+  await db`ALTER TABLE work_runs ADD COLUMN IF NOT EXISTS run_token_hash text`
+  await db`ALTER TABLE work_runs ADD COLUMN IF NOT EXISTS sandbox_id text`
+  await db`ALTER TABLE work_runs ADD COLUMN IF NOT EXISTS cleanup_state text NOT NULL DEFAULT 'none'`
+  await db`ALTER TABLE work_runs ADD COLUMN IF NOT EXISTS failure text`
+  await db`ALTER TABLE work_runs ADD COLUMN IF NOT EXISTS started_at timestamptz`
+  await db`ALTER TABLE work_runs ADD COLUMN IF NOT EXISTS finished_at timestamptz`
+  await db`CREATE UNIQUE INDEX IF NOT EXISTS one_active_work_run ON work_runs (active) WHERE active`
+  await db`CREATE TABLE IF NOT EXISTS work_outbox (
+    run_id uuid PRIMARY KEY REFERENCES work_runs(id), created_at timestamptz NOT NULL DEFAULT now()
+  )`
+  await db`CREATE TABLE IF NOT EXISTS work_events (
+    server_seq bigserial PRIMARY KEY, run_id uuid NOT NULL REFERENCES work_runs(id),
+    epoch integer NOT NULL, producer_seq integer, event_id text NOT NULL UNIQUE,
+    type text NOT NULL, payload jsonb NOT NULL, occurred_at timestamptz NOT NULL,
+    UNIQUE (run_id, epoch, producer_seq)
+  )`
+  await db`ALTER TABLE work_events ALTER COLUMN producer_seq DROP NOT NULL`
   await db`CREATE TABLE IF NOT EXISTS work_messages (
     id uuid PRIMARY KEY, thread_id uuid NOT NULL REFERENCES work_threads(id),
     role text NOT NULL CHECK (role = 'user'), content text NOT NULL,
@@ -50,13 +69,24 @@ export async function createWorkStore(databaseUrl: string) {
 
   async function detail(id: string) {
     const [row] = await db`SELECT t.id, t.goal, t.source_url AS "sourceUrl", t.status, t.created_at AS "createdAt",
-      r.id AS "runId", r.status AS "runStatus", r.model_snapshot AS "model", h.id AS "threadId"
+      r.id AS "runId", r.status AS "runStatus", r.model_snapshot AS "model", r.epoch,
+      r.cleanup_state AS "cleanupState", r.failure, r.started_at AS "startedAt", r.finished_at AS "finishedAt", h.id AS "threadId"
       FROM work_tasks t JOIN work_runs r ON r.task_id = t.id JOIN work_threads h ON h.task_id = t.id
       WHERE t.id = ${id} AND t.owner_id = 'owner' ORDER BY r.created_at DESC, r.id DESC LIMIT 1`
     if (!row) return null
     const messages = await db`SELECT role, content FROM work_messages WHERE thread_id = ${row.threadId} ORDER BY created_at, id`
     return { id: row.id, goal: row.goal, sourceUrl: row.sourceUrl, status: row.status, createdAt: row.createdAt,
-      run: { id: row.runId, status: row.runStatus, model: typeof row.model === 'string' ? JSON.parse(row.model) : row.model }, thread: { id: row.threadId, messages } }
+      run: { id: row.runId, status: row.runStatus, model: typeof row.model === 'string' ? JSON.parse(row.model) : row.model,
+        epoch: row.epoch, cleanupState: row.cleanupState, failure: row.failure, startedAt: row.startedAt, finishedAt: row.finishedAt }, thread: { id: row.threadId, messages } }
+  }
+
+  async function events(taskId: string, after: number) {
+    const [run] = await db`SELECT r.id FROM work_tasks t JOIN work_runs r ON r.task_id = t.id
+      WHERE t.id = ${taskId} AND t.owner_id = 'owner' ORDER BY r.created_at DESC, r.id DESC LIMIT 1`
+    if (!run) return null
+    return db`SELECT server_seq AS "serverSeq", epoch, producer_seq AS "producerSeq", event_id AS "eventId",
+      type, payload, occurred_at AS "occurredAt" FROM work_events
+      WHERE run_id = ${run.id} AND server_seq > ${after} ORDER BY server_seq LIMIT 500`
   }
 
   async function list() {
@@ -84,8 +114,10 @@ export async function createWorkStore(databaseUrl: string) {
       if (!rows.length) return false
       const threadId = crypto.randomUUID()
       await sql`INSERT INTO work_threads (id, task_id) VALUES (${threadId}, ${taskId})`
+      const runId = crypto.randomUUID()
       await sql`INSERT INTO work_runs (id, task_id, status, model_snapshot, credential_ref)
-        VALUES (${crypto.randomUUID()}, ${taskId}, 'queued', ${JSON.stringify(snapshot)}::jsonb, ${connection.credentialRef})`
+        VALUES (${runId}, ${taskId}, 'queued', ${JSON.stringify(snapshot)}::jsonb, ${connection.credentialRef})`
+      await sql`INSERT INTO work_outbox (run_id) VALUES (${runId})`
       await sql`INSERT INTO work_messages (id, thread_id, role, content)
         VALUES (${crypto.randomUUID()}, ${threadId}, 'user', ${input.goal || input.sourceUrl!})`
       return true
@@ -105,5 +137,24 @@ export async function createWorkStore(databaseUrl: string) {
     return credential
   }
 
-  return { list, detail, create, resolveRunModelConnection }
+  async function authorizeModelProxy(runId: string, epoch: number, token: string, modelId: string, protocol: Protocol,
+    resolveCredential: (ref: string) => { endpoint: string; apiKey: string }) {
+    const hash = createHash('sha256').update(token).digest('hex')
+    const [row] = await db`SELECT credential_ref AS "credentialRef", model_snapshot AS "model"
+      FROM work_runs WHERE id = ${runId} AND epoch = ${epoch} AND active AND status IN ('provisioning', 'running') AND run_token_hash = ${hash}`
+    if (!row?.credentialRef) return null
+    const model = typeof row.model === 'string' ? JSON.parse(row.model) : row.model
+    if (model.id !== modelId || model.protocol !== protocol) return null
+    const credential = resolveCredential(row.credentialRef)
+    if (credential.endpoint !== model.endpoint) return null
+    return credential
+  }
+
+  async function recordModelUsage(runId: string, epoch: number, usage: { inputTokens: number | null; outputTokens: number | null; totalTokens: number | null }) {
+    await db`INSERT INTO work_events (run_id, epoch, event_id, type, payload, occurred_at)
+      SELECT ${runId}, ${epoch}, ${crypto.randomUUID()}, 'usage', ${JSON.stringify(usage)}::jsonb, now()
+      WHERE EXISTS (SELECT 1 FROM work_runs WHERE id = ${runId} AND epoch = ${epoch} AND active)`
+  }
+
+  return { list, detail, events, create, resolveRunModelConnection, authorizeModelProxy, recordModelUsage }
 }
