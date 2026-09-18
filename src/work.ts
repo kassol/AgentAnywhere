@@ -331,6 +331,8 @@ export async function createWorkStore(databaseUrl: string) {
         VALUES (${runId}, ${taskId}, 'queued', ${JSON.stringify(snapshot)}::jsonb, ${previous.credentialRef},
           ${requestId}, ${hash}, ${previous.previousReportVersionId}, ${context ? JSON.stringify(context) : null}::jsonb,
           ${checkpoint ? JSON.stringify(checkpoint) : null}::jsonb, ${previous.id})`
+      await sql`UPDATE work_messages SET run_id=${runId}
+        WHERE run_id=${previous.id} AND status='pending'`
       await sql`INSERT INTO work_outbox (run_id) VALUES (${runId})`
       await sql`UPDATE work_tasks SET status='queued' WHERE id=${taskId}`
       return true

@@ -224,8 +224,11 @@ test.skipIf(!databaseUrl)('owner creates one persisted queued work request throu
     expect(another.map(item => item.status).sort()).toEqual([201, 409])
     expect((await (await send(`/api/tasks/${task.id}`)).json()).runs).toHaveLength(3)
     const failed = await (await send('/api/tasks', 'POST', { ...body, requestId: crypto.randomUUID() })).json()
+    const retryCommandId = crypto.randomUUID()
+    await versionDb`UPDATE work_runs SET status='running', active=true, epoch=1 WHERE id=${failed.run.id}`
+    expect((await send(`/api/runs/${failed.run.id}/messages`, 'POST', { commandId: retryCommandId, kind: 'steer', content: '失败前追加的要求' })).status).toBe(201)
     const savedCheckpoint = { epoch: 1, files: [{ name: 'session.jsonl', size: 7, sha256: 'saved' }] }
-    await versionDb`UPDATE work_runs SET status='failed', epoch=1, cleanup_state='cleaned', checkpoint_ref=${JSON.stringify(savedCheckpoint)}::jsonb WHERE id=${failed.run.id}`
+    await versionDb`UPDATE work_runs SET status='failed', active=false, cleanup_state='cleaned', checkpoint_ref=${JSON.stringify(savedCheckpoint)}::jsonb WHERE id=${failed.run.id}`
     await versionDb`UPDATE work_tasks SET status='failed' WHERE id=${failed.id}`
     await send('/api/model-connection', 'PUT', { endpoint: 'https://later.example/v1', apiKey: 'later-private-secret' })
     const retryBody = { requestId: crypto.randomUUID() }
@@ -236,6 +239,13 @@ test.skipIf(!databaseUrl)('owner creates one persisted queued work request throu
     expect(retryTask.run.id).not.toBe(failed.run.id)
     expect((await send(`/api/tasks/${failed.id}/retry`, 'POST', retryBody)).status).toBe(200)
     expect((await send(`/api/tasks/${failed.id}/retry`, 'POST', { requestId: crypto.randomUUID() })).status).toBe(409)
+    await versionDb`UPDATE work_runs SET status='running', active=true, epoch=1,
+      run_token_hash=${createHash('sha256').update('retry-token').digest('hex')} WHERE id=${retryTask.run.id}`
+    const carried = await fetch(`${base}/internal/runs/${retryTask.run.id}/1/messages`, { headers: { authorization: 'Bearer retry-token' } })
+    expect(await carried.json()).toMatchObject([{ content: '失败前追加的要求' }])
+    expect((await versionDb`SELECT run_id AS "runId", command_id AS "commandId" FROM work_messages WHERE command_id=${retryCommandId}`)[0])
+      .toMatchObject({ runId: retryTask.run.id, commandId: retryCommandId })
+    await versionDb`UPDATE work_runs SET status='failed', active=false WHERE id=${retryTask.run.id}`
     const atLimit = await (await send('/api/tasks', 'POST', { ...body, requestId: crypto.randomUUID() })).json()
     const limitId = crypto.randomUUID()
     await versionDb`UPDATE work_runs SET status='waiting', epoch=1, cleanup_state='cleaned', checkpoint_ref=${JSON.stringify(savedCheckpoint)}::jsonb,
