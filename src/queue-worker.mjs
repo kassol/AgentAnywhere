@@ -258,12 +258,22 @@ async function reconcile() {
     if (run.cleanup_state === 'blocked' || run.cleanup_state === 'failed' || run.cleanup_state === 'retry_requested') continue
     let sandbox
     try {
+      const persisted = await pool.query('SELECT 1 FROM work_artifact_versions WHERE run_id=$1 LIMIT 1', [run.id])
+      if (persisted.rowCount) {
+        const terminal = await pool.query("SELECT type, payload FROM work_events WHERE run_id=$1 AND type IN ('run.finished', 'run.failed') ORDER BY server_seq DESC LIMIT 1", [run.id])
+        const last = terminal.rows[0]
+        await finish(run, { status: last?.type === 'run.finished' ? 'succeeded' : last?.type === 'run.failed' ? 'failed' : 'lost', failure: last?.type === 'run.failed' ? last.payload?.error : last?.type === 'run.finished' ? null : '执行服务中断；请手动重试' }, run.sandbox_id)
+        continue
+      }
       if (run.sandbox_id) sandbox = await Sandbox.connect({ connectionConfig: sandboxConnection, sandboxId: run.sandbox_id })
       const manifest = sandbox && await optionalFileInfo(sandbox, `${outputDir}/manifest.json`)
       const report = sandbox && await optionalFileInfo(sandbox, `${outputDir}/report.md`)
       if (manifest || report) await markSaveBlocked(run, new Error('执行服务中断，需重试保存已有报告'), { status: 'lost', failure: '执行服务中断；请手动重试' })
       else await finish(run, { status: 'lost', failure: '执行服务中断；请手动重试' }, run.sandbox_id)
-    } catch (error) { await markSaveBlocked(run, error, { status: 'lost', failure: '执行服务中断；请手动重试' }) }
+    } catch (error) {
+      if (error.statusCode === 404) await finish(run, { status: 'lost', failure: '执行中断且沙箱已失效；请手动重试' }, run.sandbox_id)
+      else await markSaveBlocked(run, error, { status: 'lost', failure: '执行服务中断；请手动重试' })
+    }
     finally { await sandbox?.close().catch(() => {}) }
   }
 }
@@ -291,7 +301,7 @@ async function renewBlocked() {
   const rows = await pool.query("SELECT id, sandbox_id FROM work_runs WHERE active AND cleanup_state IN ('blocked', 'retry_requested') AND sandbox_id IS NOT NULL")
   for (const run of rows.rows) {
     try { await manager.renewSandbox(run.sandbox_id, retentionSeconds) }
-    catch { await pool.query("UPDATE work_runs SET failure=COALESCE(failure, '') || '；沙箱续租失败，请尽快核查' WHERE id=$1", [run.id]) }
+    catch { await pool.query("UPDATE work_runs SET failure=CASE WHEN failure LIKE '%沙箱续租失败%' THEN failure ELSE COALESCE(failure, '') || '；沙箱续租失败，请尽快核查' END WHERE id=$1", [run.id]) }
   }
 }
 

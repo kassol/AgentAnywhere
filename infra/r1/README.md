@@ -14,6 +14,6 @@ docker build -t agentanywhere-r1-agent:r1-05 -f build-r1-05/infra/r1/Dockerfile.
 
 `artifacts/` 是 Web 只读、queue 可写的持久成果目录。部署脚本创建该目录并交给非 root queue 用户。成果版本记录在 PostgreSQL；文件先从沙箱复制、核验大小及 SHA-256，成功后才登记版本并回收沙箱。保存失败会保留沙箱并在工作详情提供重试；回收失败也可从同一入口重试。备份需同时包含数据库与 `artifacts/`。
 
-隔离回归使用 `test.compose.yaml`、独立 schema/数据目录和 `model-fixture.mjs`。测试镜像另用 `Dockerfile.fixture` 构建。将 `test-run.mjs` 放在远程构建目录对应位置，`TEST_PASSWORD_FILE` 指向隔离 Web 的 0600 密码文件；运行 `node infra/r1/test-run.mjs`。脚本通过公开 API 创建串行 Run，核查 Pi 工具参数和真实观察结果、流式消息、事件去重、已知/未知用量，以及 OpenSandbox SDK 按 Run ID 查不到存活沙箱。模型 HTTP fixture 是唯一可控边界；数据库、pg-boss、Pi 与 OpenSandbox 均使用真实服务。默认隔离端口为 Web `127.0.0.1:19112`、fixture `127.0.0.1:19113`。测试完删除隔离 Compose、schema、数据和本地临时镜像。
+隔离回归使用 `test.compose.yaml`、独立 schema/数据目录、可由 queue 用户写入的 `test-artifacts/` 和 `model-fixture.mjs`。测试镜像另用 `Dockerfile.fixture` 构建。将 `test-run.mjs` 放在远程构建目录对应位置，`TEST_PASSWORD_FILE` 指向隔离 Web 的 0600 密码文件；运行 `node infra/r1/test-run.mjs`。脚本通过公开 API 创建串行 Run，核查 Pi 工具参数、报告与附件 SHA-256、保存失败与重试、Web 重启后读取，以及 OpenSandbox SDK 按 Run ID 查不到存活沙箱。测试期间脚本会短暂将隔离成果目录设为只读并重启隔离 Web。模型 HTTP fixture 是唯一可控响应边界；数据库、pg-boss、Pi 与 OpenSandbox 均使用真实服务。默认隔离端口为 Web `127.0.0.1:19112`、fixture `127.0.0.1:19113`。测试完删除隔离 Compose、schema、数据和本地临时镜像。
 
-本票仅让 Chat Completions 的最小 echo 工具链路可执行。Responses、搜索、报告、追加/取消和正式浏览器接管由后续票实现；设置页按每模型已保存协议测试网关连接，不代表完整 Pi 执行已验收。
+当前链路支持 Chat Completions、Responses 和报告成果。`submit_report` 在沙箱内写固定报告与文本附件，queue 校验后提交 Artifact/Version；隔离回归在模型 HTTP 边界注入 echo 与报告调用。搜索、追加/取消和正式浏览器接管由后续票实现。

@@ -2,6 +2,8 @@ import http from 'node:http'
 
 const calls = []
 const send = (response, data) => response.write(`data: ${JSON.stringify(data)}\n\n`)
+const report = '# Fixture report\n\nSource: [Example](https://example.com/source).\n\n<script>window.reportXss = true</script>\n\n[Unsafe](javascript:alert(1))\n'
+const reportArgs = JSON.stringify({ markdown: report, attachments: [{ name: 'notes.txt', content: 'fixture attachment\n' }] })
 
 http.createServer(async (request, response) => {
   if (request.url === '/calls') {
@@ -16,6 +18,8 @@ http.createServer(async (request, response) => {
   const body = JSON.parse(raw)
   if (responses) {
     const observation = body.input?.filter(item => item.type === 'function_call_output').map(item => item.output) || []
+    const echoed = observation.some(item => item.includes('fixture observation'))
+    const submitted = observation.some(item => item.includes('报告已保存'))
     const toolResult = observation.length > 0
     calls.push({ model: body.model, protocol: 'responses', toolResult, observation, stream: body.stream, chatMessages: 'messages' in body })
     if (body.model === 'fixture-responses-error') {
@@ -33,11 +37,12 @@ http.createServer(async (request, response) => {
       return response.end()
     }
     const usage = body.model === 'fixture-responses-missing' && !toolResult ? undefined : { input_tokens: 10, output_tokens: 5, total_tokens: 15 }
-    if (!toolResult) {
-      const item = { id: 'fc_echo', type: 'function_call', call_id: 'call_echo', name: 'echo_observation', arguments: '{"text":"fixture observation"}' }
+    if (!submitted) {
+      const item = echoed
+        ? { id: 'fc_report', type: 'function_call', call_id: 'call_report', name: 'submit_report', arguments: reportArgs }
+        : { id: 'fc_echo', type: 'function_call', call_id: 'call_echo', name: 'echo_observation', arguments: '{"text":"fixture observation"}' }
       send(response, { type: 'response.output_item.added', output_index: 0, item: { ...item, arguments: '' } })
-      send(response, { type: 'response.function_call_arguments.delta', output_index: 0, delta: '{"text":"fixture' })
-      send(response, { type: 'response.function_call_arguments.delta', output_index: 0, delta: ' observation"}' })
+      send(response, { type: 'response.function_call_arguments.delta', output_index: 0, delta: item.arguments })
       send(response, { type: 'response.function_call_arguments.done', output_index: 0, arguments: item.arguments })
       send(response, { type: 'response.output_item.done', output_index: 0, item })
       send(response, { type: 'response.completed', response: { id: responseId, status: 'completed', output: [item], ...(usage ? { usage } : {}) } })
@@ -54,13 +59,17 @@ http.createServer(async (request, response) => {
     return response.end()
   }
   const observation = body.messages.filter(message => message.role === 'tool').flatMap(message => typeof message.content === 'string' ? [message.content] : message.content?.filter?.(part => part.type === 'text').map(part => part.text) || [])
+  const echoed = observation.some(item => item.includes('fixture observation'))
+  const submitted = observation.some(item => item.includes('报告已保存'))
   const toolResult = observation.length > 0
   calls.push({ model: body.model, toolResult, observation, stream: body.stream })
   response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' })
   const common = { id: `fixture-${calls.length}`, object: 'chat.completion.chunk', created: 1, model: body.model }
-  if (!toolResult) {
-    send(response, { ...common, choices: [{ index: 0, delta: { role: 'assistant', tool_calls: [{ index: 0, id: 'call_echo', type: 'function', function: { name: 'echo_observation', arguments: '' } }] }, finish_reason: null }] })
-    send(response, { ...common, choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: '{"text":"fixture observation"}' } }] }, finish_reason: null }] })
+  if (!submitted) {
+    const name = echoed ? 'submit_report' : 'echo_observation'
+    const args = echoed ? reportArgs : '{"text":"fixture observation"}'
+    send(response, { ...common, choices: [{ index: 0, delta: { role: 'assistant', tool_calls: [{ index: 0, id: echoed ? 'call_report' : 'call_echo', type: 'function', function: { name, arguments: '' } }] }, finish_reason: null }] })
+    send(response, { ...common, choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: args } }] }, finish_reason: null }] })
     send(response, { ...common, choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] })
   } else {
     if (body.model === 'fixture-slow') {

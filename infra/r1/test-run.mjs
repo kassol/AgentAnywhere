@@ -1,14 +1,18 @@
 import { readFile } from 'node:fs/promises'
 import { execFileSync } from 'node:child_process'
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 
 const base = process.env.TEST_WEB_ORIGIN || 'http://127.0.0.1:19112'
 const fixture = process.env.TEST_FIXTURE_ORIGIN || 'http://127.0.0.1:19113'
 const previousCalls = (await (await fetch(`${fixture}/calls`)).json()).length
 const password = (await readFile(process.env.TEST_PASSWORD_FILE || '/opt/agentanywhere-r1/test-password', 'utf8')).trim()
-const login = await fetch(`${base}/api/auth`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password }) })
-assert.equal(login.status, 204)
-const cookie = login.headers.get('set-cookie')?.split(';')[0]
+async function login() {
+  const response = await fetch(`${base}/api/auth`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password }) })
+  assert.equal(response.status, 204)
+  return response.headers.get('set-cookie')?.split(';')[0]
+}
+let cookie = await login()
 assert.ok(cookie)
 async function api(path, method = 'GET', body) {
   const response = await fetch(`${base}${path}`, { method, headers: { cookie, 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) })
@@ -55,33 +59,92 @@ for (const [index, item] of submitted.entries()) {
   }
   assert.ok(events.some(event => event.type === 'tool.started' && event.payload.args.text === 'fixture observation'))
   assert.ok(events.some(event => event.type === 'tool.completed' && event.payload.result === 'fixture observation' && !event.payload.isError))
+  assert.ok(events.some(event => event.type === 'tool.started' && event.payload.name === 'submit_report'))
+  assert.ok(events.some(event => event.type === 'tool.completed' && event.payload.name === 'submit_report' && !event.payload.isError))
   assert.ok(events.some(event => event.type === 'message.completed' && event.payload.content === 'The fixture observation was returned.'))
   assert.ok(events.some(event => event.type === 'run.finished'))
   assert.equal(new Set(events.map(event => event.eventId)).size, events.length)
   assert.deepEqual(await api(`/api/tasks/${item.id}/events?after=${events.at(-1).serverSeq}`), [])
   const usage = new Map(events.filter(event => event.type === 'usage').map(event => [event.payload.callId, event.payload]))
-  assert.equal(usage.size, 2)
+  assert.equal(usage.size, 3)
   assert.equal(index === 1 || index === 4 ? [...usage.values()].some(item => item.inputTokens === null) : [...usage.values()].every(item => item.inputTokens === 10), true)
 }
 const calls = (await (await fetch(`${fixture}/calls`)).json()).slice(previousCalls)
 for (const model of ['fixture-slow', 'fixture-mixed', 'fixture-split']) {
-  const pair = calls.filter(call => call.model === model)
-  assert.equal(pair.length, 2)
-  assert.deepEqual(pair.find(call => call.toolResult)?.observation, ['fixture observation'])
+  const sequence = calls.filter(call => call.model === model)
+  assert.equal(sequence.length, 3)
+  assert.ok(sequence.some(call => call.observation.includes('fixture observation')))
+  assert.ok(sequence.some(call => call.observation.some(item => item.includes('报告已保存'))))
 }
 for (const model of ['fixture-responses', 'fixture-responses-missing']) {
-  const pair = calls.filter(call => call.model === model && call.stream)
-  assert.equal(pair.length, 2)
-  assert.ok(pair.every(call => call.protocol === 'responses' && call.stream && !call.chatMessages))
-  assert.deepEqual(pair.find(call => call.toolResult)?.observation, ['fixture observation'])
+  const sequence = calls.filter(call => call.model === model && call.stream)
+  assert.equal(sequence.length, 3)
+  assert.ok(sequence.every(call => call.protocol === 'responses' && call.stream && !call.chatMessages))
+  assert.ok(sequence.some(call => call.observation.includes('fixture observation')))
+  assert.ok(sequence.some(call => call.observation.some(item => item.includes('报告已保存'))))
 }
 assert.equal(calls.filter(call => call.model === 'fixture-responses-error').length, 1)
 assert.equal(calls.filter(call => call.model === 'fixture-responses-stream-error').length, 1)
+const reportHashes = []
+for (const item of details.slice(0, 5)) {
+  const report = item.artifacts.find(artifact => artifact.kind === 'report')
+  const attachment = item.artifacts.find(artifact => artifact.kind === 'attachment')
+  assert.ok(report && attachment)
+  assert.equal((await fetch(`${base}/api/artifacts/${report.versionId}/content`)).status, 401)
+  const content = await api(`/api/artifacts/${report.versionId}/content`)
+  assert.match(content.markdown, /https:\/\/example.com\/source/)
+  assert.match(content.markdown, /<script>/)
+  for (const artifact of [report, attachment]) {
+    const download = await fetch(`${base}/api/artifacts/${artifact.versionId}/download`, { headers: { cookie } })
+    assert.equal(download.status, 200)
+    assert.match(download.headers.get('content-disposition'), /attachment/)
+    const bytes = Buffer.from(await download.arrayBuffer())
+    assert.equal(createHash('sha256').update(bytes).digest('hex'), artifact.sha256)
+    reportHashes.push([artifact.versionId, artifact.sha256])
+  }
+}
+assert.ok(details.slice(5).every(item => item.artifacts.length === 0))
+
+execFileSync('docker', ['exec', '-u', 'root', 'agentanywhere-r1-test-queue-1', 'chmod', '500', '/artifacts'])
+let blocked
+try {
+  blocked = await task('fixture-slow')
+  for (let i = 0; i < 100; i++) {
+    blocked = await api(`/api/tasks/${blocked.id}`)
+    if (blocked.run.status === 'save_failed') break
+    await new Promise(resolve => setTimeout(resolve, 500))
+  }
+  assert.equal(blocked.run.status, 'save_failed')
+  assert.equal(blocked.run.cleanupState, 'blocked')
+  assert.equal(blocked.artifacts.length, 0)
+} finally {
+  execFileSync('docker', ['exec', '-u', 'root', 'agentanywhere-r1-test-queue-1', 'chmod', '700', '/artifacts'])
+}
+assert.deepEqual(await api(`/api/tasks/${blocked.id}/cleanup-retry`, 'POST'), { retrying: true })
+for (let i = 0; i < 100; i++) {
+  blocked = await api(`/api/tasks/${blocked.id}`)
+  if (blocked.run.status === 'succeeded' && blocked.run.cleanupState === 'cleaned') break
+  await new Promise(resolve => setTimeout(resolve, 500))
+}
+assert.equal(blocked.run.status, 'succeeded')
+assert.equal(blocked.artifacts.length, 2)
+reportHashes.push(...blocked.artifacts.map(artifact => [artifact.versionId, artifact.sha256]))
 const checkSandboxes = `import { SandboxManager } from '@alibaba-group/opensandbox';
 const manager = SandboxManager.create({ connectionConfig: { domain: process.env.OPEN_SANDBOX_DOMAIN, protocol: 'http', apiKey: process.env.OPEN_SANDBOX_API_KEY, useServerProxy: true, disableMetrics: true } });
 for (const runId of process.argv.slice(1)) {
   const result = await manager.listSandboxInfos({ metadata: { runId }, pageSize: 100 });
   if (result.items.some(item => item.status.state !== 'Deleted')) throw new Error('Sandbox still active for ' + runId);
 }`
-execFileSync('docker', ['exec', 'agentanywhere-r1-test-queue-1', 'node', '--input-type=module', '-e', checkSandboxes, ...details.map(item => item.run.id)], { stdio: 'pipe' })
-console.log(JSON.stringify({ tasks: details.map(item => ({ status: item.run.status, cleanup: item.run.cleanupState })), serial: true, persistedEvents: true, usage: 'known-and-unknown', sandboxes: 'none-active' }))
+execFileSync('docker', ['exec', 'agentanywhere-r1-test-queue-1', 'node', '--input-type=module', '-e', checkSandboxes, ...details.map(item => item.run.id), blocked.run.id], { stdio: 'pipe' })
+execFileSync('docker', ['restart', 'agentanywhere-r1-test-web-1'], { stdio: 'pipe' })
+for (let i = 0; i < 40; i++) {
+  try { if ((await fetch(`${base}/login`)).ok) break } catch { /* restarting */ }
+  await new Promise(resolve => setTimeout(resolve, 500))
+}
+cookie = await login()
+for (const [versionId, expectedHash] of reportHashes) {
+  const download = await fetch(`${base}/api/artifacts/${versionId}/download`, { headers: { cookie } })
+  assert.equal(download.status, 200)
+  assert.equal(createHash('sha256').update(Buffer.from(await download.arrayBuffer())).digest('hex'), expectedHash)
+}
+console.log(JSON.stringify({ tasks: details.map(item => ({ status: item.run.status, cleanup: item.run.cleanupState })), serial: true, persistedEvents: true, artifacts: reportHashes.length, saveRetry: true, restartVerified: true, sandboxes: 'none-active' }))
