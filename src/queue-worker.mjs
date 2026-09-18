@@ -270,12 +270,12 @@ async function restoreCheckpoint(run, sandbox) {
     if (file.name !== 'session.jsonl' && file.name !== 'manifest.json' && !/^generation-[0-9a-f-]{36}\/(report\.md|attachment-[0-4]\.(txt|csv|json|md))$/.test(file.name)) throw new Error('检查点路径无效')
     const bytes = await readFile(join(root, file.name))
     if (bytes.length !== file.size || createHash('sha256').update(bytes).digest('hex') !== file.sha256) throw new Error('检查点校验失败')
-    entries.push({ path: file.name === 'session.jsonl' ? '/tmp/agentanywhere-session/checkpoint.jsonl' : `${outputDir}/${file.name}`, data: bytes, mode: 0o600 })
+    entries.push({ path: file.name === 'session.jsonl' ? '/tmp/agentanywhere-session/checkpoint.jsonl' : `${outputDir}/${file.name}`, data: bytes, mode: 600 })
   }
   if (!entries.some(item => item.path.endsWith('/checkpoint.jsonl'))) throw new Error('检查点会话缺失')
   const generationDirs = [...new Set(entries.filter(item => item.path.startsWith(`${outputDir}/generation-`)).map(item => item.path.slice(0, item.path.lastIndexOf('/'))))]
-  await sandbox.files.createDirectories([{ path: '/tmp/agentanywhere-session', mode: 0o700 }, { path: outputDir, mode: 0o700 },
-    ...generationDirs.map(path => ({ path, mode: 0o700 }))])
+  await sandbox.files.createDirectories([{ path: '/tmp/agentanywhere-session', mode: 700 }, { path: outputDir, mode: 700 },
+    ...generationDirs.map(path => ({ path, mode: 700 }))])
   await sandbox.files.writeFiles(entries)
   const [interaction] = (await pool.query("SELECT answer FROM work_interactions WHERE run_id=$1 AND epoch=$2 AND status='answered'", [run.id, checkpoint.epoch])).rows
   if (!interaction?.answer) throw new Error('检查点回答缺失')
