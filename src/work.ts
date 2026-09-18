@@ -328,8 +328,8 @@ export async function createWorkStore(databaseUrl: string) {
       const checkpoint = priorCheckpoint ? { ...priorCheckpoint, sourceRunId: priorCheckpoint.sourceRunId ?? previous.id } : null
       await sql`INSERT INTO work_runs (id, task_id, status, model_snapshot, credential_ref, request_id, request_hash,
         previous_report_version_id, context_snapshot, checkpoint_ref, retry_of_run_id)
-        VALUES (${runId}, ${taskId}, 'queued', ${JSON.stringify(snapshot)}::jsonb, ${previous.credentialRef},
-          ${requestId}, ${hash}, ${previous.previousReportVersionId}, ${context ? JSON.stringify(context) : null}::jsonb,
+        VALUES (${runId}, ${taskId}, 'queued', ${JSON.stringify(snapshot)}::text::jsonb, ${previous.credentialRef},
+          ${requestId}, ${hash}, ${previous.previousReportVersionId}, ${context ? JSON.stringify(context) : null}::text::jsonb,
           ${checkpoint ? JSON.stringify(checkpoint) : null}::text::jsonb, ${previous.id})`
       await sql`UPDATE work_messages SET run_id=${runId}
         WHERE run_id=${previous.id} AND status='pending'`

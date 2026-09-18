@@ -228,7 +228,9 @@ test.skipIf(!databaseUrl)('owner creates one persisted queued work request throu
     await versionDb`UPDATE work_runs SET status='running', active=true, epoch=1 WHERE id=${failed.run.id}`
     expect((await send(`/api/runs/${failed.run.id}/messages`, 'POST', { commandId: retryCommandId, kind: 'steer', content: '失败前追加的要求' })).status).toBe(201)
     const savedCheckpoint = { epoch: 1, files: [{ name: 'session.jsonl', size: 7, sha256: 'saved' }] }
-    await versionDb`UPDATE work_runs SET status='failed', active=false, cleanup_state='cleaned', checkpoint_ref=${JSON.stringify(savedCheckpoint)}::jsonb WHERE id=${failed.run.id}`
+    const savedContext = { messages: ['已有资料'], instruction: '修改报告' }
+    await versionDb`UPDATE work_runs SET status='failed', active=false, cleanup_state='cleaned', checkpoint_ref=${JSON.stringify(savedCheckpoint)}::jsonb,
+      context_snapshot=${JSON.stringify(savedContext)}::text::jsonb WHERE id=${failed.run.id}`
     await versionDb`UPDATE work_tasks SET status='failed' WHERE id=${failed.id}`
     await send('/api/model-connection', 'PUT', { endpoint: 'https://later.example/v1', apiKey: 'later-private-secret' })
     const retryBody = { requestId: crypto.randomUUID() }
@@ -237,7 +239,9 @@ test.skipIf(!databaseUrl)('owner creates one persisted queued work request throu
     const retryTask = await retried.json()
     expect(retryTask).toMatchObject({ id: failed.id, status: 'queued', run: { status: 'queued', retryOfRunId: failed.run.id, model: { endpoint: 'https://replacement.example/v1' } }, runs: [{ id: failed.run.id }, { id: retryTask.run.id }] })
     expect(retryTask.run.id).not.toBe(failed.run.id)
-    expect((await versionDb`SELECT jsonb_typeof(checkpoint_ref) AS type FROM work_runs WHERE id=${retryTask.run.id}`)[0].type).toBe('object')
+    expect((await versionDb`SELECT jsonb_typeof(model_snapshot) AS model_type,
+      jsonb_typeof(context_snapshot) AS context_type, jsonb_typeof(checkpoint_ref) AS checkpoint_type
+      FROM work_runs WHERE id=${retryTask.run.id}`)[0]).toMatchObject({ model_type: 'object', context_type: 'object', checkpoint_type: 'object' })
     expect((await send(`/api/tasks/${failed.id}/retry`, 'POST', retryBody)).status).toBe(200)
     expect((await send(`/api/tasks/${failed.id}/retry`, 'POST', { requestId: crypto.randomUUID() })).status).toBe(409)
     await versionDb`UPDATE work_runs SET status='running', active=true, epoch=1,
