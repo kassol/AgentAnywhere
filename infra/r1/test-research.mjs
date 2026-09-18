@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { lookup } from 'node:dns/promises'
+import { execFileSync } from 'node:child_process'
 
 const base = process.env.TEST_WEB_ORIGIN || 'http://127.0.0.1:19112'
 const fixture = process.env.TEST_FIXTURE_ORIGIN || 'http://127.0.0.1:19113'
@@ -62,4 +63,12 @@ await waitFor(async () => {
 })
 const controlEvents = await api(`/api/tasks/${control.id}/events`)
 assert.ok(controlEvents.some(event => event.type === 'tool.completed' && event.payload.name === 'open_public_page' && event.payload.isError && /控制面/.test(event.payload.result)))
-console.log(JSON.stringify({ theme: 'succeeded', sourceUrl: 'succeeded', privateUrl: 'rejected', controlIp: 'rejected', searchPendingObserved: true, reportPersisted: true }))
+const runs = [theme, url, rejected, control].map(item => item.run.id)
+const checkSandboxes = `import { SandboxManager } from '@alibaba-group/opensandbox';
+const manager = SandboxManager.create({ connectionConfig: { domain: process.env.OPEN_SANDBOX_DOMAIN, protocol: 'http', apiKey: process.env.OPEN_SANDBOX_API_KEY, useServerProxy: true, disableMetrics: true } });
+for (const runId of process.argv.slice(1)) {
+  const result = await manager.listSandboxInfos({ metadata: { runId }, pageSize: 100 });
+  if (result.items.some(item => item.status.state !== 'Deleted')) throw new Error('Sandbox still active for ' + runId);
+}`
+execFileSync('docker', ['exec', 'agentanywhere-r1-test-queue-1', 'node', '--input-type=module', '-e', checkSandboxes, ...runs], { stdio: 'pipe' })
+console.log(JSON.stringify({ tasks: [theme.id, url.id, rejected.id, control.id], runs, theme: 'succeeded', sourceUrl: 'succeeded', privateUrl: 'rejected', controlIp: 'rejected', searchPendingObserved: true, reportPersisted: true, sandboxes: 'none-active' }))

@@ -33,8 +33,6 @@ const researchServer = http.createServer(async (request, response) => {
   try {
     const supplied = request.headers['x-run-token']
     if (typeof supplied !== 'string' || supplied.length > 128) throw new Error('Unauthorized')
-    const valid = await pool.query('SELECT 1 FROM work_runs WHERE id=$1 AND epoch=$2 AND active AND run_token_hash=$3', [match[1], Number(match[2]), createHash('sha256').update(supplied).digest('hex')])
-    if (!valid.rowCount) throw new Error('Unauthorized')
     let body = ''
     request.setEncoding('utf8')
     for await (const chunk of request) {
@@ -43,6 +41,8 @@ const researchServer = http.createServer(async (request, response) => {
     }
     const input = JSON.parse(body)
     if (!input || typeof input !== 'object' || Array.isArray(input) || typeof input[match[3] === 'search' ? 'query' : 'url'] !== 'string') throw new Error('工具参数无效')
+    const valid = await pool.query('SELECT 1 FROM work_runs WHERE id=$1 AND epoch=$2 AND active AND run_token_hash=$3', [match[1], Number(match[2]), createHash('sha256').update(supplied).digest('hex')])
+    if (!valid.rowCount) throw new Error('Unauthorized')
     const result = match[3] === 'search' ? await searchWeb(input.query, searchOrigin, controller.signal) : await openPublicPage(input.url, publicHost, controller.signal)
     response.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' })
     response.end(JSON.stringify(result))
