@@ -144,7 +144,7 @@ http.createServer(async (request, response) => {
     response.writeHead(503, { 'content-type': 'application/json' })
     return response.end(JSON.stringify({ error: { message: 'fixture transient failure', type: 'server_error' } }))
   }
-  if (body.model === 'fixture-interrupt' && !interrupted.has(body.model)) {
+  if (body.model === 'fixture-interrupt' && echoed && !interrupted.has(body.model)) {
     interrupted.add(body.model)
     response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' })
     return hold(response, { id: `fixture-${calls.length}`, object: 'chat.completion.chunk', created: 1, model: body.model,
