@@ -38,9 +38,9 @@ function send(response, status, body) {
   response.end(JSON.stringify(body))
 }
 
-async function execute({ goal, model, proxyBase }) {
+async function execute({ goal, model, proxyBase, toolBase }) {
   try {
-    if (typeof goal !== 'string' || !goal || !model || typeof model.id !== 'string' || !['chat-completions', 'responses'].includes(model.protocol) || !/^http:\/\/[a-z0-9.-]+(?::\d+)?\/internal\/runs\/[0-9a-f-]+\/\d+\/v1$/i.test(proxyBase)) throw new Error('Run 配置无效')
+    if (typeof goal !== 'string' || !goal || !model || typeof model.id !== 'string' || !['chat-completions', 'responses'].includes(model.protocol) || !/^http:\/\/[a-z0-9.-]+(?::\d+)?\/internal\/runs\/[0-9a-f-]+\/\d+\/v1$/i.test(proxyBase) || !/^http:\/\/[a-z0-9.-]+(?::\d+)?\/internal\/research\/[0-9a-f-]+\/\d+$/i.test(toolBase)) throw new Error('Run 配置无效')
     const runtime = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false })
     runtime.registerProvider('agentanywhere', {
       baseUrl: proxyBase, api: model.protocol === 'responses' ? 'openai-responses' : 'openai-completions', authHeader: true,
@@ -51,12 +51,21 @@ async function execute({ goal, model, proxyBase }) {
     const selected = runtime.getModel('agentanywhere', model.id)
     if (!selected) throw new Error('Pi 模型注册失败')
     const created = await createAgentSession({
-      model: selected, modelRuntime: runtime, sessionManager: SessionManager.inMemory(), tools: ['echo_observation', 'submit_report'],
+      model: selected, modelRuntime: runtime, sessionManager: SessionManager.inMemory(), tools: ['echo_observation', 'search_web', 'open_public_page', 'submit_report'],
       customTools: [{
         name: 'echo_observation', label: 'Echo observation', description: 'Return a supplied test observation without external access.',
         parameters: Type.Object({ text: Type.String() }),
         execute: async (_id, params) => ({ content: [{ type: 'text', text: params.text }], details: {} }),
-      }, {
+      }, ...[['search_web', 'Search web', 'Search public pages through the private SearXNG service. Results are snippets, not verified page bodies.', 'search', Type.Object({ query: Type.String() })],
+        ['open_public_page', 'Open public page', 'Read the HTTP text of a public URL. Login-only, non-text and JavaScript-only pages may fail.', 'open', Type.Object({ url: Type.String() })]].map(([name, label, description, path, parameters]) => ({
+        name, label, description, parameters,
+        execute: async (_id, params, signal) => {
+          const response = await fetch(`${toolBase}/${path}`, { method: 'POST', headers: { 'x-run-token': token, 'content-type': 'application/json' }, body: JSON.stringify(params), signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(35_000)]) : AbortSignal.timeout(35_000) })
+          const data = await response.json()
+          if (!response.ok) throw new Error(data.error || '资料读取失败')
+          return { content: [{ type: 'text', text: JSON.stringify(data) }], details: {} }
+        },
+      })), {
         name: 'submit_report', label: 'Submit report', description: 'Save the final Markdown report and optional plain text attachments.',
         parameters: Type.Object({ markdown: Type.String(), attachments: Type.Optional(Type.Array(Type.Object({ name: Type.String(), content: Type.String() }), { maxItems: 5 })) }),
         execute: async (_id, params) => {
@@ -93,7 +102,7 @@ async function execute({ goal, model, proxyBase }) {
         result: event.result?.content?.filter(part => part.type === 'text').map(part => part.text).join('') ?? '', isError: event.isError })
     })
     emit('worker.ready')
-    await session.prompt(`${goal}\n\n完成后调用 submit_report 保存 Markdown 报告。只引用实际获得的来源；目前没有搜索工具，无法核查的事实须写明。最后简短回复已提交。测试要求使用 echo_observation 时可以调用。`)
+    await session.prompt(`${goal}\n\n可以用 search_web 查询主题，用 open_public_page 读取指定公开链接或搜索结果。搜索摘要与网页正文是不同来源；报告引用实际 URL，注明搜索引擎部分失败、不可读页面和未核查推断。完成后调用 submit_report 保存 Markdown 报告，最后简短回复已提交。测试要求使用 echo_observation 时可以调用。`)
     await session.waitForIdle()
     const last = [...session.messages].reverse().find(message => message.role === 'assistant')
     if (!last || last.stopReason === 'error' || last.stopReason === 'aborted') throw new Error(last?.errorMessage || '模型执行未完成')

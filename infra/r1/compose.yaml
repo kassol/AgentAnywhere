@@ -39,7 +39,7 @@ services:
     image: agentanywhere-r1-queue:r1-05
     container_name: agentanywhere-r1-queue
     restart: unless-stopped
-    env_file: [./database.env, ./opensandbox.env]
+    env_file: [./database.env, ./opensandbox.env, ./service.env]
     environment:
       AGENT_IMAGE: agentanywhere-r1-agent:r1-05
       OPEN_SANDBOX_DOMAIN: opensandbox:8080
@@ -60,7 +60,7 @@ services:
     pids_limit: 128
     mem_limit: 512m
     cpus: 1.0
-    networks: [default, sandbox]
+    networks: [default, sandbox, search]
   postgres:
     image: postgres:18.6-alpine@sha256:d3e1620b530c944afa6e887d22eb899824da68e19c52024bf98f5220c88a65b2
     container_name: agentanywhere-r1-postgres
@@ -90,3 +90,6 @@ networks:
   sandbox:
     external: true
     name: agentanywhere-r1-sandbox
+  search:
+    external: true
+    name: agentanywhere-r1-search

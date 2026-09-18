@@ -15,7 +15,7 @@ React/TypeScript、Bun、PostgreSQL、Node.js 24.21、pg-boss 12.26.3、Pi 0.85.
 - `infra/w0/`：独立基线验证脚本与运行配置；执行证据位于 `docs/evidence/w0/`。
 - `infra/r1/`：R1 镜像、队列与沙箱运行配置。
 - `infra/r1/search/`：cc-la 独立私有 SearXNG 的配置与复现步骤。
-- `src/server.ts`：Web/API 服务与登录鉴权；`src/model-connection.ts`：单套模型连接配置与发现；`src/work.ts`：工作、事件和成果版本持久化；`src/queue-worker.mjs`：Node 队列、成果复制与沙箱生命周期；`src/agent-worker.mjs`：沙箱内 Pi；`src/web/`：精简 Web；`docs/evidence/`：实施验证。
+- `src/server.ts`：Web/API 服务与登录鉴权；`src/model-connection.ts`：单套模型连接配置与发现；`src/work.ts`：工作、事件和成果版本持久化；`src/queue-worker.mjs`：Node 队列、资料工具入口、成果复制与沙箱生命周期；`src/research-tools.mjs`：受控搜索与公开网页读取；`src/agent-worker.mjs`：沙箱内 Pi；`src/web/`：精简 Web；`docs/evidence/`：实施验证。
 - `CONTEXT.md`：领域定义。
 
 ## 常用命令
@@ -61,3 +61,4 @@ React/TypeScript、Bun、PostgreSQL、Node.js 24.21、pg-boss 12.26.3、Pi 0.85.
 - 2026-09-18：加入 R1-05 Chat Completions 最小执行、队列、沙箱与事件持久化。
 - 2026-09-18：加入 R1-06 Responses 执行与双协议隔离验收。
 - 2026-09-18：加入 R1-07 报告成果保存、校验、阅读、下载与失败回收重试。
+- 2026-09-18：加入 R1-08 受控搜索与公开网页读取工具。
