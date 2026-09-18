@@ -37,7 +37,7 @@ W0 原生 Craft 页面继续作为独立验证环境。正式 Web 按本文件�
 
 - `packages/server-core/src/model-fetchers/index.ts:76` 对自定义兼容端点直接跳过模型发现。
 - `packages/pi-agent-server/src/custom-endpoint-models.ts:69` 使用默认能力、限制及零价格；它们不能作为真实网关能力或账单的证据。
-- `packages/pi-agent-server/src/index.ts:483` 将自定义协议交给 Pi registry；现有界面与配置校验仍需扩展 Responses，全链路仍待验收。
+- `packages/pi-agent-server/src/index.ts:483` 将自定义协议交给 Pi registry；该上游提交时界面与配置校验尚未覆盖 Responses。AgentAnywhere 的双协议执行验收见 [R1-05](evidence/r1-05.md) 与 [R1-06](evidence/r1-06.md)。
 - `packages/pi-agent-server/src/tools/search/resolve-provider.ts:62` 的 OpenAI 搜索固定使用官方 API；不可直接将 sub2api 凭证沿用到该路径。首版搜索凭证独立。
 
 [models.dev 官方 Schema](https://github.com/anomalyco/models.dev/blob/dev/packages/core/src/schema.ts) 包含限制、模态、工具、推理及供应商价格等信息，可用于明确身份匹配后的补全。目录能力与网关实测能力分别标记，参考价格不作为 sub2api 实际账单。来源接口、更新时间与缓存状态需可追溯。cc-la 上的模型目录已实际刷新，`gpt-6-astra` 的字段来源与界面验收见 [R1-03](evidence/r1-03.md)；模型调用和用量验证见 [R1-05](evidence/r1-05.md)。

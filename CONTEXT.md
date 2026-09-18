@@ -1,6 +1,6 @@
 # AgentAnywhere 领域定义
 
-状态：从 [PRD 第 4 节](docs/PRD.md#4-核心领域模型) 提取的设计基线。Task、Thread 和 Run 的首次创建、Chat Completions 最小执行与事件持久化已实现，并经真实 PostgreSQL、pg-boss、Pi 和 OpenSandbox 隔离回归验证；等待、重试、审批、成果等生命周期仍属设计要求。术语变更时同步维护 PRD 对应定义。
+状态：从 [PRD 第 4 节](docs/PRD.md#4-核心领域模型) 提取的设计基线。Task、Thread 和 Run 的首次创建、Chat Completions 与 Responses 最小执行及事件持久化已实现，并经真实 PostgreSQL、pg-boss、Pi 和 OpenSandbox 隔离回归验证；等待、重试、审批、成果等生命周期仍属设计要求。术语变更时同步维护 PRD 对应定义。
 
 ## 产品
 

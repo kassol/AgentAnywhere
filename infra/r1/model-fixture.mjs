@@ -15,7 +15,7 @@ http.createServer(async (request, response) => {
   for await (const chunk of request) raw += chunk
   const body = JSON.parse(raw)
   if (responses) {
-    const observation = body.input?.filter(item => item.type === 'function_call_output').map(item => item.output) || []
+    const observation = Array.isArray(body.input) ? body.input.filter(item => item.type === 'function_call_output').map(item => item.output) : []
     const toolResult = observation.length > 0
     calls.push({ model: body.model, protocol: 'responses', toolResult, observation, stream: body.stream, chatMessages: 'messages' in body })
     if (body.model === 'fixture-responses-error') {
