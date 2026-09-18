@@ -2,24 +2,45 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 export type Protocol = 'chat-completions' | 'responses'
-export type ModelSelection = {
-  id: string
-  protocol: Protocol
-  contextWindow?: number
-  maxTokens?: number
-  input?: ('text' | 'image')[]
-  reasoning?: boolean
-  tools?: boolean
-  inputPrice?: number
-  outputPrice?: number
+type Input = 'text' | 'image'
+type Field = 'contextWindow' | 'maxTokens' | 'input' | 'reasoning' | 'tools' | 'inputPrice' | 'outputPrice'
+type Metadata = { contextWindow?: number; maxTokens?: number; input?: Input[]; inputModalities?: string[]; reasoning?: boolean; tools?: boolean; inputPrice?: number; outputPrice?: number; priceNote?: string }
+export type ModelSelection = Metadata & { id: string; protocol: Protocol; catalogId?: string; catalogMatch?: string; overrides?: Partial<Metadata>; sources?: Partial<Record<Field, { source: 'manual' | 'gateway' | 'models.dev'; updatedAt: string }>> }
+type CatalogModel = { id: string; name: string; ownedBy?: string; type?: string; created?: number; metadata?: Metadata }
+type Discovery = { status: 'never' | 'ok' | 'stale' | 'unauthorized' | 'timeout' | 'empty' | 'error'; updatedAt?: string; successAt?: string }
+type Directory = { status: 'never' | 'ok' | 'stale' | 'timeout' | 'error'; updatedAt?: string; successAt?: string; models: Record<string, Metadata> }
+type StoredModel = { id: string; protocol: Protocol; catalogId?: string; overrides: Partial<Metadata>; updatedAt?: string }
+type Stored = { endpoint: string; apiKey: string; catalog: CatalogModel[]; catalogSourceEndpoint: string | null; catalogCurrent?: boolean; models: StoredModel[]; defaultModel: string | null; discovery: Discovery; directory?: Directory }
+
+const fields: Field[] = ['contextWindow', 'maxTokens', 'input', 'reasoning', 'tools', 'inputPrice', 'outputPrice']
+const initial: Stored = { endpoint: '', apiKey: '', catalog: [], catalogSourceEndpoint: null, models: [], defaultModel: null, discovery: { status: 'never' }, directory: { status: 'never', models: {} } }
+const positive = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : undefined
+const price = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined
+const boolean = (value: unknown) => typeof value === 'boolean' ? value : undefined
+const input = (value: unknown): Input[] | undefined => {
+  if (!Array.isArray(value)) return undefined
+  const supported = value.filter((item): item is Input => item === 'text' || item === 'image')
+  return supported.length ? [...new Set(supported)] : undefined
 }
-type CatalogModel = { id: string; name: string; ownedBy?: string; type?: string; created?: number }
-type Discovery = { status: 'never' | 'ok' | 'stale' | 'unauthorized' | 'timeout' | 'empty' | 'error'; updatedAt?: string }
-type Stored = { endpoint: string; apiKey: string; catalog: CatalogModel[]; catalogSourceEndpoint: string | null; models: ModelSelection[]; defaultModel: string | null; discovery: Discovery }
+function metadata(value: Record<string, unknown>): Metadata {
+  const modalities = value.modalities as Record<string, unknown> | undefined
+  const limits = value.limit as Record<string, unknown> | undefined
+  const cost = value.cost as Record<string, unknown> | undefined
+  const rawInput = Array.isArray(modalities?.input) ? modalities.input : value.input
+  return {
+    ...(positive(value.context_window ?? limits?.context) !== undefined ? { contextWindow: positive(value.context_window ?? limits?.context) } : {}),
+    ...(positive(value.max_output_tokens ?? limits?.output) !== undefined ? { maxTokens: positive(value.max_output_tokens ?? limits?.output) } : {}),
+    ...(input(rawInput) ? { input: input(rawInput) } : {}),
+    ...(Array.isArray(rawInput) && rawInput.every(x => typeof x === 'string') ? { inputModalities: rawInput } : {}),
+    ...(boolean(value.reasoning) !== undefined ? { reasoning: boolean(value.reasoning) } : {}),
+    ...(boolean(value.tool_call ?? value.tools) !== undefined ? { tools: boolean(value.tool_call ?? value.tools) } : {}),
+    ...(price(cost?.input ?? value.input_price) !== undefined ? { inputPrice: price(cost?.input ?? value.input_price) } : {}),
+    ...(price(cost?.output ?? value.output_price) !== undefined ? { outputPrice: price(cost?.output ?? value.output_price) } : {}),
+    ...(cost?.tiers || cost?.context_over_200k ? { priceNote: '目录含阶梯价格；显示基础参考价' } : {}),
+  }
+}
 
-const initial: Stored = { endpoint: '', apiKey: '', catalog: [], catalogSourceEndpoint: null, models: [], defaultModel: null, discovery: { status: 'never' } }
-
-export function createModelConnectionStore(dataDir: string, timeoutMs = 10_000) {
+export function createModelConnectionStore(dataDir: string, timeoutMs = 10_000, directoryUrl = 'https://models.dev/api.json') {
   const path = join(dataDir, 'model-connection.json')
   let state: Stored
   let pending = Promise.resolve()
@@ -30,11 +51,36 @@ export function createModelConnectionStore(dataDir: string, timeoutMs = 10_000) 
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
       state = structuredClone(initial)
     }
+    state.directory ??= structuredClone(initial.directory!)
+    state.catalogCurrent ??= state.discovery.status === 'ok' && state.catalogSourceEndpoint === state.endpoint
+    // R1-02 saved effective fields directly; those values were entered by the owner.
+    state.models = state.models.map(model => {
+      const legacy = model as StoredModel & Metadata
+      return { ...model, overrides: model.overrides ?? Object.fromEntries(fields.filter(field => legacy[field] !== undefined).map(field => [field, legacy[field]])) }
+    })
   }
 
   function visible() {
-    const { apiKey, ...rest } = state
-    return { ...rest, hasCredential: apiKey.length > 0 }
+    const { apiKey, models, directory, catalogCurrent, ...rest } = state
+    const selected: ModelSelection[] = models.map(model => {
+      const gateway = catalogCurrent && state.catalogSourceEndpoint === state.endpoint ? state.catalog.find(entry => entry.id === model.id) : undefined
+      const catalogId = model.catalogId ?? (gateway?.ownedBy && directory?.models[`${gateway.ownedBy}/${model.id}`] ? `${gateway.ownedBy}/${model.id}` : undefined)
+      const source = catalogId ? directory?.models[catalogId] : undefined
+      const result: ModelSelection = { id: model.id, protocol: model.protocol, ...(model.catalogId ? { catalogId: model.catalogId } : {}), ...(source ? { catalogMatch: catalogId } : {}), overrides: model.overrides, sources: {} }
+      for (const field of fields) {
+        const candidate = model.overrides[field] !== undefined ? [model.overrides[field], 'manual', model.updatedAt] as const
+          : gateway?.metadata?.[field] !== undefined ? [gateway.metadata[field], 'gateway', state.discovery.successAt] as const
+          : source?.[field] !== undefined ? [source[field], 'models.dev', directory?.successAt] as const : undefined
+        if (candidate) {
+          Object.assign(result, { [field]: candidate[0] })
+          result.sources![field] = { source: candidate[1], updatedAt: candidate[2] ?? '' }
+        }
+      }
+      if (model.overrides.input === undefined && source?.inputModalities) result.inputModalities = source.inputModalities
+      if (source?.priceNote) result.priceNote = source.priceNote
+      return result
+    })
+    return { ...rest, models: selected, directory: { status: directory!.status, updatedAt: directory!.updatedAt, successAt: directory!.successAt, cachedModels: Object.keys(directory!.models).length }, hasCredential: apiKey.length > 0 }
   }
 
   function update(change: (current: Stored) => Stored) {
@@ -70,6 +116,7 @@ export function createModelConnectionStore(dataDir: string, timeoutMs = 10_000) 
       const changed = endpoint !== current.endpoint || nextKey !== current.apiKey
       return {
         ...current, endpoint, apiKey: nextKey,
+        catalogCurrent: changed ? false : current.catalogCurrent,
         catalogSourceEndpoint: current.catalogSourceEndpoint ?? (current.catalog.length ? current.endpoint : null),
         discovery: changed ? { ...current.discovery, status: current.catalog.length || current.models.length ? 'stale' : 'never' } : current.discovery,
       }
@@ -80,33 +127,28 @@ export function createModelConnectionStore(dataDir: string, timeoutMs = 10_000) 
     if (!body || typeof body !== 'object') throw new Error('无效的模型配置')
     const value = body as Record<string, unknown>
     if (!Array.isArray(value.models) || value.models.length > 200) throw new Error('模型数量无效')
-    const models: ModelSelection[] = value.models.map(raw => {
+    const models: StoredModel[] = value.models.map(raw => {
       if (!raw || typeof raw !== 'object') throw new Error('模型配置无效')
       const item = raw as Record<string, unknown>
       if (typeof item.id !== 'string' || !item.id.trim() || item.id.length > 200 || !['chat-completions', 'responses'].includes(String(item.protocol))) throw new Error('模型 ID 或协议无效')
-      const model: ModelSelection = { id: item.id.trim(), protocol: item.protocol as Protocol }
-      for (const field of ['contextWindow', 'maxTokens', 'inputPrice', 'outputPrice'] as const) {
-        const number = item[field]
-        if (number === undefined || number === null || number === '') continue
-        if (typeof number !== 'number' || !Number.isFinite(number) || number < 0 || (field !== 'inputPrice' && field !== 'outputPrice' && (!Number.isInteger(number) || number === 0))) throw new Error(`${field} 无效`)
-        model[field] = number
+      if (item.catalogId !== undefined && (typeof item.catalogId !== 'string' || !/^[a-z0-9_-]+\/[a-zA-Z0-9._:/-]+$/.test(item.catalogId))) throw new Error('目录映射无效')
+      const rawOverrides = item.overrides === undefined ? item : item.overrides
+      if (!rawOverrides || typeof rawOverrides !== 'object' || Array.isArray(rawOverrides)) throw new Error('人工覆盖无效')
+      const overrides: Partial<Metadata> = {}
+      for (const field of fields) {
+        const v = (rawOverrides as Record<string, unknown>)[field]
+        if (v === undefined || v === null || v === '') continue
+        if (field === 'contextWindow' || field === 'maxTokens') { if (positive(v) === undefined) throw new Error(`${field} 无效`); Object.assign(overrides, { [field]: v }) }
+        else if (field === 'inputPrice' || field === 'outputPrice') { if (price(v) === undefined) throw new Error(`${field} 无效`); Object.assign(overrides, { [field]: v }) }
+        else if (field === 'input') { if (!input(v)) throw new Error('输入模态无效'); overrides.input = input(v) }
+        else { if (typeof v !== 'boolean') throw new Error(`${field} 无效`); Object.assign(overrides, { [field]: v }) }
       }
-      if (item.input !== undefined) {
-        if (!Array.isArray(item.input) || item.input.length === 0 || item.input.some(x => x !== 'text' && x !== 'image')) throw new Error('输入模态无效')
-        model.input = [...new Set(item.input)] as ('text' | 'image')[]
-      }
-      for (const field of ['reasoning', 'tools'] as const) {
-        if (item[field] !== undefined) {
-          if (typeof item[field] !== 'boolean') throw new Error(`${field} 无效`)
-          model[field] = item[field] as boolean
-        }
-      }
-      return model
+      return { id: item.id.trim(), protocol: item.protocol as Protocol, ...(item.catalogId ? { catalogId: item.catalogId as string } : {}), overrides }
     })
     if (new Set(models.map(model => model.id)).size !== models.length) throw new Error('模型 ID 重复')
     const defaultModel = value.defaultModel
     if (defaultModel !== null && (typeof defaultModel !== 'string' || !models.some(model => model.id === defaultModel))) throw new Error('默认模型必须已选择')
-    return update(current => ({ ...current, models, defaultModel: defaultModel as string | null }))
+    return update(current => ({ ...current, models: models.map(model => ({ ...model, updatedAt: new Date().toISOString() })), defaultModel: defaultModel as string | null }))
   }
 
   async function refresh() {
@@ -115,22 +157,17 @@ export function createModelConnectionStore(dataDir: string, timeoutMs = 10_000) 
     let status: Discovery['status'] = 'error'
     let catalog: CatalogModel[] | undefined
     try {
-      const response = await fetch(`${endpoint}/models`, {
-        headers: { authorization: `Bearer ${apiKey}` },
-        redirect: 'manual', signal: AbortSignal.timeout(timeoutMs),
-      })
+      const response = await fetch(`${endpoint}/models`, { headers: { authorization: `Bearer ${apiKey}` }, redirect: 'manual', signal: AbortSignal.timeout(timeoutMs) })
       if (response.status === 401) status = 'unauthorized'
       else if (response.ok) {
         const data = await response.json() as { data?: unknown }
         if (!Array.isArray(data.data)) throw new Error('invalid models response')
         catalog = data.data.filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === 'object' && typeof entry.id === 'string' && !!entry.id)
-          .map(entry => ({
-            id: entry.id as string,
-            name: typeof entry.display_name === 'string' ? entry.display_name : entry.id as string,
+          .map(entry => ({ id: entry.id as string, name: typeof entry.display_name === 'string' ? entry.display_name : entry.id as string,
             ...(typeof entry.owned_by === 'string' ? { ownedBy: entry.owned_by } : {}),
             ...(typeof entry.type === 'string' ? { type: entry.type } : {}),
             ...(typeof entry.created === 'number' && Number.isFinite(entry.created) ? { created: entry.created } : {}),
-          }))
+            metadata: metadata(entry) }))
         status = catalog.length ? 'ok' : 'empty'
       }
     } catch (error) {
@@ -140,10 +177,37 @@ export function createModelConnectionStore(dataDir: string, timeoutMs = 10_000) 
     await update(current => {
       if (current.endpoint !== endpoint || current.apiKey !== apiKey) return current
       applied = true
-      return { ...current, ...(status === 'ok' ? { catalog, catalogSourceEndpoint: endpoint } : {}), discovery: { status, updatedAt: new Date().toISOString() } }
+      const now = new Date().toISOString()
+      return { ...current, ...(status === 'ok' ? { catalog, catalogSourceEndpoint: endpoint, catalogCurrent: true } : {}), discovery: { ...current.discovery, status, updatedAt: now, ...(status === 'ok' ? { successAt: now } : {}) } }
     })
     return applied ? status : 'stale'
   }
 
-  return { load, visible, connection, selections, refresh }
+  async function refreshDirectory() {
+    let status: Directory['status'] = 'error'
+    let models: Directory['models'] | undefined
+    try {
+      const response = await fetch(directoryUrl, { redirect: 'manual', signal: AbortSignal.timeout(timeoutMs) })
+      if (response.ok) {
+        const data = await response.json() as Record<string, { models?: Record<string, Record<string, unknown>> }>
+        if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('invalid directory')
+        models = {}
+        for (const [supplier, group] of Object.entries(data)) {
+          if (!group || typeof group !== 'object' || !group.models || typeof group.models !== 'object') continue
+          for (const [id, entry] of Object.entries(group.models)) if (entry && typeof entry === 'object') models[`${supplier}/${id}`] = metadata(entry)
+        }
+        if (!Object.keys(models).length) throw new Error('empty directory')
+        status = 'ok'
+      }
+    } catch (error) {
+      if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) status = 'timeout'
+    }
+    await update(current => {
+      const now = new Date().toISOString()
+      return { ...current, directory: { ...current.directory!, ...(status === 'ok' ? { models, successAt: now } : {}), status, updatedAt: now } }
+    })
+    return status
+  }
+
+  return { load, visible, connection, selections, refresh, refreshDirectory }
 }

@@ -77,3 +77,102 @@ test('model settings survive restart; failed refresh retains selected model and 
     await rm(dataDir, { recursive: true, force: true })
   }
 })
+
+test('owner sees field sources, can revoke overrides and explicit alias mapping, and keeps the last directory cache', async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'agentanywhere-metadata-'))
+  let directoryStatus = 200
+  const directory = Bun.serve({ port: 0, fetch() {
+    return Response.json({
+      openai: { models: {
+        'gpt-6-astra': { limit: { context: 1050000, output: 128000 }, modalities: { input: ['text', 'image', 'pdf'] }, reasoning: true, tool_call: true, cost: { input: 10, output: 50 } },
+      } },
+      other: { models: { 'gpt-6-astra': { limit: { context: 2000 } } } },
+    }, { status: directoryStatus })
+  } })
+  let gatewayContext: number | undefined = 300000
+  const gateway = Bun.serve({ port: 0, fetch() {
+    return Response.json({ data: [
+      { id: 'gpt-6-astra', owned_by: 'openai', context_window: gatewayContext, tool_call: false, input_price: 0 },
+      { id: 'astra-alias', owned_by: 'openai' },
+      { id: 'gpt-6-astr', owned_by: 'openai' },
+      { id: 'unknown-owner', owned_by: 'other' },
+    ] })
+  } })
+  const password = 'test-password-12345'
+  let app = await startServer({ password, port: 0, dataDir, directoryUrl: directory.url.origin })
+  let base = app.url.origin
+  async function login() {
+    const response = await fetch(`${base}/api/auth`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password }) })
+    return response.headers.get('set-cookie')!
+  }
+  let cookie = await login()
+  const request = (path: string, method = 'GET', body?: unknown) => fetch(`${base}${path}`, { method, headers: { cookie, 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) })
+  const get = async () => await (await request('/api/model-connection')).json() as { models: Record<string, any>[]; directory: { status: string; cachedModels: number; successAt?: string } }
+  const selections = async (overrides: Record<string, unknown> = {}, alias = true) => request('/api/model-connection/models', 'PUT', { defaultModel: 'gpt-6-astra', models: [
+    { id: 'gpt-6-astra', protocol: 'responses', overrides },
+    { id: 'astra-alias', protocol: 'chat-completions', ...(alias ? { catalogId: 'openai/gpt-6-astra' } : {}), overrides: {} },
+    { id: 'gpt-6-astr', protocol: 'chat-completions', overrides: {} },
+    { id: 'unknown-owner', protocol: 'chat-completions', overrides: {} },
+  ] })
+  try {
+    expect((await request('/api/model-connection', 'PUT', { endpoint: gateway.url.origin + '/v1', apiKey: 'secret' })).status).toBe(200)
+    expect((await request('/api/model-connection/refresh', 'POST')).status).toBe(200)
+    expect((await request('/api/model-connection/directory', 'POST')).status).toBe(200)
+    expect((await selections({ contextWindow: 9000, tools: false, inputPrice: 0 })).status).toBe(200)
+    let current = await get()
+    const main = current.models[0]!
+    expect(main.contextWindow).toBe(9000)
+    expect(main.sources.contextWindow.source).toBe('manual')
+    expect(main.maxTokens).toBe(128000)
+    expect(main.sources.maxTokens.source).toBe('models.dev')
+    expect(main.input).toEqual(['text', 'image'])
+    expect(main.inputModalities).toEqual(['text', 'image', 'pdf'])
+    expect(main.tools).toBe(false)
+    expect(main.sources.tools.source).toBe('manual')
+    expect(main.inputPrice).toBe(0)
+    expect(main.outputPrice).toBe(50)
+    expect(main.catalogMatch).toBe('openai/gpt-6-astra')
+    expect(main.sources.outputPrice.updatedAt).toBeTruthy()
+    expect(current.models[1]?.contextWindow).toBe(1050000)
+    expect(current.models[1]?.catalogMatch).toBe('openai/gpt-6-astra')
+    expect(current.models[2]?.contextWindow).toBeUndefined()
+    expect(current.models[3]?.contextWindow).toBeUndefined()
+    expect((await selections({}, false)).status).toBe(200)
+    current = await get()
+    expect(current.models[0]?.contextWindow).toBe(300000)
+    expect(current.models[0]?.sources.contextWindow.source).toBe('gateway')
+    expect(current.models[0]?.tools).toBe(false)
+    expect(current.models[0]?.sources.tools.source).toBe('gateway')
+    expect(current.models[0]?.inputPrice).toBe(0)
+    expect(current.models[0]?.sources.inputPrice.source).toBe('gateway')
+    expect(current.models[1]?.contextWindow).toBeUndefined()
+    gatewayContext = undefined
+    expect((await request('/api/model-connection/refresh', 'POST')).status).toBe(200)
+    current = await get()
+    expect(current.models[0]?.contextWindow).toBe(1050000)
+    expect(current.models[0]?.sources.contextWindow.source).toBe('models.dev')
+    directoryStatus = 503
+    expect((await request('/api/model-connection/directory', 'POST')).status).toBe(502)
+    current = await get()
+    expect(current.directory.status).toBe('error')
+    expect(current.directory.cachedModels).toBe(2)
+    expect(current.models[0]?.maxTokens).toBe(128000)
+    app.stop(true)
+    app = await startServer({ password, port: 0, dataDir, directoryUrl: directory.url.origin })
+    base = app.url.origin
+    cookie = await login()
+    current = await get()
+    expect(current.models[0]?.maxTokens).toBe(128000)
+    expect(current.directory.successAt).toBeTruthy()
+    expect((await request('/api/model-connection', 'PUT', { endpoint: gateway.url.origin + '/v1', apiKey: 'replacement' })).status).toBe(200)
+    current = await get()
+    expect(current.models[0]?.contextWindow).toBeUndefined()
+    expect(current.models[0]?.maxTokens).toBeUndefined()
+    expect(current.models[1]?.contextWindow).toBeUndefined()
+  } finally {
+    app.stop(true)
+    gateway.stop(true)
+    directory.stop(true)
+    await rm(dataDir, { recursive: true, force: true })
+  }
+})

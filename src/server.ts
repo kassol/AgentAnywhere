@@ -2,7 +2,7 @@ import { join } from 'node:path'
 import type { ServerWebSocket } from 'bun'
 import { createModelConnectionStore } from './model-connection'
 
-type Config = { password: string; host?: string; port?: number; secureCookie?: boolean; publicOrigin?: string; dataDir?: string; modelTimeoutMs?: number }
+type Config = { password: string; host?: string; port?: number; secureCookie?: boolean; publicOrigin?: string; dataDir?: string; modelTimeoutMs?: number; directoryUrl?: string }
 type Session = { expires: number; sockets: Set<ServerWebSocket<{ token: string }>> }
 
 const cookieName = 'agentanywhere_session'
@@ -27,7 +27,7 @@ async function readLimited(request: Request, limit = 1024): Promise<string | nul
 export async function startServer(config: Config) {
   if (!config.password || config.password.length < 12) throw new Error('AGENTANYWHERE_PASSWORD must contain at least 12 characters')
   const passwordHash = await Bun.password.hash(config.password, { algorithm: 'argon2id' })
-  const modelConnection = createModelConnectionStore(config.dataDir ?? join(process.cwd(), 'data'), config.modelTimeoutMs)
+  const modelConnection = createModelConnectionStore(config.dataDir ?? join(process.cwd(), 'data'), config.modelTimeoutMs, config.directoryUrl)
   await modelConnection.load()
   const sessions = new Map<string, Session>()
   const attempts = new Map<string, { count: number; until: number }>()
@@ -107,9 +107,13 @@ export async function startServer(config: Config) {
       if (path === '/api/session' && request.method === 'GET') return json({ authenticated: true })
       if (path === '/api/tasks' && request.method === 'GET') return json([])
       if (path === '/api/model-connection' && request.method === 'GET') return json(modelConnection.visible())
-      if ((path === '/api/model-connection' || path === '/api/model-connection/models' || path === '/api/model-connection/refresh') && request.method !== 'GET') {
+      if ((path === '/api/model-connection' || path === '/api/model-connection/models' || path === '/api/model-connection/refresh' || path === '/api/model-connection/directory') && request.method !== 'GET') {
         if (!sameOrigin(request)) return json({ error: 'Forbidden' }, 403)
         try {
+          if (path === '/api/model-connection/directory' && request.method === 'POST') {
+            const status = await modelConnection.refreshDirectory()
+            return json(modelConnection.visible(), status === 'ok' ? 200 : status === 'timeout' ? 504 : 502)
+          }
           if (path === '/api/model-connection/refresh' && request.method === 'POST') {
             const status = await modelConnection.refresh()
             return json(modelConnection.visible(), status === 'ok' ? 200 : status === 'unauthorized' ? 502 : status === 'timeout' ? 504 : status === 'empty' ? 422 : 502)
@@ -123,7 +127,7 @@ export async function startServer(config: Config) {
           return json(modelConnection.visible())
         } catch (error) {
           if (error instanceof SyntaxError) return json({ error: 'JSON 格式无效' }, 400)
-          if (error instanceof Error && /^(请|更换|端点|无效|模型|默认|输入|contextWindow|maxTokens|inputPrice|outputPrice|reasoning|tools)/.test(error.message)) return json({ error: error.message }, 400)
+          if (error instanceof Error && /^(请|更换|端点|无效|模型|默认|输入|contextWindow|maxTokens|inputPrice|outputPrice|reasoning|tools|人工|目录)/.test(error.message)) return json({ error: error.message }, 400)
           return json({ error: '设置保存失败' }, 500)
         }
       }
