@@ -57,6 +57,14 @@ export async function createWorkStore(databaseUrl: string) {
   await db`ALTER TABLE work_runs ADD COLUMN IF NOT EXISTS previous_report_version_id uuid`
   await db`ALTER TABLE work_runs ADD COLUMN IF NOT EXISTS context_snapshot jsonb`
   await db`ALTER TABLE work_runs ADD COLUMN IF NOT EXISTS checkpoint_ref jsonb`
+  await db`ALTER TABLE work_runs ADD COLUMN IF NOT EXISTS retry_of_run_id uuid REFERENCES work_runs(id)`
+  await db`ALTER TABLE work_runs ADD COLUMN IF NOT EXISTS model_calls integer NOT NULL DEFAULT 0`
+  await db`ALTER TABLE work_runs ADD COLUMN IF NOT EXISTS model_call_limit integer NOT NULL DEFAULT 40`
+  await db`ALTER TABLE work_runs ADD COLUMN IF NOT EXISTS active_ms bigint NOT NULL DEFAULT 0`
+  await db`ALTER TABLE work_runs ADD COLUMN IF NOT EXISTS active_limit_ms bigint NOT NULL DEFAULT 2700000`
+  await db`ALTER TABLE work_runs ADD COLUMN IF NOT EXISTS active_since timestamptz`
+  await db`ALTER TABLE work_runs ADD COLUMN IF NOT EXISTS active_heartbeat_at timestamptz`
+  await db`ALTER TABLE work_runs ADD COLUMN IF NOT EXISTS budget_reason text`
   await db`CREATE UNIQUE INDEX IF NOT EXISTS one_active_work_run ON work_runs (active) WHERE active`
   await db`CREATE TABLE IF NOT EXISTS work_outbox (
     run_id uuid PRIMARY KEY REFERENCES work_runs(id), created_at timestamptz NOT NULL DEFAULT now()
@@ -83,6 +91,7 @@ export async function createWorkStore(databaseUrl: string) {
     created_at timestamptz NOT NULL DEFAULT now(), answered_at timestamptz,
     UNIQUE (run_id, epoch)
   )`
+  await db`ALTER TABLE work_interactions ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'question'`
   await db`CREATE TABLE IF NOT EXISTS work_artifacts (
     id uuid PRIMARY KEY, task_id uuid NOT NULL REFERENCES work_tasks(id),
     kind text NOT NULL, name text NOT NULL, UNIQUE (task_id, kind, name)
@@ -98,14 +107,17 @@ export async function createWorkStore(databaseUrl: string) {
     const [row] = await db`SELECT t.id, t.goal, t.source_url AS "sourceUrl", t.status, t.created_at AS "createdAt",
       r.id AS "runId", r.status AS "runStatus", r.model_snapshot AS "model", r.epoch,
       r.cleanup_state AS "cleanupState", r.failure, r.started_at AS "startedAt", r.finished_at AS "finishedAt",
-      r.previous_report_version_id AS "previousReportVersionId", h.id AS "threadId"
+      r.previous_report_version_id AS "previousReportVersionId", r.retry_of_run_id AS "retryOfRunId",
+      r.model_calls AS "modelCalls", r.model_call_limit AS "modelCallLimit",
+      r.active_ms + COALESCE(GREATEST(0, EXTRACT(EPOCH FROM (now()-r.active_since))*1000)::bigint,0) AS "activeMs",
+      r.active_limit_ms AS "activeLimitMs", r.budget_reason AS "budgetReason", h.id AS "threadId"
       FROM work_tasks t JOIN work_runs r ON r.task_id = t.id JOIN work_threads h ON h.task_id = t.id
       WHERE t.id = ${id} AND t.owner_id = 'owner' ORDER BY r.created_at DESC, r.id DESC LIMIT 1`
     if (!row) return null
     const messages = await db`SELECT id, role, content, status FROM work_messages WHERE thread_id = ${row.threadId} ORDER BY created_at, id`
-    const runs = await db`SELECT id, status, created_at AS "createdAt", finished_at AS "finishedAt", previous_report_version_id AS "previousReportVersionId"
+    const runs = await db`SELECT id, status, created_at AS "createdAt", finished_at AS "finishedAt", previous_report_version_id AS "previousReportVersionId", retry_of_run_id AS "retryOfRunId"
       FROM work_runs WHERE task_id = ${id} ORDER BY created_at, id`
-    const [interaction] = await db`SELECT id, question, status, answer FROM work_interactions WHERE run_id = ${row.runId} ORDER BY epoch DESC LIMIT 1`
+    const [interaction] = await db`SELECT id, kind, question, status, answer FROM work_interactions WHERE run_id = ${row.runId} ORDER BY epoch DESC LIMIT 1`
     const artifacts = await db`SELECT a.id, a.kind, a.name, v.id AS "versionId", v.run_id AS "runId", r.status AS "runStatus",
       v.sha256, v.size_bytes AS "sizeBytes", v.mime_type AS "mimeType", v.created_at AS "createdAt"
       FROM work_artifacts a JOIN work_artifact_versions v ON v.artifact_id = a.id JOIN work_runs r ON r.id=v.run_id
@@ -113,7 +125,9 @@ export async function createWorkStore(databaseUrl: string) {
     return { id: row.id, goal: row.goal, sourceUrl: row.sourceUrl, status: row.status, createdAt: row.createdAt,
       run: { id: row.runId, status: row.runStatus, model: typeof row.model === 'string' ? JSON.parse(row.model) : row.model,
         epoch: row.epoch, cleanupState: row.cleanupState, failure: row.failure, startedAt: row.startedAt, finishedAt: row.finishedAt,
-        previousReportVersionId: row.previousReportVersionId }, runs, interaction: interaction ?? null, thread: { id: row.threadId, messages }, artifacts }
+        previousReportVersionId: row.previousReportVersionId, retryOfRunId: row.retryOfRunId,
+        modelCalls: row.modelCalls, modelCallLimit: row.modelCallLimit, activeMs: Number(row.activeMs), activeLimitMs: Number(row.activeLimitMs), budgetReason: row.budgetReason },
+      runs, interaction: interaction ?? null, thread: { id: row.threadId, messages }, artifacts }
   }
 
   async function artifactVersion(versionId: string) {
@@ -133,6 +147,30 @@ export async function createWorkStore(databaseUrl: string) {
     return rows.length > 0
   }
 
+  async function retainCheckpointArtifacts(sql: SQL, taskId: string, run: { id: string; epoch: number; checkpointRef: any }) {
+    if (!run.checkpointRef) return
+    const checkpoint = typeof run.checkpointRef === 'string' ? JSON.parse(run.checkpointRef) : run.checkpointRef
+    if (checkpoint.epoch !== run.epoch || !Array.isArray(checkpoint.files)) throw new WorkConflictError('检查点无效')
+    const artifacts = Array.isArray(checkpoint.artifacts) ? checkpoint.artifacts : checkpoint.files
+      .filter((file: { name: string }) => /^generation-[0-9a-f-]{36}\/report\.md$/i.test(file.name))
+      .map((file: { name: string }) => ({ path: file.name, name: 'report.md', type: 'text/markdown', kind: 'report' }))
+    for (const item of artifacts) {
+      const file = checkpoint.files.find((entry: { name: string }) => entry.name === item.path)
+      if (!file || !Number.isSafeInteger(file.size) || file.size < (item.kind === 'report' ? 1 : 0) || file.size > (item.kind === 'report' ? 2_000_000 : 10_000_000)
+        || !/^[0-9a-f]{64}$/i.test(file.sha256)
+        || !/^generation-[0-9a-f-]{36}\/report\.md$/i.test(item.path) && !/^generation-[0-9a-f-]{36}\/attachment-[0-4]\.(txt|csv|json|md)$/i.test(item.path)
+        || item.kind !== (item.path.endsWith('/report.md') ? 'report' : 'attachment')
+        || item.type !== (item.kind === 'report' ? 'text/markdown' : 'text/plain')
+        || typeof item.name !== 'string' || !/^[^/\\\x00-\x1f]{1,100}\.(txt|csv|json|md)$/i.test(item.name)) throw new WorkConflictError('检查点成果无效')
+      const [artifact] = await sql`INSERT INTO work_artifacts (id, task_id, kind, name)
+        VALUES (${crypto.randomUUID()}, ${taskId}, ${item.kind}, ${item.name})
+        ON CONFLICT (task_id, kind, name) DO UPDATE SET name=EXCLUDED.name RETURNING id`
+      await sql`INSERT INTO work_artifact_versions (id, artifact_id, run_id, storage_key, sha256, size_bytes, mime_type)
+        VALUES (${crypto.randomUUID()}, ${artifact.id}, ${run.id}, ${`${run.id}/checkpoint-${run.epoch}/${item.path}`}, ${file.sha256}, ${file.size}, ${item.type})
+        ON CONFLICT (artifact_id, run_id) DO NOTHING`
+    }
+  }
+
   async function cancel(taskId: string) {
     return db.begin(async sql => {
       const [run] = await sql`SELECT r.id, r.epoch, r.status, r.active, r.checkpoint_ref AS "checkpointRef" FROM work_runs r
@@ -146,28 +184,7 @@ export async function createWorkStore(databaseUrl: string) {
           AND type IN ('run.finished', 'run.failed') LIMIT 1`
         if (terminal) return { accepted: false }
       }
-      if (run.status === 'waiting' && run.checkpointRef) {
-        const checkpoint = typeof run.checkpointRef === 'string' ? JSON.parse(run.checkpointRef) : run.checkpointRef
-        if (checkpoint.epoch !== run.epoch || !Array.isArray(checkpoint.files)) throw new WorkConflictError('检查点无效')
-        const artifacts = Array.isArray(checkpoint.artifacts) ? checkpoint.artifacts : checkpoint.files
-          .filter((file: { name: string }) => /^generation-[0-9a-f-]{36}\/report\.md$/i.test(file.name))
-          .map((file: { name: string }) => ({ path: file.name, name: 'report.md', type: 'text/markdown', kind: 'report' }))
-        for (const item of artifacts) {
-          const file = checkpoint.files.find((entry: { name: string }) => entry.name === item.path)
-          if (!file || !Number.isSafeInteger(file.size) || file.size < (item.kind === 'report' ? 1 : 0) || file.size > (item.kind === 'report' ? 2_000_000 : 10_000_000)
-            || !/^[0-9a-f]{64}$/i.test(file.sha256)
-            || !/^generation-[0-9a-f-]{36}\/report\.md$/i.test(item.path) && !/^generation-[0-9a-f-]{36}\/attachment-[0-4]\.(txt|csv|json|md)$/i.test(item.path)
-            || item.kind !== (item.path.endsWith('/report.md') ? 'report' : 'attachment')
-            || item.type !== (item.kind === 'report' ? 'text/markdown' : 'text/plain')
-            || typeof item.name !== 'string' || !/^[^/\\\x00-\x1f]{1,100}\.(txt|csv|json|md)$/i.test(item.name)) throw new WorkConflictError('检查点成果无效')
-          const [artifact] = await sql`INSERT INTO work_artifacts (id, task_id, kind, name)
-            VALUES (${crypto.randomUUID()}, ${taskId}, ${item.kind}, ${item.name})
-            ON CONFLICT (task_id, kind, name) DO UPDATE SET name=EXCLUDED.name RETURNING id`
-          await sql`INSERT INTO work_artifact_versions (id, artifact_id, run_id, storage_key, sha256, size_bytes, mime_type)
-            VALUES (${crypto.randomUUID()}, ${artifact.id}, ${run.id}, ${`${run.id}/checkpoint-${run.epoch}/${item.path}`}, ${file.sha256}, ${file.size}, ${item.type})
-            ON CONFLICT (artifact_id, run_id) DO NOTHING`
-        }
-      }
+      if (run.status === 'waiting') await retainCheckpointArtifacts(sql, taskId, run)
       const status = run.active ? 'cancelling' : 'cancelled'
       await sql`UPDATE work_runs SET status = ${status}, run_token_hash = NULL,
         finished_at = CASE WHEN ${status} = 'cancelled' THEN now() ELSE finished_at END
@@ -287,6 +304,40 @@ export async function createWorkStore(databaseUrl: string) {
     return created === null ? null : { task: await detail(taskId), created }
   }
 
+  async function retryTask(taskId: string, body: unknown) {
+    const requestId = body && typeof body === 'object' && !Array.isArray(body) ? (body as Record<string, unknown>).requestId : null
+    if (typeof requestId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestId)) throw new WorkInputError('请求 ID 无效')
+    const hash = createHash('sha256').update(JSON.stringify({ taskId, kind: 'retry' })).digest('hex')
+    const created = await db.begin(async sql => {
+      await sql`SELECT pg_advisory_xact_lock(720, hashtext(${taskId}))`
+      const [task] = await sql`SELECT id FROM work_tasks WHERE id=${taskId} AND owner_id='owner'`
+      if (!task) return null
+      const [existing] = await sql`SELECT task_id AS "taskId", request_hash AS "requestHash" FROM work_runs WHERE request_id=${requestId}`
+      if (existing) {
+        if (existing.taskId !== taskId || existing.requestHash !== hash) throw new WorkConflictError('请求 ID 已用于其他执行')
+        return false
+      }
+      const [previous] = await sql`SELECT id, status, active, cleanup_state AS "cleanupState", model_snapshot AS "modelSnapshot",
+        credential_ref AS "credentialRef", previous_report_version_id AS "previousReportVersionId", context_snapshot AS "contextSnapshot", checkpoint_ref AS "checkpointRef"
+        FROM work_runs WHERE task_id=${taskId} ORDER BY created_at DESC, id DESC LIMIT 1 FOR UPDATE`
+      if (!previous || previous.active || previous.cleanupState !== 'cleaned' || !['failed', 'lost'].includes(previous.status)) throw new WorkConflictError('当前工作不可重试')
+      const runId = crypto.randomUUID()
+      const snapshot = typeof previous.modelSnapshot === 'string' ? JSON.parse(previous.modelSnapshot) : previous.modelSnapshot
+      const context = typeof previous.contextSnapshot === 'string' ? JSON.parse(previous.contextSnapshot) : previous.contextSnapshot
+      const priorCheckpoint = typeof previous.checkpointRef === 'string' ? JSON.parse(previous.checkpointRef) : previous.checkpointRef
+      const checkpoint = priorCheckpoint ? { ...priorCheckpoint, sourceRunId: priorCheckpoint.sourceRunId ?? previous.id } : null
+      await sql`INSERT INTO work_runs (id, task_id, status, model_snapshot, credential_ref, request_id, request_hash,
+        previous_report_version_id, context_snapshot, checkpoint_ref, retry_of_run_id)
+        VALUES (${runId}, ${taskId}, 'queued', ${JSON.stringify(snapshot)}::jsonb, ${previous.credentialRef},
+          ${requestId}, ${hash}, ${previous.previousReportVersionId}, ${context ? JSON.stringify(context) : null}::jsonb,
+          ${checkpoint ? JSON.stringify(checkpoint) : null}::jsonb, ${previous.id})`
+      await sql`INSERT INTO work_outbox (run_id) VALUES (${runId})`
+      await sql`UPDATE work_tasks SET status='queued' WHERE id=${taskId}`
+      return true
+    })
+    return created === null ? null : { task: await detail(taskId), created }
+  }
+
   async function appendRunMessage(runId: string, body: unknown) {
     if (!body || typeof body !== 'object' || Array.isArray(body)) throw new WorkInputError('追加要求无效')
     const input = body as Record<string, unknown>
@@ -325,16 +376,35 @@ export async function createWorkStore(databaseUrl: string) {
         JOIN work_runs r ON r.id=i.run_id JOIN work_tasks t ON t.id=r.task_id
         WHERE i.id=${id} AND t.owner_id='owner'`
       if (!target) return null
-      const [run] = await sql`SELECT task_id AS "taskId", status, active, cleanup_state AS "cleanupState", checkpoint_ref AS "checkpointRef"
+      const [run] = await sql`SELECT id, epoch, task_id AS "taskId", status, active, cleanup_state AS "cleanupState", checkpoint_ref AS "checkpointRef",
+        model_call_limit AS "modelCallLimit", active_limit_ms AS "activeLimitMs", budget_reason AS "budgetReason"
         FROM work_runs WHERE id=${target.runId} FOR UPDATE`
-      const [interaction] = await sql`SELECT status, answer FROM work_interactions WHERE id=${id} AND run_id=${target.runId} FOR UPDATE`
+      const [interaction] = await sql`SELECT status, answer, kind FROM work_interactions WHERE id=${id} AND run_id=${target.runId} FOR UPDATE`
       if (!interaction || !run) return null
       if (interaction.status === 'answered') {
         if (interaction.answer !== answer) throw new WorkConflictError('问题已用不同内容回答')
         return { created: false }
       }
+      if (interaction.kind === 'limit' && !['continue', 'finish'].includes(answer)) throw new WorkInputError('请选择继续或结束')
       if (interaction.status !== 'pending' || run.status !== 'waiting' || run.active || run.cleanupState !== 'cleaned' || !run.checkpointRef) throw new WorkConflictError('问题尚未准备好回答')
       await sql`UPDATE work_interactions SET status='answered', answer=${answer}, answered_at=now() WHERE id=${id}`
+      if (interaction.kind === 'limit') {
+        const continued = answer === 'continue'
+        const nextCalls = continued ? run.modelCallLimit + 40 : run.modelCallLimit
+        const nextMs = continued ? Number(run.activeLimitMs) + 2_700_000 : Number(run.activeLimitMs)
+        await sql`INSERT INTO work_events (run_id, epoch, event_id, type, payload, occurred_at)
+          SELECT id, epoch, ${crypto.randomUUID()}, 'run.limit_decided',
+            ${JSON.stringify({ decision: answer, reason: run.budgetReason, previousModelCallLimit: run.modelCallLimit,
+              modelCallLimit: nextCalls, previousActiveLimitMs: Number(run.activeLimitMs), activeLimitMs: nextMs })}::jsonb, now()
+          FROM work_runs WHERE id=${target.runId}`
+        if (!continued) {
+          await retainCheckpointArtifacts(sql, run.taskId, run)
+          await sql`UPDATE work_runs SET status='cancelled', finished_at=now() WHERE id=${target.runId}`
+          await sql`UPDATE work_tasks SET status='cancelled' WHERE id=${run.taskId}`
+          return { created: true }
+        }
+        await sql`UPDATE work_runs SET model_call_limit=${nextCalls}, active_limit_ms=${nextMs}, budget_reason=NULL WHERE id=${target.runId}`
+      }
       await sql`UPDATE work_runs SET status='queued', cleanup_state='none' WHERE id=${target.runId}`
       await sql`UPDATE work_tasks SET status='queued' WHERE id=${run.taskId}`
       await sql`INSERT INTO work_outbox (run_id) VALUES (${target.runId}) ON CONFLICT DO NOTHING`
@@ -386,6 +456,25 @@ export async function createWorkStore(databaseUrl: string) {
     return credential
   }
 
+  async function reserveModelAttempt(runId: string, epoch: number, token: string, now = Date.now()) {
+    const hash = createHash('sha256').update(token).digest('hex')
+    return db.begin(async sql => {
+      const [run] = await sql`SELECT status, active, run_token_hash AS "tokenHash", model_calls AS "modelCalls",
+        model_call_limit AS "modelCallLimit", active_ms AS "activeMs", active_limit_ms AS "activeLimitMs",
+        active_since AS "activeSince", budget_reason AS "budgetReason"
+        FROM work_runs WHERE id=${runId} AND epoch=${epoch} FOR UPDATE`
+      if (!run || !run.active || !['provisioning', 'running'].includes(run.status) || run.tokenHash !== hash) return 'stopped'
+      const elapsed = Number(run.activeMs) + (run.activeSince ? Math.max(0, now - new Date(run.activeSince).getTime()) : 0)
+      const reason = run.budgetReason || (elapsed >= Number(run.activeLimitMs) ? 'time' : run.modelCalls >= run.modelCallLimit ? 'rounds' : null)
+      if (reason) {
+        if (!run.budgetReason) await sql`UPDATE work_runs SET budget_reason=${reason} WHERE id=${runId}`
+        return 'limit'
+      }
+      await sql`UPDATE work_runs SET model_calls=model_calls+1 WHERE id=${runId}`
+      return 'allowed'
+    })
+  }
+
   async function recordModelUsage(runId: string, epoch: number, usage: { callId: string; inputTokens: number | null; outputTokens: number | null; totalTokens: number | null }) {
     await db`INSERT INTO work_events (run_id, epoch, event_id, type, payload, occurred_at)
       SELECT ${runId}, ${epoch}, ${crypto.randomUUID()}, 'usage',
@@ -393,5 +482,5 @@ export async function createWorkStore(databaseUrl: string) {
       WHERE EXISTS (SELECT 1 FROM work_runs WHERE id = ${runId} AND epoch = ${epoch} AND active)`
   }
 
-  return { list, detail, events, create, continueTask, appendRunMessage, resolveInteraction, pendingRunMessages, acknowledgeRunMessage, cancel, isRunStopped, artifactVersion, requestCleanupRetry, resolveRunModelConnection, authorizeModelProxy, recordModelUsage }
+  return { list, detail, events, create, continueTask, retryTask, appendRunMessage, resolveInteraction, pendingRunMessages, acknowledgeRunMessage, cancel, isRunStopped, artifactVersion, requestCleanupRetry, resolveRunModelConnection, authorizeModelProxy, reserveModelAttempt, recordModelUsage }
 }

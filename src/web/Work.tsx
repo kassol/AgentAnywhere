@@ -5,7 +5,7 @@ import Markdown from 'react-markdown'
 type Model = { id: string; protocol: 'chat-completions' | 'responses' }
 type Task = { id: string; goal: string; sourceUrl: string | null; status: string; createdAt: string }
 type Artifact = { id: string; kind: 'report' | 'attachment'; name: string; versionId: string; runId: string; runStatus: string; sha256: string; sizeBytes: number; createdAt: string }
-type Detail = Task & { run: { id: string; status: string; model: Model; cleanupState: string; failure: string | null; startedAt: string | null; finishedAt: string | null; previousReportVersionId: string | null }; runs: { id: string; status: string; createdAt: string; previousReportVersionId: string | null }[]; interaction: { id: string; question: string; status: string; answer: string | null } | null; thread: { id: string; messages: { role: 'user'; content: string; status: 'pending' | 'applied' | 'carried' }[] }; artifacts: Artifact[] }
+type Detail = Task & { run: { id: string; status: string; model: Model; cleanupState: string; failure: string | null; startedAt: string | null; finishedAt: string | null; previousReportVersionId: string | null; retryOfRunId: string | null; modelCalls: number; modelCallLimit: number; activeMs: number; activeLimitMs: number; budgetReason: string | null }; runs: { id: string; status: string; createdAt: string; previousReportVersionId: string | null; retryOfRunId: string | null }[]; interaction: { id: string; kind: 'question' | 'limit'; question: string; status: string; answer: string | null } | null; thread: { id: string; messages: { role: 'user'; content: string; status: 'pending' | 'applied' | 'carried' }[] }; artifacts: Artifact[] }
 type RunEvent = { serverSeq: number; epoch: number; type: string; payload: Record<string, any>; occurredAt: string }
 const statusLabel: Record<string, string> = { queued: '待执行', provisioning: '准备环境', running: '执行中', waiting: '等待回答', cancelling: '正在取消', cancelled: '已取消', succeeded: '已完成', failed: '失败', lost: '执行中断', save_failed: '成果保存失败' }
 const safeLink = (url: string) => {
@@ -43,6 +43,7 @@ export function Work() {
   const [steerCommandId, setSteerCommandId] = useState(() => crypto.randomUUID())
   const [continuation, setContinuation] = useState('')
   const [continueRequestId, setContinueRequestId] = useState(() => crypto.randomUUID())
+  const [retryRequestId, setRetryRequestId] = useState(() => crypto.randomUUID())
 
   useEffect(() => {
     const path = detailId ? `/api/tasks/${detailId}` : '/api/tasks'
@@ -180,6 +181,32 @@ export function Work() {
     finally { setBusy(false) }
   }
 
+  async function decideLimit(decision: 'continue' | 'finish') {
+    if (!detail?.interaction) return
+    setBusy(true)
+    setError('')
+    try {
+      await read(await fetch(`/api/interactions/${detail.interaction.id}/resolve`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ answer: decision }) }))
+      setDetail(await read<Detail>(await fetch(`/api/tasks/${detail.id}`)))
+    } catch (error) { setError(error instanceof Error ? error.message : '决定保存失败') }
+    finally { setBusy(false) }
+  }
+
+  async function retry() {
+    if (!detail) return
+    setBusy(true)
+    setError('')
+    try {
+      const updated = await read<Detail>(await fetch(`/api/tasks/${detail.id}/retry`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ requestId: retryRequestId }) }))
+      setDetail(updated)
+      currentRun.current = updated.run.id
+      cursor.current = 0
+      setEvents([])
+      setRetryRequestId(crypto.randomUUID())
+    } catch (error) { setError(error instanceof Error ? error.message : '重试失败') }
+    finally { setBusy(false) }
+  }
+
   async function cancel() {
     setBusy(true)
     try {
@@ -200,13 +227,22 @@ export function Work() {
       <h2>{detail.goal || detail.sourceUrl}</h2>
       {detail.sourceUrl && <p><a href={detail.sourceUrl} target="_blank" rel="noopener noreferrer">{detail.sourceUrl}</a></p>}
       <p className="muted">模型：{detail.run.model.id} · 协议：{detail.run.model.protocol}</p>
+      <p className="muted">执行额度：{detail.run.modelCalls}/{detail.run.modelCallLimit} 次模型调用，{Math.ceil(detail.run.activeMs / 60000)}/{Math.ceil(detail.run.activeLimitMs / 60000)} 分钟活跃执行。</p>
+      {detail.run.retryOfRunId && <p className="muted">从 Run {detail.run.retryOfRunId.slice(0, 8)} 手动重试。</p>}
+      {detail.runs.length > 1 && <section><h3>执行历史</h3><ul>{detail.runs.map(run => <li key={run.id}>Run {run.id.slice(0, 8)} · {statusLabel[run.status] ?? run.status}{run.retryOfRunId && ` · 重试 ${run.retryOfRunId.slice(0, 8)}`}</li>)}</ul></section>}
       <h3>工作对话</h3>
-      {detail.interaction?.status === 'pending' && <form className="work-form" onSubmit={submitAnswer}>
+      {detail.interaction?.status === 'pending' && detail.interaction.kind === 'question' && <form className="work-form" onSubmit={submitAnswer}>
         <p className="work-message">Agent 提问：{detail.interaction.question}</p>
         <label>回答<textarea value={answer} onChange={event => setAnswer(event.target.value)} maxLength={4000} required rows={3} /></label>
         <button disabled={busy || !answer.trim() || detail.run.status !== 'waiting' || detail.run.cleanupState !== 'cleaned'} type="submit">提交回答</button>
       </form>}
+      {detail.interaction?.status === 'pending' && detail.interaction.kind === 'limit' && <div className="work-form">
+        <p className="work-message">{detail.interaction.question}</p>
+        <button type="button" disabled={busy || detail.run.cleanupState !== 'cleaned'} onClick={() => void decideLimit('continue')}>增加额度并继续</button>
+        <button type="button" disabled={busy || detail.run.cleanupState !== 'cleaned'} onClick={() => void decideLimit('finish')}>结束执行</button>
+      </div>}
       {detail.interaction?.status === 'answered' && <p className="work-message">回答：{detail.interaction.answer}</p>}
+      {['failed', 'lost'].includes(detail.run.status) && detail.run.cleanupState === 'cleaned' && <button type="button" disabled={busy} onClick={() => void retry()}>手动重试（创建新 Run）</button>}
       {detail.thread.messages.map((message, index) => <p className="work-message" key={index}>{message.content}{message.status === 'pending' && <span className="muted">（待处理{detail.run.status === 'running' ? '，将在下一模型步骤生效' : '，本次执行已结束，等待继续处理'}）</span>}{message.status === 'carried' && <span className="muted">（已纳入新 Run）</span>}</p>)}
       {detail.run.status === 'running' && <form className="work-form" onSubmit={submitSteer}>
         <label>追加要求<textarea value={steerContent} onChange={event => { setSteerContent(event.target.value); setSteerCommandId(crypto.randomUUID()) }} maxLength={4000} required rows={3} /></label>

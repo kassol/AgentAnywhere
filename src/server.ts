@@ -66,7 +66,7 @@ function closeWith(body: ReadableStream<Uint8Array>, cleanup: () => void) {
   })
 }
 
-type Config = { password: string; host?: string; port?: number; secureCookie?: boolean; publicOrigin?: string; dataDir?: string; artifactDir?: string; modelTimeoutMs?: number; directoryUrl?: string; databaseUrl?: string }
+type Config = { password: string; host?: string; port?: number; secureCookie?: boolean; publicOrigin?: string; dataDir?: string; artifactDir?: string; modelTimeoutMs?: number; directoryUrl?: string; databaseUrl?: string; testNow?: () => number }
 type Session = { expires: number; sockets: Set<ServerWebSocket<{ token: string }>> }
 
 const cookieName = 'agentanywhere_session'
@@ -157,7 +157,7 @@ export async function startServer(config: Config) {
       const proxyMatch = /^\/internal\/runs\/([0-9a-f-]{36})\/(\d+)\/v1\/(chat\/completions|responses)$/i.exec(path)
       if (proxyMatch && request.method === 'POST') {
         if (!work) return json({ error: 'Unavailable' }, 503)
-        const body = await readLimited(request, 1_000_000)
+        const body = await readLimited(request, 12_000_000)
         if (body === null) return json({ error: 'Request too large' }, 413)
         let parsed: { model?: unknown }
         try { parsed = JSON.parse(body) } catch { return json({ error: 'Invalid JSON' }, 400) }
@@ -166,6 +166,8 @@ export async function startServer(config: Config) {
         const token = request.headers.get('authorization')?.replace(/^Bearer /, '') ?? ''
         const credential = await work.authorizeModelProxy(proxyMatch[1], Number(proxyMatch[2]), token, parsed.model as string, protocol, modelConnection.resolveCredential)
         if (!credential) return json({ error: 'Unauthorized' }, 401)
+        const reservation = await work.reserveModelAttempt(proxyMatch[1], Number(proxyMatch[2]), token, config.testNow?.() ?? Date.now())
+        if (reservation !== 'allowed') return json({ error: reservation === 'limit' ? 'Run limit reached' : 'Run stopped' }, 409)
         const controller = new AbortController()
         const runId = proxyMatch[1]
         const epoch = Number(proxyMatch[2])
@@ -178,15 +180,15 @@ export async function startServer(config: Config) {
           request.signal.removeEventListener('abort', stopWatching)
         }
         request.signal.addEventListener('abort', stopWatching, { once: true })
+        const callId = crypto.randomUUID()
         try {
+          await work.recordModelUsage(runId, epoch, { callId, inputTokens: null, outputTokens: null, totalTokens: null })
           const upstream = await fetch(`${credential.endpoint}/${modelPath(protocol)}`, {
             method: 'POST', headers: { authorization: `Bearer ${credential.apiKey}`, 'content-type': 'application/json' },
             body, redirect: 'manual', signal: AbortSignal.any([request.signal, controller.signal]),
           })
           const contentType = upstream.headers.get('content-type') ?? 'application/json'
           const metered = upstream.body && upstream.ok && contentType.includes('text/event-stream')
-          const callId = crypto.randomUUID()
-          if (metered) await work.recordModelUsage(proxyMatch[1], Number(proxyMatch[2]), { callId, inputTokens: null, outputTokens: null, totalTokens: null })
           const stream = metered
             ? observeUsage(upstream.body!, usage => usage.inputTokens !== null || usage.outputTokens !== null || usage.totalTokens !== null
               ? work.recordModelUsage(proxyMatch[1], Number(proxyMatch[2]), { callId, ...usage }) : Promise.resolve()) : upstream.body
@@ -297,6 +299,22 @@ export async function startServer(config: Config) {
           if (error instanceof WorkInputError) return json({ error: error.message }, 400)
           if (error instanceof WorkConflictError) return json({ error: error.message }, 409)
           return json({ error: '继续工作失败' }, 500)
+        }
+      }
+      const retryMatch = /^\/api\/tasks\/([0-9a-f-]{36})\/retry$/i.exec(path)
+      if (retryMatch && request.method === 'POST') {
+        if (!sameOrigin(request)) return json({ error: 'Forbidden' }, 403)
+        if (!work) return json({ error: '工作存储未配置' }, 503)
+        const body = await readLimited(request, 1024)
+        if (body === null) return json({ error: '请求内容过大' }, 413)
+        try {
+          const result = await work.retryTask(retryMatch[1], JSON.parse(body))
+          return result ? json(result.task, result.created ? 201 : 200) : json({ error: 'Not found' }, 404)
+        } catch (error) {
+          if (error instanceof SyntaxError) return json({ error: 'JSON 格式无效' }, 400)
+          if (error instanceof WorkInputError) return json({ error: error.message }, 400)
+          if (error instanceof WorkConflictError) return json({ error: error.message }, 409)
+          return json({ error: '重试失败' }, 500)
         }
       }
       const appendMatch = /^\/api\/runs\/([0-9a-f-]{36})\/messages$/i.exec(path)

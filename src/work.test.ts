@@ -19,7 +19,8 @@ test.skipIf(!databaseUrl)('owner creates one persisted queued work request throu
   isolatedUrl.searchParams.set('options', `-csearch_path=${schema}`)
   const testDatabaseUrl = isolatedUrl.toString()
   const password = 'test-password-12345'
-  let app = await startServer({ password, port: 0, dataDir, databaseUrl: testDatabaseUrl })
+  let clock = Date.now()
+  let app = await startServer({ password, port: 0, dataDir, databaseUrl: testDatabaseUrl, testNow: () => clock })
   let base = app.url.origin
   async function login() {
     const response = await fetch(`${base}/api/auth`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password }) })
@@ -114,7 +115,7 @@ test.skipIf(!databaseUrl)('owner creates one persisted queued work request throu
     expect((await send(`/api/tasks/${linked.id}`)).json()).resolves.toMatchObject({ status: 'cancelled', run: { status: 'cancelled' } })
     expect((await send(`/api/tasks/${linked.id}/events`)).json()).resolves.toMatchObject([{ type: 'run.cancelled' }])
     app.stop(true)
-    app = await startServer({ password, port: 0, dataDir, databaseUrl: testDatabaseUrl })
+    app = await startServer({ password, port: 0, dataDir, databaseUrl: testDatabaseUrl, testNow: () => clock })
     base = app.url.origin
     cookie = await login()
     expect((await send(`/api/tasks/${linked.id}`)).json()).resolves.toMatchObject({ id: linked.id, status: 'cancelled' })
@@ -153,6 +154,36 @@ test.skipIf(!databaseUrl)('owner creates one persisted queued work request throu
       await expect(streamed.text()).rejects.toThrow()
       expect((await send(`/api/tasks/${broken.id}/cancel`, 'POST')).status).toBe(202)
       expect((await fetch(`${base}${proxy}`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ model: 'test-model', stream: true }) })).status).toBe(401)
+      await proxyDb`UPDATE work_runs SET active=false, status='cancelled' WHERE id=${broken.run.id}`
+      const limited = await (await send('/api/tasks', 'POST', { ...body, requestId: crypto.randomUUID() })).json()
+      await proxyDb`UPDATE work_runs SET status='running', active=true, epoch=1, model_calls=39,
+        run_token_hash=${createHash('sha256').update(token).digest('hex')} WHERE id=${limited.run.id}`
+      const limitedProxy = `/internal/runs/${limited.run.id}/1/v1/chat/completions`
+      const modelRequest = () => fetch(`${base}${limitedProxy}`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ model: 'test-model', stream: true }) })
+      const fortieth = await modelRequest()
+      expect(fortieth.status).toBe(200)
+      await expect(fortieth.text()).rejects.toThrow()
+      expect((await modelRequest()).status).toBe(409)
+      expect((await send(`/api/tasks/${limited.id}`)).json()).resolves.toMatchObject({ run: { modelCalls: 40, modelCallLimit: 40, budgetReason: 'rounds' } })
+      await proxyDb`UPDATE work_runs SET active=false, status='failed' WHERE id=${limited.run.id}`
+      const timed = await (await send('/api/tasks', 'POST', { ...body, requestId: crypto.randomUUID() })).json()
+      await proxyDb`UPDATE work_runs SET status='running', active=true, epoch=1, active_since=${new Date(clock)},
+        run_token_hash=${createHash('sha256').update(token).digest('hex')} WHERE id=${timed.run.id}`
+      clock += 45 * 60_000
+      const timedProxy = `/internal/runs/${timed.run.id}/1/v1/chat/completions`
+      expect((await fetch(`${base}${timedProxy}`, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ model: 'test-model', stream: true }) })).status).toBe(409)
+      expect((await send(`/api/tasks/${timed.id}`)).json()).resolves.toMatchObject({ run: { modelCalls: 0, budgetReason: 'time' } })
+      await proxyDb`UPDATE work_runs SET active=false, status='failed' WHERE id=${timed.run.id}`
+      const large = await (await send('/api/tasks', 'POST', { ...body, requestId: crypto.randomUUID() })).json()
+      await proxyDb`UPDATE work_runs SET status='running', active=true, epoch=1,
+        run_token_hash=${createHash('sha256').update(token).digest('hex')} WHERE id=${large.run.id}`
+      const largeResponse = await fetch(`${base}/internal/runs/${large.run.id}/1/v1/chat/completions`, {
+        method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ model: 'test-model', stream: true, messages: [{ role: 'user', content: 'a'.repeat(1_300_000) }] }),
+      })
+      expect(largeResponse.status).toBe(200)
+      await largeResponse.body?.cancel()
+      await proxyDb`UPDATE work_runs SET active=false, status='failed' WHERE id=${large.run.id}`
     } finally { upstream.stop(true); await proxyDb.close() }
     expect((await send('/api/model-connection', 'PUT', { endpoint: 'https://replacement.example/v1', apiKey: 'new-private-secret' })).status).toBe(200)
     expect((await send('/api/model-connection/models', 'PUT', { defaultModel: null, models: [] })).status).toBe(200)
@@ -192,6 +223,39 @@ test.skipIf(!databaseUrl)('owner creates one persisted queued work request throu
     ])
     expect(another.map(item => item.status).sort()).toEqual([201, 409])
     expect((await (await send(`/api/tasks/${task.id}`)).json()).runs).toHaveLength(3)
+    const failed = await (await send('/api/tasks', 'POST', { ...body, requestId: crypto.randomUUID() })).json()
+    const savedCheckpoint = { epoch: 1, files: [{ name: 'session.jsonl', size: 7, sha256: 'saved' }] }
+    await versionDb`UPDATE work_runs SET status='failed', epoch=1, cleanup_state='cleaned', checkpoint_ref=${JSON.stringify(savedCheckpoint)}::jsonb WHERE id=${failed.run.id}`
+    await versionDb`UPDATE work_tasks SET status='failed' WHERE id=${failed.id}`
+    await send('/api/model-connection', 'PUT', { endpoint: 'https://later.example/v1', apiKey: 'later-private-secret' })
+    const retryBody = { requestId: crypto.randomUUID() }
+    const retried = await send(`/api/tasks/${failed.id}/retry`, 'POST', retryBody)
+    expect(retried.status).toBe(201)
+    const retryTask = await retried.json()
+    expect(retryTask).toMatchObject({ id: failed.id, status: 'queued', run: { status: 'queued', retryOfRunId: failed.run.id, model: { endpoint: 'https://replacement.example/v1' } }, runs: [{ id: failed.run.id }, { id: retryTask.run.id }] })
+    expect(retryTask.run.id).not.toBe(failed.run.id)
+    expect((await send(`/api/tasks/${failed.id}/retry`, 'POST', retryBody)).status).toBe(200)
+    expect((await send(`/api/tasks/${failed.id}/retry`, 'POST', { requestId: crypto.randomUUID() })).status).toBe(409)
+    const atLimit = await (await send('/api/tasks', 'POST', { ...body, requestId: crypto.randomUUID() })).json()
+    const limitId = crypto.randomUUID()
+    await versionDb`UPDATE work_runs SET status='waiting', epoch=1, cleanup_state='cleaned', checkpoint_ref=${JSON.stringify(savedCheckpoint)}::jsonb,
+      model_calls=40, active_ms=2700000, budget_reason='rounds' WHERE id=${atLimit.run.id}`
+    await versionDb`UPDATE work_tasks SET status='waiting' WHERE id=${atLimit.id}`
+    await versionDb`INSERT INTO work_interactions (id, run_id, epoch, question, status, kind)
+      VALUES (${limitId}, ${atLimit.run.id}, 1, '继续或结束？', 'pending', 'limit')`
+    expect((await send(`/api/interactions/${limitId}/resolve`, 'POST', { answer: 'other' })).status).toBe(400)
+    expect((await send(`/api/interactions/${limitId}/resolve`, 'POST', { answer: 'continue' })).status).toBe(202)
+    expect((await send(`/api/tasks/${atLimit.id}`)).json()).resolves.toMatchObject({ run: { status: 'queued', modelCalls: 40, modelCallLimit: 80, activeMs: 2700000, activeLimitMs: 5400000, budgetReason: null }, interaction: { status: 'answered', kind: 'limit', answer: 'continue' } })
+    expect((await send(`/api/interactions/${limitId}/resolve`, 'POST', { answer: 'continue' })).status).toBe(200)
+    const toFinish = await (await send('/api/tasks', 'POST', { ...body, requestId: crypto.randomUUID() })).json()
+    const finishId = crypto.randomUUID()
+    await versionDb`UPDATE work_runs SET status='waiting', epoch=1, cleanup_state='cleaned', checkpoint_ref=${JSON.stringify(savedCheckpoint)}::jsonb,
+      model_calls=40, budget_reason='rounds' WHERE id=${toFinish.run.id}`
+    await versionDb`UPDATE work_tasks SET status='waiting' WHERE id=${toFinish.id}`
+    await versionDb`INSERT INTO work_interactions (id, run_id, epoch, question, status, kind)
+      VALUES (${finishId}, ${toFinish.run.id}, 1, '继续或结束？', 'pending', 'limit')`
+    expect((await send(`/api/interactions/${finishId}/resolve`, 'POST', { answer: 'finish' })).status).toBe(202)
+    expect((await send(`/api/tasks/${toFinish.id}`)).json()).resolves.toMatchObject({ run: { status: 'cancelled', modelCallLimit: 40 }, interaction: { status: 'answered', answer: 'finish' } })
     await versionDb.close()
   } finally {
     app.stop(true)
