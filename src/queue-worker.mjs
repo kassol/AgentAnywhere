@@ -59,6 +59,17 @@ async function optionalFileInfo(sandbox, path) {
   catch (error) { if (error.statusCode === 404 && error.error?.code === 'FILE_NOT_FOUND') return null; throw error }
 }
 
+async function readSandboxBytes(sandbox, path, limit) {
+  const chunks = []
+  let size = 0
+  for await (const chunk of sandbox.files.readBytesStream(path)) {
+    size += chunk.length
+    if (size > limit) throw new Error('沙箱文件超过大小限制')
+    chunks.push(chunk)
+  }
+  return Buffer.concat(chunks, size)
+}
+
 async function claim(runId, token) {
   const db = await pool.connect()
   try {
@@ -138,7 +149,7 @@ async function persistArtifacts(run, sandbox) {
   const manifestPath = `${outputDir}/manifest.json`
   const manifestInfo = await optionalFileInfo(sandbox, manifestPath)
   if (manifestInfo?.type !== 'file' || !Number.isSafeInteger(manifestInfo.size) || manifestInfo.size < 2 || manifestInfo.size > 4096) throw new Error('报告清单不存在或无效')
-  const bytes = await sandbox.files.readBytes(manifestPath, { limit: 4097 })
+  const bytes = await readSandboxBytes(sandbox, manifestPath, 4097)
   if (bytes.length !== manifestInfo.size) throw new Error('报告清单已变化')
   const manifest = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
   const generation = Array.isArray(manifest) ? null : manifest?.generation
@@ -197,18 +208,23 @@ async function persistArtifacts(run, sandbox) {
 async function saveCheckpoint(run, sandbox, question) {
   if (typeof question !== 'string' || !question.trim() || question.length > 4000) throw new Error('问题无效')
   const paths = [{ source: '/tmp/agentanywhere-session/checkpoint.jsonl', name: 'session.jsonl', limit: 10_000_000 }]
+  const artifacts = []
   const manifestPath = `${outputDir}/manifest.json`
   const manifestInfo = await optionalFileInfo(sandbox, manifestPath)
   if (manifestInfo) {
     if (manifestInfo.type !== 'file' || manifestInfo.size > 4096) throw new Error('检查点成果清单无效')
-    const bytes = await sandbox.files.readBytes(manifestPath, { limit: 4097 })
+    const bytes = await readSandboxBytes(sandbox, manifestPath, 4097)
     const manifest = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
     if (!/^generation-[0-9a-f-]{36}$/.test(manifest?.generation) || !Array.isArray(manifest.files) || manifest.files.length < 1 || manifest.files.length > 6) throw new Error('检查点成果清单无效')
+    if (new Set(manifest.files.map(file => file?.name)).size !== manifest.files.length) throw new Error('检查点附件名称重复')
     paths.push({ source: manifestPath, name: 'manifest.json', limit: 4096 })
     for (const [index, file] of manifest.files.entries()) {
       if (file.path !== (index === 0 ? 'report.md' : `attachment-${index - 1}.${file.path?.split('.').at(-1)}`)
-        || (index > 0 && !/^attachment-[0-4]\.(txt|csv|json|md)$/.test(file.path))) throw new Error('检查点成果路径无效')
+        || (index > 0 && !/^attachment-[0-4]\.(txt|csv|json|md)$/.test(file.path))
+        || typeof file.name !== 'string' || !/^[^/\\\x00-\x1f]{1,100}\.(txt|csv|json|md)$/i.test(file.name)
+        || file.type !== (index === 0 ? 'text/markdown' : 'text/plain')) throw new Error('检查点成果路径无效')
       paths.push({ source: `${outputDir}/${manifest.generation}/${file.path}`, name: `${manifest.generation}/${file.path}`, limit: index === 0 ? 2_000_000 : 10_000_000 })
+      artifacts.push({ path: `${manifest.generation}/${file.path}`, name: file.name, type: file.type, kind: index === 0 ? 'report' : 'attachment' })
     }
   }
   const root = join(artifactDir, run.id)
@@ -220,7 +236,7 @@ async function saveCheckpoint(run, sandbox, question) {
     for (const item of paths) {
       const info = await optionalFileInfo(sandbox, item.source)
       if (info?.type !== 'file' || !Number.isSafeInteger(info.size) || info.size < (item.name.includes('/attachment-') ? 0 : 1) || info.size > item.limit) throw new Error('检查点文件缺失或过大')
-      const bytes = await sandbox.files.readBytes(item.source, { limit: item.limit + 1 })
+      const bytes = await readSandboxBytes(sandbox, item.source, item.limit + 1)
       if (bytes.length !== info.size || (await optionalFileInfo(sandbox, item.source))?.size !== info.size) throw new Error('检查点文件复制时变化')
       const path = join(temporary, item.name)
       await mkdir(join(path, '..'), { recursive: true, mode: 0o700 })
@@ -236,7 +252,7 @@ async function saveCheckpoint(run, sandbox, question) {
       if (current.rows[0]?.status === 'cancelling') { await db.query('ROLLBACK'); return false }
       if (!['running', 'save_failed'].includes(current.rows[0]?.status)) throw new Error('Run 执行代次已失效')
       await db.query('INSERT INTO work_interactions (id, run_id, epoch, question, status) VALUES ($1,$2,$3,$4,$5)', [randomUUID(), run.id, run.epoch, question, 'pending'])
-      await db.query("UPDATE work_runs SET status='waiting', checkpoint_ref=$3, run_token_hash=NULL, failure=NULL, pending_status=NULL WHERE id=$1 AND epoch=$2", [run.id, run.epoch, JSON.stringify({ epoch: run.epoch, files })])
+      await db.query("UPDATE work_runs SET status='waiting', checkpoint_ref=$3, run_token_hash=NULL, failure=NULL, pending_status=NULL WHERE id=$1 AND epoch=$2", [run.id, run.epoch, JSON.stringify({ epoch: run.epoch, files, artifacts })])
       await db.query("UPDATE work_tasks SET status='waiting' WHERE id=$1", [run.task_id])
       await db.query('COMMIT')
       return true
@@ -407,7 +423,10 @@ async function execute(run, token) {
         if (result.status === 'waiting') {
           let saved
           try { saved = await saveCheckpoint(run, sandbox, result.question) }
-          catch (error) { await markSaveBlocked(run, error, result); return }
+          catch (error) {
+            const current = await pool.query('SELECT status FROM work_runs WHERE id=$1 AND epoch=$2', [run.id, run.epoch])
+            if (current.rows[0]?.status !== 'cancelling') { await markSaveBlocked(run, error, result); return }
+          }
           if (saved) { await releaseWaiting(run, sandbox.id); return }
           result = { status: 'cancelled', failure: null }
         }

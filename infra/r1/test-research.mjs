@@ -38,6 +38,7 @@ const url = await api('/api/tasks', 'POST', { requestId: crypto.randomUUID(), go
 const rejected = await api('/api/tasks', 'POST', { requestId: crypto.randomUUID(), goal: '验证私网链接被拒绝', modelId: 'fixture-rejected' })
 const controlIp = (await lookup(new URL(controlOrigin).hostname, { family: 4 })).address
 const control = await api('/api/tasks', 'POST', { requestId: crypto.randomUUID(), goal: '验证控制面公网 IP 被拒绝', sourceUrl: `http://${controlIp}/`, modelId: 'fixture-control-ip' })
+const redirected = await api('/api/tasks', 'POST', { requestId: crypto.randomUUID(), goal: '验证公开地址重定向到私网被拒绝', sourceUrl: 'https://httpbin.org/redirect-to?url=http%3A%2F%2F127.0.0.1%2F', modelId: 'fixture-control-ip' })
 for (const item of [theme, url]) {
   const detail = await waitFor(async () => {
     const value = await api(`/api/tasks/${item.id}`)
@@ -63,7 +64,13 @@ await waitFor(async () => {
 })
 const controlEvents = await api(`/api/tasks/${control.id}/events`)
 assert.ok(controlEvents.some(event => event.type === 'tool.completed' && event.payload.name === 'open_public_page' && event.payload.isError && /控制面/.test(event.payload.result)))
-const runs = [theme, url, rejected, control].map(item => item.run.id)
+await waitFor(async () => {
+  const detail = await api(`/api/tasks/${redirected.id}`)
+  return detail.run.status === 'succeeded' && detail.run.cleanupState === 'cleaned'
+})
+const redirectEvents = await api(`/api/tasks/${redirected.id}/events`)
+assert.ok(redirectEvents.some(event => event.type === 'tool.completed' && event.payload.name === 'open_public_page' && event.payload.isError && /非公开地址/.test(event.payload.result)))
+const runs = [theme, url, rejected, control, redirected].map(item => item.run.id)
 const checkSandboxes = `import { SandboxManager } from '@alibaba-group/opensandbox';
 const manager = SandboxManager.create({ connectionConfig: { domain: process.env.OPEN_SANDBOX_DOMAIN, protocol: 'http', apiKey: process.env.OPEN_SANDBOX_API_KEY, useServerProxy: true, disableMetrics: true } });
 for (const runId of process.argv.slice(1)) {
@@ -71,4 +78,4 @@ for (const runId of process.argv.slice(1)) {
   if (result.items.some(item => item.status.state !== 'Deleted')) throw new Error('Sandbox still active for ' + runId);
 }`
 execFileSync('docker', ['exec', 'agentanywhere-r1-test-queue-1', 'node', '--input-type=module', '-e', checkSandboxes, ...runs], { stdio: 'pipe' })
-console.log(JSON.stringify({ tasks: [theme.id, url.id, rejected.id, control.id], runs, theme: 'succeeded', sourceUrl: 'succeeded', privateUrl: 'rejected', controlIp: 'rejected', searchPendingObserved: true, reportPersisted: true, sandboxes: 'none-active' }))
+console.log(JSON.stringify({ tasks: [theme.id, url.id, rejected.id, control.id, redirected.id], runs, theme: 'succeeded', sourceUrl: 'succeeded', privateUrl: 'rejected', controlIp: 'rejected', redirectToPrivate: 'rejected', searchPendingObserved: true, reportPersisted: true, sandboxes: 'none-active' }))

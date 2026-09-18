@@ -159,7 +159,7 @@ http.createServer(async (request, response) => {
       : name === 'ask_user' ? '{"question":"请确认研究方向？"}'
       : !asked ? emptyAttachmentArgs : JSON.stringify({ markdown: `# 恢复报告\n\n${answer ?? '回答缺失'}\n\nfixture observation` })
     if (name) {
-      send(response, { ...common, choices: [{ index: 0, delta: { role: 'assistant', tool_calls: [{ index: 0, id: name === 'submit_report' && asked ? 'call_report_revision' : `call_${name}`, type: 'function', function: { name, arguments: '' } }] }, finish_reason: null }] })
+      send(response, { ...common, choices: [{ index: 0, delta: { role: 'assistant', tool_calls: [{ index: 0, id: `call_${name}`, type: 'function', function: { name, arguments: '' } }] }, finish_reason: null }] })
       send(response, { ...common, choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: args } }] }, finish_reason: null }] })
       send(response, { ...common, choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] })
     } else {

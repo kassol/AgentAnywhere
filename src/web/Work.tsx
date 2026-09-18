@@ -6,7 +6,7 @@ type Model = { id: string; protocol: 'chat-completions' | 'responses' }
 type Task = { id: string; goal: string; sourceUrl: string | null; status: string; createdAt: string }
 type Artifact = { id: string; kind: 'report' | 'attachment'; name: string; versionId: string; runId: string; runStatus: string; sha256: string; sizeBytes: number; createdAt: string }
 type Detail = Task & { run: { id: string; status: string; model: Model; cleanupState: string; failure: string | null; startedAt: string | null; finishedAt: string | null; previousReportVersionId: string | null }; runs: { id: string; status: string; createdAt: string; previousReportVersionId: string | null }[]; interaction: { id: string; question: string; status: string; answer: string | null } | null; thread: { id: string; messages: { role: 'user'; content: string; status: 'pending' | 'applied' | 'carried' }[] }; artifacts: Artifact[] }
-type RunEvent = { serverSeq: number; type: string; payload: Record<string, any>; occurredAt: string }
+type RunEvent = { serverSeq: number; epoch: number; type: string; payload: Record<string, any>; occurredAt: string }
 const statusLabel: Record<string, string> = { queued: '待执行', provisioning: '准备环境', running: '执行中', waiting: '等待回答', cancelling: '正在取消', cancelled: '已取消', succeeded: '已完成', failed: '失败', lost: '执行中断', save_failed: '成果保存失败' }
 const safeLink = (url: string) => {
   try {
@@ -98,9 +98,9 @@ export function Work() {
       if (text) activity.push({ id: String(event.serverSeq), kind: 'message', text, done: true })
       draft = ''
     }
-    if (event.type === 'tool.started') activity.push({ id: String(event.payload.toolCallId), kind: 'tool', text: `${event.payload.name}(${JSON.stringify(event.payload.args)})`, done: false })
+    if (event.type === 'tool.started') activity.push({ id: `${event.epoch}:${event.payload.toolCallId}`, kind: 'tool', text: `${event.payload.name}(${JSON.stringify(event.payload.args)})`, done: false })
     if (event.type === 'tool.completed') {
-      const item = activity.find(item => item.kind === 'tool' && item.id === event.payload.toolCallId)
+      const item = activity.find(item => item.kind === 'tool' && item.id === `${event.epoch}:${event.payload.toolCallId}`)
       if (item) { item.text += ` → ${String(event.payload.result ?? '')}`; item.done = true }
     }
   }

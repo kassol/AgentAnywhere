@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
 
@@ -93,4 +94,22 @@ assert.equal(doubleEvents.filter(event => !event.payload.isError).length, 1)
 assert.match(doubleEvents.find(event => event.payload.isError).payload.result, /已有待回答问题/)
 checkSandbox(double.run.id)
 await api(`/api/tasks/${double.id}/cancel`, 'POST', undefined, 202)
-console.log(JSON.stringify({ taskId: first.id, runId: first.run.id, waitingEpoch: 1, finalEpoch: completed.run.epoch, otherWorkSucceeded: true, report: report.versionId, waitingSandbox: 'none-active', restartPersisted: true, doubleAsk: 'first-kept-second-rejected' }))
+const abandoned = await api('/api/tasks', 'POST', { requestId: crypto.randomUUID(), goal: '保存报告后提问，随后取消。', modelId: 'fixture-ask' })
+await until(abandoned.id, 'waiting')
+checkSandbox(abandoned.run.id)
+await api(`/api/tasks/${abandoned.id}/cancel`, 'POST', undefined, 202)
+const cancelled = await until(abandoned.id, 'cancelled')
+const retained = cancelled.artifacts.find(item => item.kind === 'report')
+assert.ok(retained)
+const download = await fetch(`${base}/api/artifacts/${retained.versionId}/download`, { headers: { cookie } })
+assert.equal(download.status, 200)
+const bytes = Buffer.from(await download.arrayBuffer())
+assert.equal(createHash('sha256').update(bytes).digest('hex'), retained.sha256)
+assert.match(bytes.toString('utf8'), /Fixture report/)
+const attachment = cancelled.artifacts.find(item => item.kind === 'attachment')
+assert.ok(attachment)
+const attachmentDownload = await fetch(`${base}/api/artifacts/${attachment.versionId}/download`, { headers: { cookie } })
+assert.equal(attachmentDownload.status, 200)
+assert.equal((await attachmentDownload.arrayBuffer()).byteLength, 0)
+checkSandbox(abandoned.run.id)
+console.log(JSON.stringify({ taskId: first.id, runId: first.run.id, waitingEpoch: 1, finalEpoch: completed.run.epoch, otherWorkSucceeded: true, report: report.versionId, waitingSandbox: 'none-active', restartPersisted: true, doubleAsk: 'first-kept-second-rejected', cancelledReportReadable: true, cancelledAttachmentBytes: 0 }))

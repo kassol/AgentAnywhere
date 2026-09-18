@@ -230,7 +230,7 @@ export async function startServer(config: Config) {
       const artifactMatch = /^\/api\/artifacts\/([0-9a-f-]{36})\/(content|download)$/i.exec(path)
       if (artifactMatch && request.method === 'GET') {
         const artifact = await work?.artifactVersion(artifactMatch[1])
-        if (!artifact || !/^[0-9a-f-]{36}\/(?:epoch-\d+\/)?(report\.md|attachment-[0-4]\.(txt|csv|json|md))$/i.test(artifact.storageKey)
+        if (!artifact || !/^[0-9a-f-]{36}\/(?:epoch-\d+\/|checkpoint-\d+\/generation-[0-9a-f-]{36}\/)?(report\.md|attachment-[0-4]\.(txt|csv|json|md))$/i.test(artifact.storageKey)
           || !Number.isSafeInteger(Number(artifact.sizeBytes)) || Number(artifact.sizeBytes) < (artifact.kind === 'report' ? 1 : 0) || Number(artifact.sizeBytes) > 10_000_000
           || !['text/markdown', 'text/plain'].includes(artifact.mimeType)) return json({ error: 'Not found' }, 404)
         if (artifactMatch[2] === 'content' && artifact.kind !== 'report') return json({ error: 'Not found' }, 404)

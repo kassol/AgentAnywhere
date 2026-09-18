@@ -135,7 +135,7 @@ export async function createWorkStore(databaseUrl: string) {
 
   async function cancel(taskId: string) {
     return db.begin(async sql => {
-      const [run] = await sql`SELECT r.id, r.epoch, r.status, r.active FROM work_runs r
+      const [run] = await sql`SELECT r.id, r.epoch, r.status, r.active, r.checkpoint_ref AS "checkpointRef" FROM work_runs r
         JOIN work_tasks t ON t.id = r.task_id WHERE t.id = ${taskId} AND t.owner_id = 'owner'
         ORDER BY r.created_at DESC, r.id DESC LIMIT 1 FOR UPDATE OF r`
       if (!run) return null
@@ -145,6 +145,28 @@ export async function createWorkStore(databaseUrl: string) {
         const [terminal] = await sql`SELECT 1 FROM work_events WHERE run_id = ${run.id} AND epoch = ${run.epoch}
           AND type IN ('run.finished', 'run.failed') LIMIT 1`
         if (terminal) return { accepted: false }
+      }
+      if (run.status === 'waiting' && !run.active && run.checkpointRef) {
+        const checkpoint = typeof run.checkpointRef === 'string' ? JSON.parse(run.checkpointRef) : run.checkpointRef
+        if (checkpoint.epoch !== run.epoch || !Array.isArray(checkpoint.files)) throw new WorkConflictError('检查点无效')
+        const artifacts = Array.isArray(checkpoint.artifacts) ? checkpoint.artifacts : checkpoint.files
+          .filter((file: { name: string }) => /^generation-[0-9a-f-]{36}\/report\.md$/i.test(file.name))
+          .map((file: { name: string }) => ({ path: file.name, name: 'report.md', type: 'text/markdown', kind: 'report' }))
+        for (const item of artifacts) {
+          const file = checkpoint.files.find((entry: { name: string }) => entry.name === item.path)
+          if (!file || !Number.isSafeInteger(file.size) || file.size < (item.kind === 'report' ? 1 : 0) || file.size > (item.kind === 'report' ? 2_000_000 : 10_000_000)
+            || !/^[0-9a-f]{64}$/i.test(file.sha256)
+            || !/^generation-[0-9a-f-]{36}\/report\.md$/i.test(item.path) && !/^generation-[0-9a-f-]{36}\/attachment-[0-4]\.(txt|csv|json|md)$/i.test(item.path)
+            || item.kind !== (item.path.endsWith('/report.md') ? 'report' : 'attachment')
+            || item.type !== (item.kind === 'report' ? 'text/markdown' : 'text/plain')
+            || typeof item.name !== 'string' || !/^[^/\\\x00-\x1f]{1,100}\.(txt|csv|json|md)$/i.test(item.name)) throw new WorkConflictError('检查点成果无效')
+          const [artifact] = await sql`INSERT INTO work_artifacts (id, task_id, kind, name)
+            VALUES (${crypto.randomUUID()}, ${taskId}, ${item.kind}, ${item.name})
+            ON CONFLICT (task_id, kind, name) DO UPDATE SET name=EXCLUDED.name RETURNING id`
+          await sql`INSERT INTO work_artifact_versions (id, artifact_id, run_id, storage_key, sha256, size_bytes, mime_type)
+            VALUES (${crypto.randomUUID()}, ${artifact.id}, ${run.id}, ${`${run.id}/checkpoint-${run.epoch}/${item.path}`}, ${file.sha256}, ${file.size}, ${item.type})
+            ON CONFLICT (artifact_id, run_id) DO NOTHING`
+        }
       }
       const status = run.active ? 'cancelling' : 'cancelled'
       await sql`UPDATE work_runs SET status = ${status}, run_token_hash = NULL,
