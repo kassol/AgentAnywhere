@@ -102,7 +102,10 @@ async function persistArtifacts(run, sandbox) {
   if (manifestInfo?.type !== 'file' || !Number.isSafeInteger(manifestInfo.size) || manifestInfo.size < 2 || manifestInfo.size > 4096) throw new Error('报告清单不存在或无效')
   const bytes = await sandbox.files.readBytes(manifestPath, { limit: 4097 })
   if (bytes.length !== manifestInfo.size) throw new Error('报告清单已变化')
-  const entries = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
+  const manifest = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
+  const generation = Array.isArray(manifest) ? null : manifest?.generation
+  if (generation !== null && (typeof generation !== 'string' || !/^generation-[0-9a-f-]{36}$/.test(generation))) throw new Error('报告代次无效')
+  const entries = generation === null ? manifest : manifest.files
   if (!Array.isArray(entries) || entries.length < 1 || entries.length > 6 || entries[0]?.path !== 'report.md') throw new Error('报告清单无效')
   if (new Set(entries.map(item => item?.name)).size !== entries.length) throw new Error('附件名称重复')
   const saved = []
@@ -113,7 +116,7 @@ async function persistArtifacts(run, sandbox) {
       || (index > 0 && !/^attachment-[0-4]\.(txt|csv|json|md)$/.test(entry.path))
       || typeof entry.name !== 'string' || !/^[^/\\\x00-\x1f]{1,100}\.(txt|csv|json|md)$/i.test(entry.name)
       || entry.type !== (index === 0 ? 'text/markdown' : 'text/plain')) throw new Error('成果类型或路径无效')
-    const source = `${outputDir}/${entry.path}`
+    const source = `${outputDir}/${generation ? `${generation}/` : ''}${entry.path}`
     const info = await optionalFileInfo(sandbox, source)
     const limit = index === 0 ? 2_000_000 : 10_000_000
     if (info?.type !== 'file' || !Number.isSafeInteger(info.size) || info.size < 1 || info.size > limit) throw new Error('成果文件类型或大小无效')

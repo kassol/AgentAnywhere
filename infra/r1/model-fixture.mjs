@@ -61,15 +61,17 @@ http.createServer(async (request, response) => {
   const observation = body.messages.filter(message => message.role === 'tool').flatMap(message => typeof message.content === 'string' ? [message.content] : message.content?.filter?.(part => part.type === 'text').map(part => part.text) || [])
   const echoed = observation.some(item => item.includes('fixture observation'))
   const submitted = observation.some(item => item.includes('报告已保存'))
+  const submissions = observation.filter(item => item.includes('报告已保存')).length
   const toolResult = observation.length > 0
   const userMessages = body.messages.filter(message => message.role === 'user').map(message => typeof message.content === 'string'
     ? message.content : message.content?.filter?.(part => part.type === 'text').map(part => part.text).join('') || '')
+  const steered = body.model === 'fixture-slow' && userMessages.some(message => message.includes('STEERING_MARKER_12'))
   calls.push({ model: body.model, toolResult, observation, userMessages, stream: body.stream })
   response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' })
   const common = { id: `fixture-${calls.length}`, object: 'chat.completion.chunk', created: 1, model: body.model }
-  if (!submitted) {
-    const name = echoed ? 'submit_report' : 'echo_observation'
-    const args = echoed ? reportArgs : '{"text":"fixture observation"}'
+  if (!submitted || (steered && submissions === 1)) {
+    const name = steered && submitted ? 'submit_report' : echoed ? 'submit_report' : 'echo_observation'
+    const args = steered && submitted ? JSON.stringify({ markdown: `${report}\nSTEERING_MARKER_12\n` }) : echoed ? reportArgs : '{"text":"fixture observation"}'
     send(response, { ...common, choices: [{ index: 0, delta: { role: 'assistant', tool_calls: [{ index: 0, id: echoed ? 'call_report' : 'call_echo', type: 'function', function: { name, arguments: '' } }] }, finish_reason: null }] })
     send(response, { ...common, choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: args } }] }, finish_reason: null }] })
     send(response, { ...common, choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] })

@@ -1,6 +1,6 @@
 import http from 'node:http'
 import { timingSafeEqual } from 'node:crypto'
-import { mkdtemp, rename, rm, writeFile } from 'node:fs/promises'
+import { mkdir, rename, rm, writeFile } from 'node:fs/promises'
 import { createAgentSession, ModelRuntime, SessionManager } from '@earendil-works/pi-coding-agent'
 import { Type } from 'typebox'
 
@@ -62,7 +62,6 @@ async function execute({ goal, model, proxyBase }) {
         name: 'submit_report', label: 'Submit report', description: 'Save the final Markdown report and optional plain text attachments.',
         parameters: Type.Object({ markdown: Type.String(), attachments: Type.Optional(Type.Array(Type.Object({ name: Type.String(), content: Type.String() }), { maxItems: 5 })) }),
         execute: async (_id, params) => {
-          if (reportSubmitted) throw new Error('报告已提交')
           const report = Buffer.from(params.markdown, 'utf8')
           if (!report.length || report.length > 2_000_000) throw new Error('报告大小无效')
           const attachments = params.attachments ?? []
@@ -71,13 +70,17 @@ async function execute({ goal, model, proxyBase }) {
             if (!/^[^/\\\x00-\x1f]{1,100}\.(txt|csv|json|md)$/i.test(item.name) || Buffer.byteLength(item.content, 'utf8') > 10_000_000) throw new Error('附件类型、名称或大小无效')
             files.push({ path: `attachment-${index}.${item.name.split('.').at(-1).toLowerCase()}`, name: item.name, type: 'text/plain' })
           }
-          const temporary = await mkdtemp(`${outputDir}-`)
+          await mkdir(outputDir, { recursive: true, mode: 0o700 })
+          const generation = `generation-${crypto.randomUUID()}`
+          const temporary = `${outputDir}/${generation}`
+          await mkdir(temporary, { mode: 0o700 })
+          const pointer = `${outputDir}/manifest-${generation}.tmp`
           try {
             await writeFile(`${temporary}/report.md`, report, { mode: 0o600 })
             for (const [index, item] of attachments.entries()) await writeFile(`${temporary}/${files[index + 1].path}`, item.content, { mode: 0o600 })
-            await writeFile(`${temporary}/manifest.json`, JSON.stringify(files), { mode: 0o600 })
-            await rename(temporary, outputDir)
-          } catch (error) { await rm(temporary, { recursive: true, force: true }); throw error }
+            await writeFile(pointer, JSON.stringify({ generation, files }), { mode: 0o600, flush: true })
+            await rename(pointer, `${outputDir}/manifest.json`)
+          } catch (error) { await rm(pointer, { force: true }); await rm(temporary, { recursive: true, force: true }); throw error }
           reportSubmitted = true
           return { content: [{ type: 'text', text: '报告已保存，等待持久化校验' }], details: {} }
         },
