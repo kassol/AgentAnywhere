@@ -35,6 +35,15 @@ test('model settings survive restart; failed refresh retains selected model and 
     expect((await request('/api/model-connection/refresh', 'POST')).status).toBe(200)
     expect((await request('/api/model-connection')).text().then(text => text.includes('"ownedBy":"openai"'))).resolves.toBe(true)
     expect((await request('/api/model-connection/models', 'PUT', { defaultModel: 'gpt-6-astra', models: [{ id: 'gpt-6-astra', protocol: 'responses', contextWindow: 128000, maxTokens: 8192, input: ['text'], reasoning: true }] })).status).toBe(200)
+    expect((await request('/api/model-connection', 'PUT', { endpoint: gateway.url.origin + '/v1', apiKey: 'replacement-key' })).status).toBe(200)
+    let changed = await (await request('/api/model-connection')).json() as { discovery: { status: string }; catalogSourceEndpoint: string; models: { id: string }[]; defaultModel: string }
+    expect(changed.discovery.status).toBe('stale')
+    expect(changed.catalogSourceEndpoint).toBe(gateway.url.origin + '/v1')
+    expect(changed.models[0]?.id).toBe('gpt-6-astra')
+    expect(changed.defaultModel).toBe('gpt-6-astra')
+    expect((await request('/api/model-connection', 'PUT', { endpoint: gateway.url.origin + '/v1', apiKey: 'secret-key' })).status).toBe(200)
+    expect((await request('/api/model-connection')).json().then(value => value.discovery.status)).resolves.toBe('stale')
+    expect((await request('/api/model-connection/refresh', 'POST')).status).toBe(200)
     gatewayStatus = 401
     expect((await request('/api/model-connection/refresh', 'POST')).status).toBe(502)
     visible = await (await request('/api/model-connection')).text()

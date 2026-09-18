@@ -14,10 +14,10 @@ export type ModelSelection = {
   outputPrice?: number
 }
 type CatalogModel = { id: string; name: string; ownedBy?: string; type?: string; created?: number }
-type Discovery = { status: 'never' | 'ok' | 'unauthorized' | 'timeout' | 'empty' | 'error'; updatedAt?: string }
-type Stored = { endpoint: string; apiKey: string; catalog: CatalogModel[]; models: ModelSelection[]; defaultModel: string | null; discovery: Discovery }
+type Discovery = { status: 'never' | 'ok' | 'stale' | 'unauthorized' | 'timeout' | 'empty' | 'error'; updatedAt?: string }
+type Stored = { endpoint: string; apiKey: string; catalog: CatalogModel[]; catalogSourceEndpoint: string | null; models: ModelSelection[]; defaultModel: string | null; discovery: Discovery }
 
-const initial: Stored = { endpoint: '', apiKey: '', catalog: [], models: [], defaultModel: null, discovery: { status: 'never' } }
+const initial: Stored = { endpoint: '', apiKey: '', catalog: [], catalogSourceEndpoint: null, models: [], defaultModel: null, discovery: { status: 'never' } }
 
 export function createModelConnectionStore(dataDir: string, timeoutMs = 10_000) {
   const path = join(dataDir, 'model-connection.json')
@@ -66,7 +66,13 @@ export function createModelConnectionStore(dataDir: string, timeoutMs = 10_000) 
     const endpoint = url.toString().replace(/\/$/, '')
     return update(current => {
       if (!apiKey && (!current.apiKey || (current.endpoint && new URL(current.endpoint).origin !== url.origin))) throw new Error('更换端点主机时请重新填写凭证')
-      return { ...current, endpoint, apiKey: apiKey || current.apiKey }
+      const nextKey = apiKey || current.apiKey
+      const changed = endpoint !== current.endpoint || nextKey !== current.apiKey
+      return {
+        ...current, endpoint, apiKey: nextKey,
+        catalogSourceEndpoint: current.catalogSourceEndpoint ?? (current.catalog.length ? current.endpoint : null),
+        discovery: changed ? { ...current.discovery, status: current.catalog.length || current.models.length ? 'stale' : 'never' } : current.discovery,
+      }
     })
   }
 
@@ -130,10 +136,13 @@ export function createModelConnectionStore(dataDir: string, timeoutMs = 10_000) 
     } catch (error) {
       if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) status = 'timeout'
     }
-    await update(current => current.endpoint === endpoint && current.apiKey === apiKey
-      ? { ...current, ...(status === 'ok' ? { catalog } : {}), discovery: { status, updatedAt: new Date().toISOString() } }
-      : current)
-    return status
+    let applied = false
+    await update(current => {
+      if (current.endpoint !== endpoint || current.apiKey !== apiKey) return current
+      applied = true
+      return { ...current, ...(status === 'ok' ? { catalog, catalogSourceEndpoint: endpoint } : {}), discovery: { status, updatedAt: new Date().toISOString() } }
+    })
+    return applied ? status : 'stale'
   }
 
   return { load, visible, connection, selections, refresh }
