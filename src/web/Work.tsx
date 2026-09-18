@@ -5,7 +5,7 @@ import Markdown from 'react-markdown'
 type Model = { id: string; protocol: 'chat-completions' | 'responses' }
 type Task = { id: string; goal: string; sourceUrl: string | null; status: string; createdAt: string }
 type Artifact = { id: string; kind: 'report' | 'attachment'; name: string; versionId: string; runId: string; sha256: string; sizeBytes: number; createdAt: string }
-type Detail = Task & { run: { id: string; status: string; model: Model; cleanupState: string; failure: string | null; startedAt: string | null; finishedAt: string | null }; thread: { id: string; messages: { role: 'user'; content: string }[] }; artifacts: Artifact[] }
+type Detail = Task & { run: { id: string; status: string; model: Model; cleanupState: string; failure: string | null; startedAt: string | null; finishedAt: string | null }; thread: { id: string; messages: { role: 'user'; content: string; status: 'pending' | 'applied' }[] }; artifacts: Artifact[] }
 type RunEvent = { serverSeq: number; type: string; payload: Record<string, any>; occurredAt: string }
 const statusLabel: Record<string, string> = { queued: '待执行', provisioning: '准备环境', running: '执行中', cancelling: '正在取消', cancelled: '已取消', succeeded: '已完成', failed: '失败', lost: '执行中断', save_failed: '成果保存失败' }
 const safeLink = (url: string) => {
@@ -37,6 +37,8 @@ export function Work() {
   const [requestId, setRequestId] = useState(() => crypto.randomUUID())
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [steerContent, setSteerContent] = useState('')
+  const [steerCommandId, setSteerCommandId] = useState(() => crypto.randomUUID())
 
   useEffect(() => {
     const path = detailId ? `/api/tasks/${detailId}` : '/api/tasks'
@@ -121,6 +123,21 @@ export function Work() {
     } finally { setBusy(false) }
   }
 
+  async function submitSteer(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!detail) return
+    setBusy(true)
+    setError('')
+    try {
+      await read(await fetch(`/api/runs/${detail.run.id}/messages`, { method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ commandId: steerCommandId, kind: 'steer', content: steerContent }) }))
+      setDetail(await read<Detail>(await fetch(`/api/tasks/${detail.id}`)))
+      setSteerContent('')
+      setSteerCommandId(crypto.randomUUID())
+    } catch (error) { setError(error instanceof Error ? error.message : '追加要求失败') }
+    finally { setBusy(false) }
+  }
+
   async function retryCleanup() {
     try { await read(await fetch(`/api/tasks/${detailId}/cleanup-retry`, { method: 'POST' })) }
     catch (error) { setError(error instanceof Error ? error.message : '重试失败') }
@@ -147,7 +164,11 @@ export function Work() {
       {detail.sourceUrl && <p><a href={detail.sourceUrl} target="_blank" rel="noopener noreferrer">{detail.sourceUrl}</a></p>}
       <p className="muted">模型：{detail.run.model.id} · 协议：{detail.run.model.protocol}</p>
       <h3>工作对话</h3>
-      {detail.thread.messages.map((message, index) => <p className="work-message" key={index}>{message.content}</p>)}
+      {detail.thread.messages.map((message, index) => <p className="work-message" key={index}>{message.content}{message.status === 'pending' && <span className="muted">（待处理{detail.run.status === 'running' ? '，将在下一模型步骤生效' : '，本次执行已结束，等待继续处理'}）</span>}</p>)}
+      {detail.run.status === 'running' && <form className="work-form" onSubmit={submitSteer}>
+        <label>追加要求<textarea value={steerContent} onChange={event => { setSteerContent(event.target.value); setSteerCommandId(crypto.randomUUID()) }} maxLength={4000} required rows={3} /></label>
+        <button disabled={busy || !steerContent.trim()} type="submit">{busy ? '正在保存…' : '发送追加要求'}</button>
+      </form>}
       {activity.map(item => <p className="work-message" key={item.id}>{item.kind === 'tool' ? '工具：' : 'Agent：'}{item.text}{!item.done && '…'}</p>)}
       <p className="muted">用量：输入 {tokens('inputTokens') ?? '未知'} / 输出 {tokens('outputTokens') ?? '未知'} token</p>
       <p className="muted">实际费用：未知</p>

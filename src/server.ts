@@ -116,6 +116,21 @@ export async function startServer(config: Config) {
       const path = url.pathname
       const authenticated = session(request)
 
+      const messageMatch = /^\/internal\/runs\/([0-9a-f-]{36})\/(\d+)\/messages$/i.exec(path)
+      if (messageMatch && work) {
+        const token = request.headers.get('authorization')?.replace(/^Bearer /, '') ?? ''
+        const runId = messageMatch[1]
+        const epoch = Number(messageMatch[2])
+        if (request.method === 'GET') return json(await work.pendingRunMessages(runId, epoch, token))
+        if (request.method === 'POST') {
+          const body = await readLimited(request, 1024)
+          let id: unknown
+          try { id = body ? JSON.parse(body).id : undefined } catch { /* invalid input */ }
+          if (typeof id !== 'string' || !/^[0-9a-f-]{36}$/i.test(id)) return json({ error: 'Invalid message ID' }, 400)
+          return await work.acknowledgeRunMessage(runId, epoch, token, id) ? json({ applied: true }) : json({ error: 'Run epoch or message unavailable' }, 409)
+        }
+      }
+
       const proxyMatch = /^\/internal\/runs\/([0-9a-f-]{36})\/(\d+)\/v1\/(chat\/completions|responses)$/i.exec(path)
       if (proxyMatch && request.method === 'POST') {
         if (!work) return json({ error: 'Unavailable' }, 503)
@@ -224,6 +239,22 @@ export async function startServer(config: Config) {
           if (error instanceof WorkInputError) return json({ error: error.message }, 400)
           if (error instanceof WorkConflictError) return json({ error: error.message }, 409)
           return json({ error: '创建工作失败' }, 500)
+        }
+      }
+      const appendMatch = /^\/api\/runs\/([0-9a-f-]{36})\/messages$/i.exec(path)
+      if (appendMatch && request.method === 'POST') {
+        if (!sameOrigin(request)) return json({ error: 'Forbidden' }, 403)
+        if (!work) return json({ error: '工作存储未配置' }, 503)
+        const body = await readLimited(request, 8 * 1024)
+        if (body === null) return json({ error: '请求内容过大' }, 413)
+        try {
+          const result = await work.appendRunMessage(appendMatch[1], JSON.parse(body))
+          return result ? json(result.message, result.created ? 201 : 200) : json({ error: 'Not found' }, 404)
+        } catch (error) {
+          if (error instanceof SyntaxError) return json({ error: 'JSON 格式无效' }, 400)
+          if (error instanceof WorkInputError) return json({ error: error.message }, 400)
+          if (error instanceof WorkConflictError) return json({ error: error.message }, 409)
+          return json({ error: '追加要求失败' }, 500)
         }
       }
       if (/^\/api\/tasks\/[0-9a-f-]{36}\/events$/i.test(path) && request.method === 'GET') {

@@ -1,6 +1,6 @@
 import http from 'node:http'
 import { timingSafeEqual } from 'node:crypto'
-import { mkdtemp, rename, rm, writeFile } from 'node:fs/promises'
+import { mkdir, rename, rm, writeFile } from 'node:fs/promises'
 import { createAgentSession, ModelRuntime, SessionManager } from '@earendil-works/pi-coding-agent'
 import { Type } from 'typebox'
 
@@ -41,6 +41,8 @@ function send(response, status, body) {
 }
 
 async function execute({ goal, model, proxyBase }) {
+  let messageTimer
+  let acceptingMessages = false
   try {
     if (typeof goal !== 'string' || !goal || !model || typeof model.id !== 'string' || !['chat-completions', 'responses'].includes(model.protocol) || !/^http:\/\/[a-z0-9.-]+(?::\d+)?\/internal\/runs\/[0-9a-f-]+\/\d+\/v1$/i.test(proxyBase)) throw new Error('Run 配置无效')
     const runtime = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false })
@@ -66,7 +68,6 @@ async function execute({ goal, model, proxyBase }) {
         parameters: Type.Object({ markdown: Type.String(), attachments: Type.Optional(Type.Array(Type.Object({ name: Type.String(), content: Type.String() }), { maxItems: 5 })) }),
         execute: async (_id, params, signal) => {
           if (cancelRequested || signal?.aborted) throw new Error('Run cancelled')
-          if (reportSubmitted) throw new Error('报告已提交')
           const report = Buffer.from(params.markdown, 'utf8')
           if (!report.length || report.length > 2_000_000) throw new Error('报告大小无效')
           const attachments = params.attachments ?? []
@@ -76,14 +77,19 @@ async function execute({ goal, model, proxyBase }) {
             files.push({ path: `attachment-${index}.${item.name.split('.').at(-1).toLowerCase()}`, name: item.name, type: 'text/plain' })
           }
           if (new Set(files.map(item => item.name)).size !== files.length) throw new Error('附件名称重复')
-          const temporary = await mkdtemp(`${outputDir}-`)
+          await mkdir(outputDir, { recursive: true, mode: 0o700 })
+          const generation = `generation-${crypto.randomUUID()}`
+          const temporary = `${outputDir}/${generation}`
+          await mkdir(temporary, { mode: 0o700 })
+          const pointer = `${outputDir}/manifest-${generation}.tmp`
           try {
             await writeFile(`${temporary}/report.md`, report, { mode: 0o600 })
             for (const [index, item] of attachments.entries()) await writeFile(`${temporary}/${files[index + 1].path}`, item.content, { mode: 0o600 })
-            await writeFile(`${temporary}/manifest.json`, JSON.stringify(files), { mode: 0o600 })
             if (cancelRequested || signal?.aborted) throw new Error('Run cancelled')
-            await rename(temporary, outputDir)
-          } catch (error) { await rm(temporary, { recursive: true, force: true }); throw error }
+            await writeFile(pointer, JSON.stringify({ generation, files }), { mode: 0o600, flush: true })
+            if (cancelRequested || signal?.aborted) throw new Error('Run cancelled')
+            await rename(pointer, `${outputDir}/manifest.json`)
+          } catch (error) { await rm(pointer, { force: true }); await rm(temporary, { recursive: true, force: true }); throw error }
           reportSubmitted = true
           return { content: [{ type: 'text', text: '报告已保存，等待持久化校验' }], details: {} }
         },
@@ -91,7 +97,45 @@ async function execute({ goal, model, proxyBase }) {
     })
     session = created.session
     if (cancelRequested) throw new Error('Run cancelled')
+    const messageUrl = `${proxyBase.slice(0, -3)}/messages`
+    const queued = new Map()
+    const seen = new Set()
+    const acknowledgements = []
+    let polling = false
+    acceptingMessages = true
+    let initialPromptSeen = false
+    async function pollMessages() {
+      if (polling || !acceptingMessages || finished) return
+      polling = true
+      try {
+        const response = await fetch(messageUrl, { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(5000) })
+        if (!response.ok) return
+        for (const message of await response.json()) {
+          if (!acceptingMessages) break
+          if (seen.has(message.id)) continue
+          seen.add(message.id)
+          queued.set(message.id, message)
+          session.agent.steer({ role: 'user', content: [{ type: 'text', text: message.content }], timestamp: Date.now() })
+        }
+      } finally { polling = false }
+    }
     session.subscribe(event => {
+      if (event.type === 'message_end' && event.message.role === 'user') {
+        if (!initialPromptSeen) initialPromptSeen = true
+        else {
+          const content = event.message.content.filter(part => part.type === 'text').map(part => part.text).join('')
+          const entry = [...queued].find(([, item]) => item.content === content)
+          if (entry) {
+            queued.delete(entry[0])
+            const acknowledgement = fetch(messageUrl, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+              body: JSON.stringify({ id: entry[0] }), signal: AbortSignal.timeout(5000) }).then(response => {
+              if (!response.ok) throw new Error('追加要求确认失败')
+            })
+            acknowledgements.push(acknowledgement)
+            acknowledgement.catch(() => {})
+          }
+        }
+      }
       if (event.type === 'message_update' && event.assistantMessageEvent.type === 'text_delta') emit('message.delta', { delta: event.assistantMessageEvent.delta })
       if (event.type === 'message_end' && event.message.role === 'assistant') emit('message.completed', {
         content: event.message.content.filter(part => part.type === 'text').map(part => part.text).join(''),
@@ -102,17 +146,25 @@ async function execute({ goal, model, proxyBase }) {
         result: event.result?.content?.filter(part => part.type === 'text').map(part => part.text).join('') ?? '', isError: event.isError })
     })
     emit('worker.ready')
-    await session.prompt(`${goal}\n\n完成后调用 submit_report 保存 Markdown 报告。只引用实际获得的来源；目前没有搜索工具，无法核查的事实须写明。最后简短回复已提交。测试要求使用 echo_observation 时可以调用。`)
+    const execution = session.prompt(`${goal}\n\n完成后调用 submit_report 保存 Markdown 报告。只引用实际获得的来源；目前没有搜索工具，无法核查的事实须写明。最后简短回复已提交。测试要求使用 echo_observation 时可以调用。`)
+    messageTimer = setInterval(() => void pollMessages().catch(() => {}), 200)
+    await pollMessages()
+    await execution
+    acceptingMessages = false
     await session.waitForIdle()
+    clearInterval(messageTimer)
+    await Promise.all(acknowledgements)
     if (cancelRequested) throw new Error('Run cancelled')
     const last = [...session.messages].reverse().find(message => message.role === 'assistant')
     if (!last || last.stopReason === 'error' || last.stopReason === 'aborted') throw new Error(last?.errorMessage || '模型执行未完成')
     if (!reportSubmitted) throw new Error('未提交报告')
     emit('run.finished')
   } catch (error) {
+    acceptingMessages = false
     if (cancelRequested) emit('run.cancelled')
     else emit('run.failed', { error: error instanceof Error ? error.message : '执行失败' })
   } finally {
+    clearInterval(messageTimer)
     session?.dispose()
   }
 }

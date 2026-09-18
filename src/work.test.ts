@@ -3,6 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { SQL } from 'bun'
+import { createHash } from 'node:crypto'
 import { startServer } from './server'
 import { createWorkStore } from './work'
 import { createModelConnectionStore } from './model-connection'
@@ -45,6 +46,37 @@ test.skipIf(!databaseUrl)('owner creates one persisted queued work request throu
     expect(JSON.stringify(task)).not.toContain('private-secret')
     expect((await send('/api/tasks', 'POST', body)).status).toBe(200)
     expect((await send('/api/tasks', 'POST', { ...body, goal: 'different' })).status).toBe(409)
+    const runToken = 'test-run-token'
+    const stateDb = new SQL(testDatabaseUrl)
+    await stateDb`UPDATE work_runs SET status = 'running', active = true, epoch = 1,
+      run_token_hash = ${createHash('sha256').update(runToken).digest('hex')} WHERE id = ${task.run.id}`
+    const commandId = crypto.randomUUID()
+    const addition = { commandId, kind: 'steer', content: '改为对照两篇论文' }
+    expect((await fetch(`${base}/api/runs/${task.run.id}/messages`, { method: 'POST' })).status).toBe(401)
+    expect((await send(`/api/runs/${task.run.id}/messages`, 'POST', addition, { origin: 'https://other.example' })).status).toBe(403)
+    const appended = await send(`/api/runs/${task.run.id}/messages`, 'POST', addition)
+    expect(appended.status).toBe(201)
+    const message = await appended.json()
+    expect(message).toMatchObject({ content: addition.content, status: 'pending' })
+    expect((await send(`/api/runs/${task.run.id}/messages`, 'POST', addition)).status).toBe(200)
+    expect((await send(`/api/runs/${task.run.id}/messages`, 'POST', { ...addition, content: '不同内容' })).status).toBe(409)
+    expect((await send(`/api/tasks/${task.id}`)).json()).resolves.toMatchObject({ thread: { messages: [{ content: body.goal, status: 'applied' }, { content: addition.content, status: 'pending' }] } })
+    const internal = `/internal/runs/${task.run.id}/1/messages`
+    const pending = await fetch(`${base}${internal}`, { headers: { authorization: `Bearer ${runToken}` } })
+    expect(await pending.json()).toEqual([{ id: message.id, content: addition.content }])
+    expect((await fetch(`${base}${internal}`, { method: 'POST', headers: { authorization: 'Bearer wrong', 'content-type': 'application/json' }, body: JSON.stringify({ id: message.id }) })).status).toBe(409)
+    expect((await fetch(`${base}${internal}`, { method: 'POST', headers: { authorization: `Bearer ${runToken}`, 'content-type': 'application/json' }, body: JSON.stringify({ id: message.id }) })).status).toBe(200)
+    expect((await fetch(`${base}${internal}`, { method: 'POST', headers: { authorization: `Bearer ${runToken}`, 'content-type': 'application/json' }, body: JSON.stringify({ id: message.id }) })).status).toBe(200)
+    expect((await send(`/api/tasks/${task.id}`)).json()).resolves.toMatchObject({ thread: { messages: [{ status: 'applied' }, { status: 'applied' }] } })
+    const deferredInput = { commandId: crypto.randomUUID(), kind: 'steer', content: '保留待续' }
+    const deferredAttempts = await Promise.all([send(`/api/runs/${task.run.id}/messages`, 'POST', deferredInput), send(`/api/runs/${task.run.id}/messages`, 'POST', deferredInput)])
+    expect(deferredAttempts.map(item => item.status).sort()).toEqual([200, 201])
+    const deferred = await deferredAttempts[0].json()
+    await stateDb`UPDATE work_runs SET epoch = 2, status = 'succeeded', active = false WHERE id = ${task.run.id}`
+    expect((await fetch(`${base}${internal}`, { method: 'POST', headers: { authorization: `Bearer ${runToken}`, 'content-type': 'application/json' }, body: JSON.stringify({ id: deferred.id }) })).status).toBe(409)
+    expect((await send(`/api/tasks/${task.id}`)).json()).resolves.toMatchObject({ thread: { messages: [{ status: 'applied' }, { status: 'applied' }, { status: 'pending' }] } })
+    expect((await send(`/api/runs/${task.run.id}/messages`, 'POST', { commandId: crypto.randomUUID(), kind: 'steer', content: '新要求' })).status).toBe(409)
+    await stateDb.close()
     expect((await send('/api/tasks', 'POST', { ...body, requestId: crypto.randomUUID(), modelId: 'unknown' })).status).toBe(400)
     expect((await send('/api/tasks', 'POST', { ...body, requestId: crypto.randomUUID(), sourceUrl: 'file:///etc/passwd' })).status).toBe(400)
     const linkOnly = await send('/api/tasks', 'POST', { requestId: crypto.randomUUID(), goal: '', sourceUrl: 'https://example.org/news', modelId: 'test-model' })
@@ -60,17 +92,17 @@ test.skipIf(!databaseUrl)('owner creates one persisted queued work request throu
     expect((await send('/api/tasks')).json().then((list: unknown[]) => list.filter((item: any) => item.id === task.id).length)).resolves.toBe(1)
     expect((await send(`/api/tasks/${task.id}`)).json()).resolves.toMatchObject({ id: task.id, goal: body.goal, status: 'queued' })
     expect((await send(`/api/tasks/${task.id}/events`)).json()).resolves.toEqual([])
-    expect((await fetch(`${base}/api/tasks/${task.id}/cancel`, { method: 'POST' })).status).toBe(401)
-    expect((await send(`/api/tasks/${task.id}/cancel`, 'POST', {}, { origin: 'https://other.example' })).status).toBe(403)
-    expect((await send(`/api/tasks/${task.id}/cancel`, 'POST')).status).toBe(202)
-    expect((await send(`/api/tasks/${task.id}/cancel`, 'POST')).status).toBe(200)
-    expect((await send(`/api/tasks/${task.id}`)).json()).resolves.toMatchObject({ status: 'cancelled', run: { status: 'cancelled' } })
-    expect((await send(`/api/tasks/${task.id}/events`)).json()).resolves.toMatchObject([{ type: 'run.cancelled' }])
+    expect((await fetch(`${base}/api/tasks/${linked.id}/cancel`, { method: 'POST' })).status).toBe(401)
+    expect((await send(`/api/tasks/${linked.id}/cancel`, 'POST', {}, { origin: 'https://other.example' })).status).toBe(403)
+    expect((await send(`/api/tasks/${linked.id}/cancel`, 'POST')).status).toBe(202)
+    expect((await send(`/api/tasks/${linked.id}/cancel`, 'POST')).status).toBe(200)
+    expect((await send(`/api/tasks/${linked.id}`)).json()).resolves.toMatchObject({ status: 'cancelled', run: { status: 'cancelled' } })
+    expect((await send(`/api/tasks/${linked.id}/events`)).json()).resolves.toMatchObject([{ type: 'run.cancelled' }])
     app.stop(true)
     app = await startServer({ password, port: 0, dataDir, databaseUrl: testDatabaseUrl })
     base = app.url.origin
     cookie = await login()
-    expect((await send(`/api/tasks/${task.id}`)).json()).resolves.toMatchObject({ id: task.id, goal: body.goal, sourceUrl: body.sourceUrl, status: 'cancelled' })
+    expect((await send(`/api/tasks/${linked.id}`)).json()).resolves.toMatchObject({ id: linked.id, status: 'cancelled' })
     expect((await send('/api/model-connection/models', 'PUT', { defaultModel: 'test-model', models: [{ id: 'test-model', protocol: 'responses', contextWindow: 128000, maxTokens: 8192, input: ['text'], reasoning: false, tools: true }] })).status).toBe(200)
     expect((await send('/api/model-connection', 'PUT', { endpoint: 'https://replacement.example/v1', apiKey: 'new-private-secret' })).status).toBe(200)
     const next = await send('/api/tasks', 'POST', { ...body, requestId: crypto.randomUUID() })
