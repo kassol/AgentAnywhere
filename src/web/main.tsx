@@ -1,10 +1,8 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useState, type FormEvent } from 'react'
 import { createRoot } from 'react-dom/client'
-import { EmptyStateCard } from './EmptyStateCard'
 import { ModelSettings } from './ModelSettings'
+import { Work } from './Work'
 import './style.css'
-
-type Task = { id: string; title: string; status: string }
 
 function Login() {
   const [error, setError] = useState('')
@@ -52,20 +50,7 @@ function Login() {
 
 function Workbench() {
   const settings = location.pathname === '/settings'
-  const [tasks, setTasks] = useState<Task[] | null>(null)
   const [error, setError] = useState('')
-
-  useEffect(() => {
-    if (settings) return
-    fetch('/api/tasks').then(async response => {
-      if (response.status === 401) {
-        location.assign('/login')
-        return
-      }
-      if (!response.ok) throw new Error('load failed')
-      setTasks(await response.json() as Task[])
-    }).catch(() => setError('工作列表加载失败，请刷新页面。'))
-  }, [settings])
 
   async function logout() {
     const response = await fetch('/api/logout', { method: 'POST' })
@@ -91,13 +76,7 @@ function Workbench() {
             <p className="muted">当前已登录。</p>
             <button type="button" className="secondary" onClick={logout}>退出登录</button>
           </section></>
-        ) : tasks === null ? (
-          !error && <p className="muted" role="status">正在加载工作…</p>
-        ) : tasks.length === 0 ? (
-          <EmptyStateCard title="还没有工作" description="工作会显示在这里。" />
-        ) : (
-          <ul className="task-list">{tasks.map(task => <li key={task.id}>{task.title}<span>{task.status}</span></li>)}</ul>
-        )}
+        ) : <Work />}
       </main>
     </div>
   )

@@ -3,8 +3,9 @@
 * { box-sizing: border-box; }
 body { margin: 0; }
 button, input, select { font: inherit; }
+textarea { font: inherit; }
 button, a { -webkit-tap-highlight-color: transparent; }
-button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid #b99ce5; outline-offset: 2px; }
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3px solid #b99ce5; outline-offset: 2px; }
 .muted { color: #716b77; }
 .error { color: #a52d3b; margin-top: 16px; }
 .login-page { min-height: 100vh; display: grid; place-items: center; padding: 24px; background: radial-gradient(circle at 20% 20%, #e9e2f3, transparent 45%), #faf9fb; }
@@ -60,5 +61,16 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .account-card { max-width: 720px; }
 .task-list { padding: 0; list-style: none; max-width: 720px; }
 .task-list li { display: flex; justify-content: space-between; padding: 16px; border-bottom: 1px solid var(--border); }
+.task-list a, .work-detail a { color: #543574; overflow-wrap: anywhere; }
+.work-form, .work-detail { display: grid; gap: 16px; max-width: 720px; padding: 22px; background: #fff; border: 1px solid var(--border); border-radius: 9px; }
+.work-form h2, .work-detail h2 { margin: 0; font-size: 18px; }
+.work-form label { display: grid; gap: 6px; font-size: 13px; font-weight: 600; }
+.work-form input, .work-form select, .work-form textarea { width: 100%; padding: 9px 11px; border: 1px solid #cfc8d5; border-radius: 8px; background: #fff; }
+.work-form details label { margin-top: 12px; }
+.work-form button { justify-self: start; cursor: pointer; padding: 10px 16px; border: 0; border-radius: 8px; background: var(--accent); color: #fff; font-weight: 600; }
+.work-form button:disabled { opacity: .55; cursor: default; }
+.work-list { max-width: 720px; margin-top: 32px; }
+.work-status { justify-self: start; margin: 0; padding: 6px 10px; border-radius: 6px; color: #573b73; background: #eee8f4; }
+.work-message { margin: 0; padding: 14px; border: 1px solid var(--border); border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
 @media (max-width: 650px) { .shell { grid-template-columns: 1fr; grid-template-rows: auto 1fr; } .sidebar { padding: 15px 20px; border-right: 0; border-bottom: 1px solid var(--border); } .brand { padding: 0 0 12px; } .sidebar nav { display: flex; } .content { padding: 28px 20px; } }
 @media (max-width: 650px) { .model-fields { grid-template-columns: 1fr; } .manual-add { align-items: stretch; flex-direction: column; } }

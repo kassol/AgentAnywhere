@@ -1,8 +1,9 @@
 import { join } from 'node:path'
 import type { ServerWebSocket } from 'bun'
 import { createModelConnectionStore } from './model-connection'
+import { createWorkStore, WorkConflictError, WorkInputError } from './work'
 
-type Config = { password: string; host?: string; port?: number; secureCookie?: boolean; publicOrigin?: string; dataDir?: string; modelTimeoutMs?: number }
+type Config = { password: string; host?: string; port?: number; secureCookie?: boolean; publicOrigin?: string; dataDir?: string; modelTimeoutMs?: number; databaseUrl?: string }
 type Session = { expires: number; sockets: Set<ServerWebSocket<{ token: string }>> }
 
 const cookieName = 'agentanywhere_session'
@@ -29,6 +30,7 @@ export async function startServer(config: Config) {
   const passwordHash = await Bun.password.hash(config.password, { algorithm: 'argon2id' })
   const modelConnection = createModelConnectionStore(config.dataDir ?? join(process.cwd(), 'data'), config.modelTimeoutMs)
   await modelConnection.load()
+  const work = config.databaseUrl ? await createWorkStore(config.databaseUrl) : null
   const sessions = new Map<string, Session>()
   const attempts = new Map<string, { count: number; until: number }>()
   const secure = config.secureCookie ?? false
@@ -105,7 +107,28 @@ export async function startServer(config: Config) {
         return redirect('/login')
       }
       if (path === '/api/session' && request.method === 'GET') return json({ authenticated: true })
-      if (path === '/api/tasks' && request.method === 'GET') return json([])
+      if (path === '/api/tasks' && request.method === 'GET') return json(work ? await work.list() : [])
+      if (path === '/api/tasks' && request.method === 'POST') {
+        if (!sameOrigin(request)) return json({ error: 'Forbidden' }, 403)
+        if (!work) return json({ error: '工作存储未配置' }, 503)
+        const body = await readLimited(request, 8 * 1024)
+        if (body === null) return json({ error: '请求内容过大' }, 413)
+        try {
+          const result = await work.create(JSON.parse(body), modelConnection.visible())
+          return json(result.task, result.created ? 201 : 200)
+        } catch (error) {
+          if (error instanceof SyntaxError) return json({ error: 'JSON 格式无效' }, 400)
+          if (error instanceof WorkInputError) return json({ error: error.message }, 400)
+          if (error instanceof WorkConflictError) return json({ error: error.message }, 409)
+          return json({ error: '创建工作失败' }, 500)
+        }
+      }
+      if (path.startsWith('/api/tasks/') && request.method === 'GET') {
+        const id = path.slice('/api/tasks/'.length)
+        if (!/^[0-9a-f-]{36}$/i.test(id)) return json({ error: 'Not found' }, 404)
+        const task = await work?.detail(id)
+        return task ? json(task) : json({ error: 'Not found' }, 404)
+      }
       if (path === '/api/model-connection' && request.method === 'GET') return json(modelConnection.visible())
       if ((path === '/api/model-connection' || path === '/api/model-connection/models' || path === '/api/model-connection/refresh') && request.method !== 'GET') {
         if (!sameOrigin(request)) return json({ error: 'Forbidden' }, 403)
@@ -141,7 +164,7 @@ export async function startServer(config: Config) {
         if (token && server.upgrade(request, { data: { token } })) return undefined
         return json({ error: 'WebSocket upgrade required' }, 426)
       }
-      if ((path === '/' || path === '/settings') && request.method === 'GET') return html()
+      if ((path === '/' || path === '/settings' || /^\/tasks\/[0-9a-f-]{36}$/i.test(path)) && request.method === 'GET') return html()
       return json({ error: 'Not found' }, 404)
     },
     websocket: {
@@ -169,6 +192,7 @@ async function html() {
 }
 
 if (import.meta.main) {
+  if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL is required')
   const server = await startServer({
     password: process.env.AGENTANYWHERE_PASSWORD ?? '',
     host: process.env.AGENTANYWHERE_HOST ?? '127.0.0.1',
@@ -176,6 +200,7 @@ if (import.meta.main) {
     secureCookie: process.env.AGENTANYWHERE_SECURE_COOKIE === 'true',
     publicOrigin: process.env.AGENTANYWHERE_PUBLIC_ORIGIN,
     dataDir: process.env.AGENTANYWHERE_DATA_DIR,
+    databaseUrl: process.env.DATABASE_URL,
   })
   console.log(`AgentAnywhere listening on ${server.url.origin}`)
 }
