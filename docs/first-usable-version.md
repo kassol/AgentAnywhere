@@ -50,7 +50,7 @@ SearXNG 提供 GET/POST `/search`，`format=json` 需要实例在 `search.format
 
 ## 后续工程核查
 
-- 整体范围已确认，下一阶段转 spec，再拆为有依赖关系的 GitHub Issues。
+- 整体范围已确认，规格已发布为 [Spec #3](https://github.com/kassol/AgentAnywhere/issues/3)，后续由 to-tickets 拆为有依赖关系的 GitHub Issues。
 - 实施前核查 sub2api 实际模型列表、元信息字段及双协议行为；具体接口事实由工程核查，不要求用户猜测。
 
 暂不包含代码修改验收、第三方账号操作、交互式浏览器、自动化、并行工作与 PDF 导出；这些保留在完整 MVP 的后续范围。
