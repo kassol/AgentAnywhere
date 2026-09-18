@@ -343,6 +343,7 @@ async function cleanup(run, sandboxId) {
 async function stopRecoveredAgent(sandbox) {
   await sandbox.files.writeFiles([{ path: '/tmp/agentanywhere-recovery-stop', data: Buffer.from('stop'), mode: 600 }])
   const command = String.raw`node -e 'const fs=require("node:fs");
+    const idle="/tmp/agentanywhere-recovery-idle";
     const running=()=>fs.readdirSync("/proc").filter(name=>/^[0-9]+$/.test(name)).filter(pid=>{
       try { const args=fs.readFileSync("/proc/"+pid+"/cmdline","utf8").split(String.fromCharCode(0));
         return args[0].split("/").at(-1)==="node" && args[1]==="/app/agent-worker.mjs" }
@@ -350,9 +351,9 @@ async function stopRecoveredAgent(sandbox) {
     });
     const found=running();
     if(found.length>1) process.exit(2);
-    if(found.length) process.kill(Number(found[0]),"SIGTERM");
+    if(found.length && !fs.existsSync(idle)) process.kill(Number(found[0]),"SIGTERM");
     const started=Date.now();
-    setInterval(()=>{ if(!running().length) process.exit(0); if(Date.now()-started>10000) process.exit(3) },100)'`
+    setInterval(()=>{ if(fs.existsSync(idle) && running().length===1) process.exit(0); if(Date.now()-started>10000) process.exit(3) },100)'`
   const result = await sandbox.commands.run(command, { timeoutSeconds: 12 })
   if (result.exitCode !== 0) throw new Error('旧 Pi 未停止')
 }
@@ -611,6 +612,6 @@ process.once('SIGTERM', async () => {
   researchServer.close()
   clearInterval(dispatchTimer)
   clearInterval(recoveryTimer)
-  await boss.stop()
-  await pool.end()
+  await boss.stop().catch(error => console.error('Queue shutdown failed', error?.message))
+  process.exit(0)
 })

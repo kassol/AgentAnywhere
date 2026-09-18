@@ -20,6 +20,7 @@ let executionDone
 const outputDir = '/tmp/agentanywhere-output'
 const sessionDir = '/tmp/agentanywhere-session'
 const recoveryStopPath = '/tmp/agentanywhere-recovery-stop'
+const recoveryIdlePath = '/tmp/agentanywhere-recovery-idle'
 
 async function recoveryStopped() {
   try { await stat(recoveryStopPath); return true }
@@ -218,15 +219,16 @@ async function execute({ goal, model, proxyBase, toolBase, resume = false, answe
   }
 }
 
-process.once('SIGTERM', () => {
+process.on('SIGTERM', () => {
+  if (recoveryRequested) return
   recoveryRequested = true
   stopPolling()
   void (async () => {
-    try {
-      await session?.abort().catch(() => {})
-      await executionDone
-    } finally { process.exit(0) }
-  })()
+    await session?.abort().catch(() => {})
+    await executionDone?.catch(() => {})
+    await writeFile(`${recoveryIdlePath}.tmp`, 'idle', { mode: 0o600, flush: true })
+    await rename(`${recoveryIdlePath}.tmp`, recoveryIdlePath)
+  })().catch(error => console.error('Recovery stop failed', error?.message))
 })
 
 http.createServer(async (request, response) => {
