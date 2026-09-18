@@ -498,7 +498,9 @@ async function recoverPending() {
             await releaseWaiting(run, run.sandbox_id)
             return
           }
-          await persistArtifacts(run, sandbox)
+          const manifest = await optionalFileInfo(sandbox, `${outputDir}/manifest.json`)
+          const report = await optionalFileInfo(sandbox, `${outputDir}/report.md`)
+          if (run.pending_status !== 'cancelled' || manifest || report) await persistArtifacts(run, sandbox)
         }
         await finish(run, { status: run.pending_status || run.status, failure: run.pending_failure || (run.status === 'save_failed' ? null : run.failure) }, run.sandbox_id)
       } catch (error) { await markSaveBlocked(run, error, { status: run.pending_status || run.status, failure: run.pending_failure || run.failure }) }
