@@ -1,14 +1,15 @@
 import { join } from 'node:path'
 import type { ServerWebSocket } from 'bun'
+import { createModelConnectionStore } from './model-connection'
 
-type Config = { password: string; host?: string; port?: number; secureCookie?: boolean; publicOrigin?: string }
+type Config = { password: string; host?: string; port?: number; secureCookie?: boolean; publicOrigin?: string; dataDir?: string; modelTimeoutMs?: number }
 type Session = { expires: number; sockets: Set<ServerWebSocket<{ token: string }>> }
 
 const cookieName = 'agentanywhere_session'
 const day = 86_400_000
 const assets = join(import.meta.dir, '../dist')
 
-async function readLimited(request: Request): Promise<string | null> {
+async function readLimited(request: Request, limit = 1024): Promise<string | null> {
   const reader = request.body?.getReader()
   if (!reader) return null
   const chunks: Uint8Array[] = []
@@ -17,7 +18,7 @@ async function readLimited(request: Request): Promise<string | null> {
     const { done, value } = await reader.read()
     if (done) break
     size += value.byteLength
-    if (size > 1024) { await reader.cancel(); return null }
+    if (size > limit) { await reader.cancel(); return null }
     chunks.push(value)
   }
   return new TextDecoder().decode(Buffer.concat(chunks))
@@ -26,6 +27,8 @@ async function readLimited(request: Request): Promise<string | null> {
 export async function startServer(config: Config) {
   if (!config.password || config.password.length < 12) throw new Error('AGENTANYWHERE_PASSWORD must contain at least 12 characters')
   const passwordHash = await Bun.password.hash(config.password, { algorithm: 'argon2id' })
+  const modelConnection = createModelConnectionStore(config.dataDir ?? join(process.cwd(), 'data'), config.modelTimeoutMs)
+  await modelConnection.load()
   const sessions = new Map<string, Session>()
   const attempts = new Map<string, { count: number; until: number }>()
   const secure = config.secureCookie ?? false
@@ -103,6 +106,27 @@ export async function startServer(config: Config) {
       }
       if (path === '/api/session' && request.method === 'GET') return json({ authenticated: true })
       if (path === '/api/tasks' && request.method === 'GET') return json([])
+      if (path === '/api/model-connection' && request.method === 'GET') return json(modelConnection.visible())
+      if ((path === '/api/model-connection' || path === '/api/model-connection/models' || path === '/api/model-connection/refresh') && request.method !== 'GET') {
+        if (!sameOrigin(request)) return json({ error: 'Forbidden' }, 403)
+        try {
+          if (path === '/api/model-connection/refresh' && request.method === 'POST') {
+            const status = await modelConnection.refresh()
+            return json(modelConnection.visible(), status === 'ok' ? 200 : status === 'unauthorized' ? 502 : status === 'timeout' ? 504 : status === 'empty' ? 422 : 502)
+          }
+          if (request.method !== 'PUT') return json({ error: 'Not found' }, 404)
+          const body = await readLimited(request, 64 * 1024)
+          if (body === null) return json({ error: '请求内容过大' }, 413)
+          const parsed = JSON.parse(body)
+          if (path === '/api/model-connection') await modelConnection.connection(parsed)
+          else await modelConnection.selections(parsed)
+          return json(modelConnection.visible())
+        } catch (error) {
+          if (error instanceof SyntaxError) return json({ error: 'JSON 格式无效' }, 400)
+          if (error instanceof Error && /^(请|更换|端点|无效|模型|默认|输入|contextWindow|maxTokens|inputPrice|outputPrice|reasoning|tools)/.test(error.message)) return json({ error: error.message }, 400)
+          return json({ error: '设置保存失败' }, 500)
+        }
+      }
       if (path === '/api/logout' && request.method === 'POST') {
         if (!sameOrigin(request)) return json({ error: 'Forbidden' }, 403)
         const token = sessionToken(request)
@@ -151,6 +175,7 @@ if (import.meta.main) {
     port: Number(process.env.AGENTANYWHERE_PORT ?? 3000),
     secureCookie: process.env.AGENTANYWHERE_SECURE_COOKIE === 'true',
     publicOrigin: process.env.AGENTANYWHERE_PUBLIC_ORIGIN,
+    dataDir: process.env.AGENTANYWHERE_DATA_DIR,
   })
   console.log(`AgentAnywhere listening on ${server.url.origin}`)
 }

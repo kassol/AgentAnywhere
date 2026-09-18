@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { createRoot } from 'react-dom/client'
 import { EmptyStateCard } from './EmptyStateCard'
+import { ModelSettings } from './ModelSettings'
 import './style.css'
 
 type Task = { id: string; title: string; status: string }
@@ -85,11 +86,11 @@ function Workbench() {
         <header className="page-header"><h1>{settings ? '设置' : '工作'}</h1></header>
         {error && <p className="error" role="alert">{error}</p>}
         {settings ? (
-          <section className="settings-card">
+          <><ModelSettings /><section className="settings-card account-card">
             <h2>账户</h2>
             <p className="muted">当前已登录。</p>
             <button type="button" className="secondary" onClick={logout}>退出登录</button>
-          </section>
+          </section></>
         ) : tasks === null ? (
           !error && <p className="muted" role="status">正在加载工作…</p>
         ) : tasks.length === 0 ? (
