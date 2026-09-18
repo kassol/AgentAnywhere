@@ -1,0 +1,39 @@
+name: agentanywhere-r1-live-test
+services:
+  web:
+    image: agentanywhere-r1-web:r1-05
+    ports: ["127.0.0.1:19114:3000"]
+    env_file: ./live-test.env
+    healthcheck:
+      test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:3000/login').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    environment:
+      AGENTANYWHERE_HOST: 0.0.0.0
+      AGENTANYWHERE_PORT: 3000
+      AGENTANYWHERE_DATA_DIR: /data
+    volumes:
+      - ./data/model-connection.json:/data/model-connection.json:ro
+    networks:
+      app: {}
+      sandbox:
+        aliases: [live-test-web]
+  queue:
+    image: agentanywhere-r1-queue:r1-05
+    env_file: ./live-test.env
+    depends_on:
+      web:
+        condition: service_healthy
+    environment:
+      AGENT_IMAGE: ${TEST_AGENT_IMAGE:-agentanywhere-r1-agent:r1-05}
+      OPEN_SANDBOX_DOMAIN: opensandbox:8080
+      MODEL_PROXY_ORIGIN: http://live-test-web:3000
+    networks: [app, sandbox]
+networks:
+  app:
+    external: true
+    name: agentanywhere-r1_default
+  sandbox:
+    external: true
+    name: agentanywhere-r1-sandbox

@@ -40,10 +40,10 @@ function send(response, status, body) {
 
 async function execute({ goal, model, proxyBase }) {
   try {
-    if (typeof goal !== 'string' || !goal || !model || typeof model.id !== 'string' || model.protocol !== 'chat-completions' || !/^http:\/\/[a-z0-9.-]+(?::\d+)?\/internal\/runs\/[0-9a-f-]+\/\d+\/v1$/i.test(proxyBase)) throw new Error('Run 配置无效')
+    if (typeof goal !== 'string' || !goal || !model || typeof model.id !== 'string' || !['chat-completions', 'responses'].includes(model.protocol) || !/^http:\/\/[a-z0-9.-]+(?::\d+)?\/internal\/runs\/[0-9a-f-]+\/\d+\/v1$/i.test(proxyBase)) throw new Error('Run 配置无效')
     const runtime = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false })
     runtime.registerProvider('agentanywhere', {
-      baseUrl: proxyBase, api: 'openai-completions', authHeader: true,
+      baseUrl: proxyBase, api: model.protocol === 'responses' ? 'openai-responses' : 'openai-completions', authHeader: true,
       models: [{ id: model.id, name: model.id, reasoning: model.reasoning, input: model.input,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: model.contextWindow, maxTokens: model.maxTokens }],
     })
