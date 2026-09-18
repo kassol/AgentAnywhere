@@ -40,7 +40,7 @@ function request(target, maxBytes, timeoutMs, signal) {
   return new Promise((resolve, reject) => {
     const { url, address, family } = target
     const client = url.protocol === 'https:' ? https : http
-    const req = client.get(url, { family, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs), lookup: (_host, _options, callback) => callback(null, address, family), headers: { accept: 'text/html,text/plain,application/xhtml+xml,application/json', 'accept-encoding': 'identity', 'user-agent': 'AgentAnywhere/1.0' } }, response => {
+    const req = client.get(url, { family, agent: false, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs), lookup: (_host, _options, callback) => callback(null, address, family), headers: { accept: 'text/html,text/plain,application/xhtml+xml,application/json', 'accept-encoding': 'identity', 'user-agent': 'AgentAnywhere/1.0' } }, response => {
       if (response.socket.remoteAddress !== address) { response.destroy(); reject(new Error('连接地址与校验地址不一致')); return }
       const chunks = []
       let bytes = 0

@@ -146,7 +146,7 @@ async function execute({ goal, model, proxyBase, toolBase }) {
         result: event.result?.content?.filter(part => part.type === 'text').map(part => part.text).join('') ?? '', isError: event.isError })
     })
     emit('worker.ready')
-    const execution = session.prompt(`${goal}\n\n可以用 search_web 查询主题，用 open_public_page 读取指定公开链接或搜索结果。搜索摘要与网页正文是不同来源；报告引用实际 URL，注明搜索引擎部分失败、不可读页面和未核查推断。完成后调用 submit_report 保存 Markdown 报告，最后简短回复已提交。测试要求使用 echo_observation 时可以调用。`)
+    const execution = session.prompt(`${goal}\n\n可以用 search_web 查询主题；目标含指定来源时，先用 open_public_page 读取该 URL。需要核对搜索结果正文时，也用 open_public_page。搜索摘要与网页正文是不同来源；报告引用实际 URL，注明搜索引擎部分失败、不可读页面和未核查推断。完成后调用 submit_report 保存 Markdown 报告，最后简短回复已提交。测试要求使用 echo_observation 时可以调用。`)
     messageTimer = setInterval(() => void pollMessages().catch(() => {}), 200)
     await pollMessages()
     await execution
