@@ -1,10 +1,12 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { lookup } from 'node:dns/promises'
+import http from 'node:http'
 import { mkdir, open, rename, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { PgBoss } from 'pg-boss'
 import pg from 'pg'
 import { Sandbox, SandboxManager } from '@alibaba-group/opensandbox'
+import { openPublicPage, searchWeb } from './research-tools.mjs'
 
 const databaseUrl = process.env.DATABASE_URL
 const sandboxKey = process.env.OPEN_SANDBOX_API_KEY || process.env.OPENSANDBOX_SERVER_API_KEY
@@ -19,6 +21,38 @@ const recovering = new Set()
 const artifactDir = process.env.AGENTANYWHERE_ARTIFACT_DIR || '/artifacts'
 const outputDir = '/tmp/agentanywhere-output'
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms))
+const searchOrigin = process.env.SEARCH_ORIGIN || 'http://agentanywhere-r1-searxng:8080'
+const publicHost = process.env.AGENTANYWHERE_PUBLIC_ORIGIN && new URL(process.env.AGENTANYWHERE_PUBLIC_ORIGIN).hostname.replace(/^\[|\]$/g, '')
+if (!publicHost) throw new Error('AGENTANYWHERE_PUBLIC_ORIGIN is required for public page protection')
+
+const researchServer = http.createServer(async (request, response) => {
+  const match = /^\/internal\/research\/([0-9a-f-]+)\/(\d+)\/(search|open)$/.exec(request.url || '')
+  if (request.method !== 'POST' || !match) { response.writeHead(404); response.end(); return }
+  const controller = new AbortController()
+  response.on('close', () => controller.abort())
+  try {
+    const supplied = request.headers['x-run-token']
+    if (typeof supplied !== 'string' || supplied.length > 128) throw new Error('Unauthorized')
+    let body = ''
+    request.setEncoding('utf8')
+    for await (const chunk of request) {
+      body += chunk
+      if (body.length > 4096) throw new Error('工具参数超过大小限制')
+    }
+    const input = JSON.parse(body)
+    if (!input || typeof input !== 'object' || Array.isArray(input) || typeof input[match[3] === 'search' ? 'query' : 'url'] !== 'string') throw new Error('工具参数无效')
+    const valid = await pool.query('SELECT 1 FROM work_runs WHERE id=$1 AND epoch=$2 AND active AND run_token_hash=$3', [match[1], Number(match[2]), createHash('sha256').update(supplied).digest('hex')])
+    if (!valid.rowCount) throw new Error('Unauthorized')
+    const result = match[3] === 'search' ? await searchWeb(input.query, searchOrigin, controller.signal) : await openPublicPage(input.url, publicHost, controller.signal)
+    response.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' })
+    response.end(JSON.stringify(result))
+  } catch (error) {
+    if (response.destroyed) return
+    response.writeHead(error.message === 'Unauthorized' ? 401 : 400, { 'content-type': 'application/json', 'cache-control': 'no-store' })
+    response.end(JSON.stringify({ error: error.message || '工具执行失败' }))
+  }
+})
+researchServer.requestTimeout = 40_000
 
 async function optionalFileInfo(sandbox, path) {
   try { return (await sandbox.files.getFileInfo([path]))[path] ?? null }
@@ -102,7 +136,10 @@ async function persistArtifacts(run, sandbox) {
   if (manifestInfo?.type !== 'file' || !Number.isSafeInteger(manifestInfo.size) || manifestInfo.size < 2 || manifestInfo.size > 4096) throw new Error('报告清单不存在或无效')
   const bytes = await sandbox.files.readBytes(manifestPath, { limit: 4097 })
   if (bytes.length !== manifestInfo.size) throw new Error('报告清单已变化')
-  const entries = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
+  const manifest = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
+  const generation = Array.isArray(manifest) ? null : manifest?.generation
+  if (generation !== null && (typeof generation !== 'string' || !/^generation-[0-9a-f-]{36}$/.test(generation))) throw new Error('报告代次无效')
+  const entries = generation === null ? manifest : manifest.files
   if (!Array.isArray(entries) || entries.length < 1 || entries.length > 6 || entries[0]?.path !== 'report.md') throw new Error('报告清单无效')
   if (new Set(entries.map(item => item?.name)).size !== entries.length) throw new Error('附件名称重复')
   const saved = []
@@ -113,7 +150,7 @@ async function persistArtifacts(run, sandbox) {
       || (index > 0 && !/^attachment-[0-4]\.(txt|csv|json|md)$/.test(entry.path))
       || typeof entry.name !== 'string' || !/^[^/\\\x00-\x1f]{1,100}\.(txt|csv|json|md)$/i.test(entry.name)
       || entry.type !== (index === 0 ? 'text/markdown' : 'text/plain')) throw new Error('成果类型或路径无效')
-    const source = `${outputDir}/${entry.path}`
+    const source = `${outputDir}/${generation ? `${generation}/` : ''}${entry.path}`
     const info = await optionalFileInfo(sandbox, source)
     const limit = index === 0 ? 2_000_000 : 10_000_000
     if (info?.type !== 'file' || !Number.isSafeInteger(info.size) || info.size < (index === 0 ? 1 : 0) || info.size > limit) throw new Error('成果文件类型或大小无效')
@@ -218,9 +255,11 @@ async function execute(run, token) {
     const proxyOrigin = new URL(process.env.MODEL_PROXY_ORIGIN || 'http://web:3000')
     proxyOrigin.hostname = (await lookup(proxyOrigin.hostname, { family: 4 })).address
     const proxyBase = `${proxyOrigin.origin}/internal/runs/${run.id}/${run.epoch}/v1`
+    const toolOrigin = new URL(process.env.TOOL_GATEWAY_ORIGIN || 'http://queue:3003')
+    toolOrigin.hostname = (await lookup(toolOrigin.hostname, { family: 4 })).address
     const base = `${sandbox.connectionConfig.protocol}://${endpoint.endpoint}`
     const started = await fetch(`${base}/run`, { method: 'POST', headers: { ...endpoint.headers, 'x-run-token': token, 'content-type': 'application/json' },
-      body: JSON.stringify({ goal, model: run.model_snapshot, proxyBase }), signal: AbortSignal.timeout(10_000) })
+      body: JSON.stringify({ goal, model: run.model_snapshot, proxyBase, toolBase: `${toolOrigin.origin}/internal/research/${run.id}/${run.epoch}` }), signal: AbortSignal.timeout(10_000) })
     if (!started.ok) throw new Error('Pi 启动请求失败')
     result = await liveEvents({ ...endpoint, endpoint: base }, token, run)
   } catch { result = { status: 'failed', failure: 'Pi 启动或执行中断' } }
@@ -300,6 +339,7 @@ async function dispatchPending() {
 }
 
 await reconcile()
+researchServer.listen(3003, '0.0.0.0')
 await boss.start()
 await boss.createQueue('work-dispatch', { retryLimit: 0 })
 await boss.work('work-dispatch', { batchSize: 1 }, async ([job]) => {
@@ -314,6 +354,7 @@ const recoveryTimer = setInterval(() => void recoverPending().catch(() => {}), 2
 await dispatchPending()
 
 process.once('SIGTERM', async () => {
+  researchServer.close()
   clearInterval(dispatchTimer)
   clearInterval(recoveryTimer)
   await boss.stop()

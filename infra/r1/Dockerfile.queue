@@ -3,5 +3,6 @@ WORKDIR /app
 COPY infra/r1/queue/package*.json ./
 RUN npm ci --omit=dev
 COPY src/queue-worker.mjs ./queue-worker.mjs
+COPY src/research-tools.mjs ./research-tools.mjs
 USER node
 CMD ["node", "/app/queue-worker.mjs"]
