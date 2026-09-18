@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { EmptyStateCard } from './EmptyStateCard'
 import Markdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 
 type Model = { id: string; protocol: 'chat-completions' | 'responses' }
 type Task = { id: string; goal: string; sourceUrl: string | null; status: string; createdAt: string }
@@ -13,6 +14,10 @@ const safeLink = (url: string) => {
     const parsed = new URL(url)
     return ['https:', 'http:'].includes(parsed.protocol) && !parsed.username && !parsed.password ? parsed.href : ''
   } catch { return '' }
+}
+
+export function ReportMarkdown({ markdown }: { markdown: string }) {
+  return <Markdown remarkPlugins={[remarkGfm]} skipHtml urlTransform={safeLink} components={{ a: props => <a {...props} target="_blank" rel="noopener noreferrer" />, img: () => null }}>{markdown}</Markdown>
 }
 
 async function read<T>(response: Response): Promise<T> {
@@ -265,7 +270,7 @@ export function Work() {
       {detail.artifacts.length > 0 && <section className="artifacts"><h3>成果</h3>
         {detail.artifacts.filter(item => item.kind === 'report').map((item, index, reports) => <button type="button" key={item.versionId} onClick={() => setSelectedVersion(item.versionId)} aria-pressed={currentVersion === item.versionId}>第 {reports.length - index} 版 · {new Date(item.createdAt).toLocaleString('zh-CN')} · Run {item.runId.slice(0, 8)}{item.runStatus !== 'succeeded' && ' · 未完成'}</button>)}
         {currentVersion && <><p><a href={`/api/artifacts/${currentVersion}/download`}>下载 Markdown 报告</a></p>
-          <div className="report-markdown">{loadedVersion === currentVersion ? <Markdown skipHtml urlTransform={safeLink} components={{ a: props => <a {...props} target="_blank" rel="noopener noreferrer" />, img: () => null }}>{report}</Markdown> : <p role="status">正在加载报告…</p>}</div></>}
+          <div className="report-markdown">{loadedVersion === currentVersion ? <ReportMarkdown markdown={report} /> : <p role="status">正在加载报告…</p>}</div></>}
         {detail.artifacts.some(item => item.kind === 'attachment' && item.runId === detail.artifacts.find(report => report.versionId === currentVersion)?.runId) && <><h4>该版本附件</h4><ul>{detail.artifacts.filter(item => item.kind === 'attachment' && item.runId === detail.artifacts.find(report => report.versionId === currentVersion)?.runId).map(item => <li key={item.versionId}><a href={`/api/artifacts/${item.versionId}/download`}>{item.name}</a></li>)}</ul></>}
       </section>}
     </section>}
