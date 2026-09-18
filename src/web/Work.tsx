@@ -6,6 +6,7 @@ type Task = { id: string; goal: string; sourceUrl: string | null; status: 'queue
 type Detail = Task & { run: { id: string; status: 'queued'; model: Model }; thread: { id: string; messages: { role: 'user'; content: string }[] } }
 
 async function read<T>(response: Response): Promise<T> {
+  if (response.status === 401) location.assign('/login')
   const body = await response.json()
   if (!response.ok) throw new Error(body.error || '请求失败')
   return body as T

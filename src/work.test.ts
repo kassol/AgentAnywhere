@@ -28,7 +28,7 @@ test.skipIf(!databaseUrl)('owner creates one persisted queued work request throu
     expect((await send('/api/tasks', 'POST', { requestId: crypto.randomUUID(), goal: '研究可解释性' })).status).toBe(400)
     const endpoint = 'https://models.example/v1'
     expect((await send('/api/model-connection', 'PUT', { endpoint, apiKey: 'private-secret' })).status).toBe(200)
-    expect((await send('/api/model-connection/models', 'PUT', { defaultModel: 'test-model', models: [{ id: 'test-model', protocol: 'responses', contextWindow: 128000, maxTokens: 8192, input: ['text'], tools: true }] })).status).toBe(200)
+    expect((await send('/api/model-connection/models', 'PUT', { defaultModel: 'test-model', models: [{ id: 'test-model', protocol: 'responses', contextWindow: 128000, maxTokens: 8192, input: ['text'], reasoning: false, tools: true }] })).status).toBe(200)
 
     const requestId = crypto.randomUUID()
     const body = { requestId, goal: '研究可解释性', sourceUrl: 'https://example.com/paper', modelId: 'test-model', protocol: 'chat-completions' }
@@ -36,7 +36,7 @@ test.skipIf(!databaseUrl)('owner creates one persisted queued work request throu
     expect(created.status).toBe(201)
     const task = await created.json()
     ids.push(task.id)
-    expect(task).toMatchObject({ goal: body.goal, sourceUrl: body.sourceUrl, status: 'queued', run: { status: 'queued', model: { id: 'test-model', protocol: 'chat-completions', endpoint, contextWindow: 128000, maxTokens: 8192, input: ['text'], tools: true } }, thread: { messages: [{ role: 'user', content: body.goal }] } })
+    expect(task).toMatchObject({ goal: body.goal, sourceUrl: body.sourceUrl, status: 'queued', run: { status: 'queued', model: { id: 'test-model', protocol: 'chat-completions', endpoint, contextWindow: 128000, maxTokens: 8192, input: ['text'], reasoning: false, tools: true } }, thread: { messages: [{ role: 'user', content: body.goal }] } })
     expect(JSON.stringify(task)).not.toContain('private-secret')
     expect((await send('/api/tasks', 'POST', body)).status).toBe(200)
     expect((await send('/api/tasks', 'POST', { ...body, goal: 'different' })).status).toBe(409)
@@ -48,8 +48,10 @@ test.skipIf(!databaseUrl)('owner creates one persisted queued work request throu
     ids.push(linked.id)
     expect(linked).toMatchObject({ sourceUrl: 'https://example.org/news', thread: { messages: [{ content: 'https://example.org/news' }] } })
     expect((await fetch(`${base}/api/tasks/${task.id}`)).status).toBe(401)
-    expect((await send('/api/model-connection/models', 'PUT', { defaultModel: 'no-text', models: [{ id: 'no-text', protocol: 'responses', contextWindow: 128000, maxTokens: 8192, input: ['image'] }] })).status).toBe(200)
+    expect((await send('/api/model-connection/models', 'PUT', { defaultModel: 'no-text', models: [{ id: 'no-text', protocol: 'responses', contextWindow: 128000, maxTokens: 8192, input: ['image'], reasoning: false }] })).status).toBe(200)
     expect((await send('/api/tasks', 'POST', { ...body, requestId: crypto.randomUUID(), modelId: 'no-text' })).status).toBe(400)
+    expect((await send('/api/model-connection/models', 'PUT', { defaultModel: 'unknown-reasoning', models: [{ id: 'unknown-reasoning', protocol: 'responses', contextWindow: 128000, maxTokens: 8192, input: ['text'] }] })).status).toBe(200)
+    expect((await send('/api/tasks', 'POST', { ...body, requestId: crypto.randomUUID(), modelId: 'unknown-reasoning' })).status).toBe(400)
 
     expect((await send('/api/tasks')).json().then((list: unknown[]) => list.filter((item: any) => item.id === task.id).length)).resolves.toBe(1)
     expect((await send(`/api/tasks/${task.id}`)).json()).resolves.toMatchObject({ id: task.id, goal: body.goal, status: 'queued' })
@@ -60,7 +62,7 @@ test.skipIf(!databaseUrl)('owner creates one persisted queued work request throu
     expect((await send(`/api/tasks/${task.id}`)).json()).resolves.toMatchObject({ id: task.id, goal: body.goal, sourceUrl: body.sourceUrl, status: 'queued' })
     expect((await send('/api/model-connection', 'PUT', { endpoint: 'https://replacement.example/v1', apiKey: 'new-private-secret' })).status).toBe(200)
     expect((await send('/api/model-connection/models', 'PUT', { defaultModel: null, models: [] })).status).toBe(200)
-    expect((await send(`/api/tasks/${task.id}`)).json()).resolves.toMatchObject({ run: { model: { id: 'test-model', protocol: 'chat-completions', endpoint, contextWindow: 128000, maxTokens: 8192, input: ['text'], tools: true } } })
+    expect((await send(`/api/tasks/${task.id}`)).json()).resolves.toMatchObject({ run: { model: { id: 'test-model', protocol: 'chat-completions', endpoint, contextWindow: 128000, maxTokens: 8192, input: ['text'], reasoning: false, tools: true } } })
   } finally {
     app.stop(true)
     for (const id of ids) {

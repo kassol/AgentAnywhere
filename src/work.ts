@@ -73,7 +73,7 @@ export async function createWorkStore(databaseUrl: string) {
     }
     const model = connection.models.find(item => item.id === input.modelId)
     if (!connection.endpoint || !connection.hasCredential || !model) throw new WorkInputError('请先选择可用模型并配置连接')
-    if (!model.contextWindow || !model.maxTokens || !model.input?.includes('text')) throw new WorkInputError('请补充模型的上下文、输出上限和文本输入配置')
+    if (!model.contextWindow || !model.maxTokens || !model.input?.includes('text') || typeof model.reasoning !== 'boolean') throw new WorkInputError('请补充模型的上下文、输出上限、文本输入和推理配置')
     const snapshot = { ...model, protocol: input.protocol ?? model.protocol, endpoint: connection.endpoint }
     const taskId = crypto.randomUUID()
     const inserted = await db.begin(async sql => {
