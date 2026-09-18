@@ -43,7 +43,8 @@ services:
     environment:
       AGENT_IMAGE: agentanywhere-r1-agent:${AGENTANYWHERE_RELEASE:?set the 40-character release commit SHA}
       OPEN_SANDBOX_DOMAIN: opensandbox:8080
-      MODEL_PROXY_ORIGIN: http://web:3000
+      MODEL_PROXY_ORIGIN: http://agentanywhere-r1-web:3000
+      TOOL_GATEWAY_ORIGIN: http://agentanywhere-r1-queue:3003
       AGENTANYWHERE_ARTIFACT_DIR: /artifacts
     depends_on:
       web:
