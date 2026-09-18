@@ -2,11 +2,11 @@
 
 ## 项目概述
 
-自托管的个人委托工作台。已实现独立 Web 登录、模型连接、工作创建、两种协议的隔离执行与持久事件、报告成果保存和阅读、执行中追加要求、受控搜索、取消、提问与回答恢复、完成后继续工作、失败后手动重试和执行上限；这些功能已通过隔离回归，正式公网入口待验收。产品要求见 [PRD](docs/PRD.md)，实施范围见 [MVP](docs/MVP.md)。
+自托管的个人委托工作台。已实现独立 Web 登录、模型连接、工作创建、两种协议的隔离执行与持久事件、报告成果保存和阅读、执行中追加要求、受控搜索、取消、提问与回答恢复、完成后继续工作、失败后手动重试和执行上限；这些功能已通过隔离回归，正式公网已完成真实调研、报告下载与 HTTPS/WSS 验收。产品要求见 [PRD](docs/PRD.md)，实施范围见 [MVP](docs/MVP.md)。
 
 ## 技术栈
 
-React/TypeScript、Bun、PostgreSQL、Node.js 24.21、pg-boss 12.26.3、Pi 0.85.1 与 OpenSandbox SDK 0.1.11 用于最小执行链路。sub2api 已用于模型列表发现；真实 Chat Completions 和 Responses 已在隔离 Run 验证，正式公网入口待后续验收。OpenConnector 属后续实施范围。
+React/TypeScript、Bun、PostgreSQL、Node.js 24.21、pg-boss 12.26.3、Pi 0.85.1 与 OpenSandbox SDK 0.1.11 用于最小执行链路。sub2api 已用于模型列表发现；真实 Chat Completions 和 Responses 已在隔离 Run 验证，正式公网已完成真实调研、报告下载与 HTTPS/WSS 验收。OpenConnector 属后续实施范围。
 
 ## 目录索引
 
@@ -67,3 +67,5 @@ React/TypeScript、Bun、PostgreSQL、Node.js 24.21、pg-boss 12.26.3、Pi 0.85.
 - 2026-09-18：加入 R1-13 完成后继续工作与报告版本历史，通过隔离与浏览器验收。
 - 2026-09-18：加入 R1-10 提问、检查点保存、等待释放与回答后排队恢复，通过隔离与浏览器验收。
 - 2026-09-18：加入 R1-12 失败检查点、手动重试与执行上限，通过隔离验收。
+
+- 2026-09-19：首版发布至 cc-la 公网，完成统一回归、真实网关、浏览器与 W0 归档回收；证据见 `docs/evidence/r1-14.md`。

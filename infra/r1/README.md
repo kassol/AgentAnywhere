@@ -9,10 +9,10 @@ release=$(git rev-parse HEAD)
 test -z "$(git status --porcelain)"
 git archive "$release" | ssh cc-la "mkdir -p /opt/agentanywhere-r1/build-$release && tar -x -C /opt/agentanywhere-r1/build-$release"
 ssh cc-la "cd /opt/agentanywhere-r1 && for component in web queue agent; do
-  if docker image inspect agentanywhere-r1-\$component:$release >/dev/null 2>&1; then
+  if docker image inspect agentanywhere-r1-\${component}:$release >/dev/null 2>&1; then
     echo 'Release image tag already exists' >&2; exit 1
   fi
-  docker build -t agentanywhere-r1-\$component:$release -f build-$release/infra/r1/Dockerfile.\$component build-$release || exit
+  docker build -t agentanywhere-r1-\${component}:$release -f build-$release/infra/r1/Dockerfile.\$component build-$release || exit
 done
 if docker image inspect agentanywhere-r1-model-fixture:$release >/dev/null 2>&1; then
   echo 'Release fixture image tag already exists' >&2; exit 1
