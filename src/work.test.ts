@@ -237,6 +237,7 @@ test.skipIf(!databaseUrl)('owner creates one persisted queued work request throu
     const retryTask = await retried.json()
     expect(retryTask).toMatchObject({ id: failed.id, status: 'queued', run: { status: 'queued', retryOfRunId: failed.run.id, model: { endpoint: 'https://replacement.example/v1' } }, runs: [{ id: failed.run.id }, { id: retryTask.run.id }] })
     expect(retryTask.run.id).not.toBe(failed.run.id)
+    expect((await versionDb`SELECT jsonb_typeof(checkpoint_ref) AS type FROM work_runs WHERE id=${retryTask.run.id}`)[0].type).toBe('object')
     expect((await send(`/api/tasks/${failed.id}/retry`, 'POST', retryBody)).status).toBe(200)
     expect((await send(`/api/tasks/${failed.id}/retry`, 'POST', { requestId: crypto.randomUUID() })).status).toBe(409)
     await versionDb`UPDATE work_runs SET status='running', active=true, epoch=1,
