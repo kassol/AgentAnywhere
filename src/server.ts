@@ -173,7 +173,10 @@ export async function startServer(config: Config) {
         const timer = setInterval(() => void work.isRunStopped(runId, epoch).then(stopped => {
           if (stopped) { controller.abort(); stopWatching() }
         }).catch(() => { controller.abort(); stopWatching() }), 200)
-        const stopWatching = () => clearInterval(timer)
+        const stopWatching = () => {
+          clearInterval(timer)
+          request.signal.removeEventListener('abort', stopWatching)
+        }
         request.signal.addEventListener('abort', stopWatching, { once: true })
         try {
           const upstream = await fetch(`${credential.endpoint}/${modelPath(protocol)}`, {
