@@ -62,7 +62,9 @@ http.createServer(async (request, response) => {
   const echoed = observation.some(item => item.includes('fixture observation'))
   const submitted = observation.some(item => item.includes('报告已保存'))
   const toolResult = observation.length > 0
-  calls.push({ model: body.model, toolResult, observation, stream: body.stream })
+  const userMessages = body.messages.filter(message => message.role === 'user').map(message => typeof message.content === 'string'
+    ? message.content : message.content?.filter?.(part => part.type === 'text').map(part => part.text).join('') || '')
+  calls.push({ model: body.model, toolResult, observation, userMessages, stream: body.stream })
   response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' })
   const common = { id: `fixture-${calls.length}`, object: 'chat.completion.chunk', created: 1, model: body.model }
   if (!submitted) {

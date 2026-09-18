@@ -66,8 +66,12 @@ test.skipIf(!databaseUrl)('owner creates one persisted queued work request throu
     expect(await pending.json()).toEqual([{ id: message.id, content: addition.content }])
     expect((await fetch(`${base}${internal}`, { method: 'POST', headers: { authorization: 'Bearer wrong', 'content-type': 'application/json' }, body: JSON.stringify({ id: message.id }) })).status).toBe(409)
     expect((await fetch(`${base}${internal}`, { method: 'POST', headers: { authorization: `Bearer ${runToken}`, 'content-type': 'application/json' }, body: JSON.stringify({ id: message.id }) })).status).toBe(200)
+    expect((await fetch(`${base}${internal}`, { method: 'POST', headers: { authorization: `Bearer ${runToken}`, 'content-type': 'application/json' }, body: JSON.stringify({ id: message.id }) })).status).toBe(200)
     expect((await send(`/api/tasks/${task.id}`)).json()).resolves.toMatchObject({ thread: { messages: [{ status: 'applied' }, { status: 'applied' }] } })
-    const deferred = await (await send(`/api/runs/${task.run.id}/messages`, 'POST', { commandId: crypto.randomUUID(), kind: 'steer', content: '保留待续' })).json()
+    const deferredInput = { commandId: crypto.randomUUID(), kind: 'steer', content: '保留待续' }
+    const deferredAttempts = await Promise.all([send(`/api/runs/${task.run.id}/messages`, 'POST', deferredInput), send(`/api/runs/${task.run.id}/messages`, 'POST', deferredInput)])
+    expect(deferredAttempts.map(item => item.status).sort()).toEqual([200, 201])
+    const deferred = await deferredAttempts[0].json()
     await stateDb`UPDATE work_runs SET epoch = 2, status = 'succeeded', active = false WHERE id = ${task.run.id}`
     expect((await fetch(`${base}${internal}`, { method: 'POST', headers: { authorization: `Bearer ${runToken}`, 'content-type': 'application/json' }, body: JSON.stringify({ id: deferred.id }) })).status).toBe(409)
     expect((await send(`/api/tasks/${task.id}`)).json()).resolves.toMatchObject({ thread: { messages: [{ status: 'applied' }, { status: 'applied' }, { status: 'pending' }] } })
