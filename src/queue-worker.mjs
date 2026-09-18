@@ -233,11 +233,13 @@ async function saveCheckpoint(run, sandbox, question) {
     try {
       await db.query('BEGIN')
       const current = await db.query("SELECT status FROM work_runs WHERE id=$1 AND epoch=$2 AND active FOR UPDATE", [run.id, run.epoch])
+      if (current.rows[0]?.status === 'cancelling') { await db.query('ROLLBACK'); return false }
       if (!['running', 'save_failed'].includes(current.rows[0]?.status)) throw new Error('Run 执行代次已失效')
       await db.query('INSERT INTO work_interactions (id, run_id, epoch, question, status) VALUES ($1,$2,$3,$4,$5)', [randomUUID(), run.id, run.epoch, question, 'pending'])
       await db.query("UPDATE work_runs SET status='waiting', checkpoint_ref=$3, run_token_hash=NULL, failure=NULL, pending_status=NULL WHERE id=$1 AND epoch=$2", [run.id, run.epoch, JSON.stringify({ epoch: run.epoch, files })])
       await db.query("UPDATE work_tasks SET status='waiting' WHERE id=$1", [run.task_id])
       await db.query('COMMIT')
+      return true
     } catch (error) { await db.query('ROLLBACK'); throw error } finally { db.release() }
   } catch (error) { await rm(temporary, { recursive: true, force: true }); throw error }
 }
@@ -403,10 +405,11 @@ async function execute(run, token) {
     try {
       if (sandbox) {
         if (result.status === 'waiting') {
-          try { await saveCheckpoint(run, sandbox, result.question) }
+          let saved
+          try { saved = await saveCheckpoint(run, sandbox, result.question) }
           catch (error) { await markSaveBlocked(run, error, result); return }
-          await releaseWaiting(run, sandbox.id)
-          return
+          if (saved) { await releaseWaiting(run, sandbox.id); return }
+          result = { status: 'cancelled', failure: null }
         }
         const manifestPath = `${outputDir}/manifest.json`
         const reportPath = `${outputDir}/report.md`

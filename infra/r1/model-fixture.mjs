@@ -169,6 +169,15 @@ http.createServer(async (request, response) => {
     send(response, { ...common, choices: [], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } })
     return response.end('data: [DONE]\n\n')
   }
+  if (body.model === 'fixture-double-ask') {
+    for (const [index, question] of ['请确认第一项？', '请确认第二项？'].entries()) {
+      send(response, { ...common, choices: [{ index: 0, delta: { role: 'assistant', tool_calls: [{ index, id: `call_ask_${index}`, type: 'function', function: { name: 'ask_user', arguments: '' } }] }, finish_reason: null }] })
+      send(response, { ...common, choices: [{ index: 0, delta: { tool_calls: [{ index, function: { arguments: JSON.stringify({ question }) } }] }, finish_reason: null }] })
+    }
+    send(response, { ...common, choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] })
+    send(response, { ...common, choices: [], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } })
+    return response.end('data: [DONE]\n\n')
+  }
   if (!submitted || (steered && submissions === 1)) {
     const name = steered && submitted ? 'submit_report' : echoed ? 'submit_report' : 'echo_observation'
     let args = '{"text":"fixture observation"}'

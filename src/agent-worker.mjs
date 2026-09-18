@@ -69,6 +69,7 @@ async function execute({ goal, model, proxyBase, toolBase, resume = false, answe
           if (cancelRequested || signal?.aborted) throw new Error('Run cancelled')
           const value = params.question.trim()
           if (!value || value.length > 4000) throw new Error('问题内容无效')
+          if (question !== null) throw new Error('已有待回答问题')
           question = value
           acceptingMessages = false
           session.agent.clearAllQueues()
