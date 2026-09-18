@@ -6,7 +6,7 @@
 
 ## 技术栈
 
-React/TypeScript、Bun、PostgreSQL、Node.js 24.21、pg-boss 12.26.3、Pi 0.85.1 与 OpenSandbox SDK 0.1.11 用于最小执行链路。sub2api 已用于模型列表发现；Chat Completions 与 Responses 已接通隔离 Run，正式公网入口待后续验收。OpenConnector 属后续实施范围。
+React/TypeScript、Bun、PostgreSQL、Node.js 24.21、pg-boss 12.26.3、Pi 0.85.1 与 OpenSandbox SDK 0.1.11 用于最小执行链路。sub2api 已用于模型列表发现；真实 Chat Completions 和 Responses 已在隔离 Run 验证，正式公网入口待后续验收。OpenConnector 属后续实施范围。
 
 ## 目录索引
 
@@ -59,4 +59,5 @@ React/TypeScript、Bun、PostgreSQL、Node.js 24.21、pg-boss 12.26.3、Pi 0.85.
 - 2026-09-18：加入 R1-02 单套模型连接配置、持久化与网关模型发现。
 - 2026-09-18：加入 R1-04 工作创建、待执行 Run 快照和 PostgreSQL 持久化。
 - 2026-09-18：加入 R1-05 Chat Completions 最小执行、队列、沙箱与事件持久化。
+- 2026-09-18：加入 R1-06 Responses 执行与双协议隔离验收。
 - 2026-09-18：加入 R1-07 报告成果保存、校验、阅读、下载与失败回收重试。
