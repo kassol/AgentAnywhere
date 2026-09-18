@@ -1,0 +1,24 @@
+name: agentanywhere-w0
+services:
+  craft:
+    image: agentanywhere-w0-craft:e896385
+    container_name: agentanywhere-w0-craft
+    runtime: agentanywhere-w0-runsc
+    # TLS terminates at OpenResty; Docker publishes this port only on host loopback.
+    command: ["--allow-insecure-bind"]
+    env_file: /opt/agentanywhere-w0/craft.env
+    ports:
+      - "127.0.0.1:19100:9100"
+    volumes:
+      - craft-data:/home/craftagents/.craft-agent
+      - /opt/agentanywhere-w0/resolv.conf:/etc/resolv.conf:ro
+    cpus: 2
+    mem_limit: 4g
+    pids_limit: 256
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: "no"
+volumes:
+  craft-data:

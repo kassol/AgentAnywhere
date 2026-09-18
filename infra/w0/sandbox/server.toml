@@ -1,0 +1,32 @@
+[server]
+host = "127.0.0.1"
+port = 19310
+max_sandbox_timeout_seconds = 3600
+
+[log]
+level = "INFO"
+
+[runtime]
+type = "docker"
+execd_image = "opensandbox/execd:v1.0.22"
+
+[storage]
+allowed_host_paths = ["/opt/agentanywhere-w0/sandbox-data"]
+
+[store]
+type = "sqlite"
+path = "/opt/agentanywhere-w0/opensandbox.db"
+
+[docker]
+network_mode = "agentanywhere-w0-sandbox"
+port_range_min = 19320
+port_range_max = 19420
+no_new_privileges = true
+pids_limit = 512
+
+[secure_runtime]
+type = "gvisor"
+docker_runtime = "agentanywhere-w0-runsc"
+
+[ingress]
+mode = "direct"

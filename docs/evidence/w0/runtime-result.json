@@ -1,0 +1,20 @@
+{
+  "checkedAt": "2026-09-18T08:23:42.343224+00:00",
+  "gvisorRelease": "release-20260914.0",
+  "runtime": "agentanywhere-w0-runsc",
+  "binary": "/opt/agentanywhere-w0-runtime-release-20260914.0/runsc",
+  "dockerPid": "1173",
+  "defaultRuntime": "runc",
+  "originalContainersUnchanged": 9,
+  "probeImage": "docker.io/library/hello-world@sha256:d1a8d0a4eeb63aff09f5f34d4d80505e0ba81905f36158cc3970d8e07179e59e",
+  "probeExitCode": 0,
+  "probeContainerRemoved": true,
+  "probeOptions": [
+    "--rm",
+    "--network=none",
+    "--cpus=0.25",
+    "--memory=64m"
+  ],
+  "originalDaemonJsonExisted": false,
+  "openSandboxStarted": false
+}

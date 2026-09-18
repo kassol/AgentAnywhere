@@ -2,7 +2,7 @@
 
 ## 项目概述
 
-自托管的个人委托工作台。当前处于文档与基线验证准备阶段；产品要求见 [PRD](docs/PRD.md)，实施范围见 [MVP](docs/MVP.md)。
+自托管的个人委托工作台。当前处于文档与基线验证阶段；产品要求见 [PRD](docs/PRD.md)，实施范围见 [MVP](docs/MVP.md)。
 
 ## 技术栈
 
@@ -12,6 +12,7 @@
 
 - `docs/`：产品、实施、工程流程与决策文档。
 - `diagrams/`：架构与浏览器隔离图。
+- `infra/w0/`：独立基线验证脚本与运行配置；执行证据位于 `docs/evidence/w0/`。
 - `CONTEXT.md`：领域定义。
 
 ## 常用命令
@@ -19,6 +20,7 @@
 - `git status --short --branch`：检查工作区。
 - `gh issue list --state open`：查看待办。
 - `gh issue view <number> --comments`：读取任务及讨论。
+- `PYTHONDONTWRITEBYTECODE=1 python3 infra/w0/sandbox/check.py`：检查 W0 runtime 配置合并与补丁保护。
 
 应用构建与测试命令在引入实际工程后确定。
 
@@ -46,3 +48,4 @@
 ## 变更日志
 
 - 2026-09-18：建立公开仓库与工程技能配置。
+- 2026-09-18：加入独立 W0 验证目录；远程复现与清理流程见 `infra/w0/README.md`。

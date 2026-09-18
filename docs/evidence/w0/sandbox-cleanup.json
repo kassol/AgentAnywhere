@@ -1,0 +1,16 @@
+{
+  "timestamp": "2026-09-18T08:26:12.091847+00:00",
+  "originalContainersUnchanged": 9,
+  "dockerPid": "1173",
+  "removed": [
+    "agentanywhere-w0-opensandbox container",
+    "agentanywhere-w0-sandbox network",
+    "sdk-venv",
+    "sandbox-state",
+    "opensandbox.env"
+  ],
+  "sandboxContainerRemoved": true,
+  "artifactRetained": true,
+  "runtimeRetained": true,
+  "imagesRetained": true
+}

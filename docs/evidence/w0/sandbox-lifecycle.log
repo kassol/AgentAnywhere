@@ -1,0 +1,3 @@
+retrying GET http://127.0.0.1:19410/proxy/44772/ping: attempt=2 cause=opaque_transport status=None backoff=0.500s request_id=None
+sandbox_id=5211512a-092b-4f8d-89d0-ee5844e3f64b
+PASS: runtime, loopback bindings, command, file, status, destroy, retained artifact

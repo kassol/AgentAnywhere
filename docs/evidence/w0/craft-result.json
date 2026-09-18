@@ -1,0 +1,18 @@
+{
+  "date": "2026-09-18",
+  "sourceCommit": "e8963854c3679edcceb105a42537a06749e6cb64",
+  "craftVersion": "0.13.3",
+  "bunVersion": "1.3.10",
+  "imageDigest": "sha256:ed3c67a2fde25904e1b4bfa0342a8f91a535a1cb5e9e5440c69ba31dcf0fcbc2",
+  "runtime": "agentanywhere-w0-runsc",
+  "containerUser": "craftagents",
+  "publishedEndpoint": "127.0.0.1:19100",
+  "authProbe": "PASS: unauthenticated HTTP rejected; login and secure cookie; WebSocket handshake requires credentials",
+  "browserLogin": "passed; provider onboarding visible",
+  "providerConfigured": false,
+  "modelRequestsTested": false,
+  "publicReverseProxyTested": true,
+  "dnsRegression": "Before: Bun lookup ETIMEOUT using Docker embedded DNS; after dedicated resolv.conf: lookup succeeded and HTTPS example.com status 200",
+  "webSocketUrl": "wss://agent.riverflows.in",
+  "publicReverseProxyStatus": "PASS: HTTPS login; anonymous config 401; authenticated config 200; WSS handshake_ack"
+}

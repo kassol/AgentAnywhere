@@ -1,0 +1,22 @@
+{
+  "image": "sha256:800e61c4dff35aa99987b00e9855b610861c8710f84c7c916709cd993c841a2d",
+  "user": "pwuser",
+  "runtime": "agentanywhere-w0-runsc",
+  "privileged": false,
+  "capAdd": null,
+  "securityOpt": null,
+  "networkMode": "agentanywhere-w0-browser-probe",
+  "ipcMode": "private",
+  "portBindings": {
+    "6080/tcp": [
+      {
+        "HostIp": "127.0.0.1",
+        "HostPort": "19200"
+      }
+    ]
+  },
+  "memory": 2684354560,
+  "nanoCpus": 2000000000,
+  "shmSize": 268435456,
+  "pidsLimit": 512
+}

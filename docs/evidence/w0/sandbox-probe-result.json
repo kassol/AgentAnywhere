@@ -1,0 +1,8 @@
+{
+  "timestamp": "2026-09-18T08:25:35.499527+00:00",
+  "exitCode": 0,
+  "authenticatedStatus": 200,
+  "anonymousStatus": 401,
+  "execdImage": "opensandbox/execd@sha256:0d8f44cf4194732719aa79999d4b120c98bdab02bc61e9ad13f75f83af4c2684",
+  "sandboxImage": "ubuntu@sha256:b3cc40b72b93588182b5410f723c7aaf142363311c2aa993d8a453ddcbb3ae15"
+}

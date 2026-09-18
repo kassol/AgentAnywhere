@@ -1,0 +1,10 @@
+{
+  "chromium": "153.0.8010.12",
+  "uid": 1001,
+  "chromiumSandbox": true,
+  "namespaceSandbox": true,
+  "seccompSandbox": true,
+  "downloaded": true,
+  "sameInstanceInput": true,
+  "screenshotErrors": []
+}
