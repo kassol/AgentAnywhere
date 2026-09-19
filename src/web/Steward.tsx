@@ -13,8 +13,9 @@ type InteractionOperation = { operationId: string; status: string; taskId?: stri
   interactionKind?: 'question' | 'limit'; answer?: string; decision?: 'continue' | 'finish'; failure?: string }
 type RetryOperation = { operationId: string; mode: 'same' | 'replacement'; status: string; taskId?: string; sourceRunId?: string; runId?: string;
   modelId?: string; protocol?: string; failure?: string }
+type RevisionOperation = { operationId: string; status: string; taskId?: string; sourceVersionId?: string; runId?: string; content: string; modelId: string; protocol: string; reason: string; verification: string; sources?: Record<string, { source: string }>; failure?: string }
 type Detail = Thread & { messages: Message[]; summaries: Summary[]; turns: Turn[]; relatedTasks: RelatedTask[]; statusCards: StatusCard[]; researchOperations: ResearchOperation[];
-  controlOperations: ControlOperation[]; interactionOperations: InteractionOperation[]; retryOperations: RetryOperation[] }
+  controlOperations: ControlOperation[]; interactionOperations: InteractionOperation[]; retryOperations: RetryOperation[]; revisionOperations: RevisionOperation[] }
 const statusLabel: Record<string, string> = {
   queued: '排队中', provisioning: '准备环境', running: '回复中', streaming: '生成中', stopping: '停止中', stopped: '已停止',
   completed: '已完成', interrupted: '已中断', limited: '已达上限', failed: '失败',
@@ -169,6 +170,14 @@ export function Steward() {
             {operation.sourceRunId ? ` · 原 Run ${operation.sourceRunId.slice(0, 8)}` : ''}
             {operation.runId ? ` · 新 Run ${operation.runId.slice(0, 8)}` : ''}
             {operation.failure ? <><br /><small>{operation.failure}</small></> : null}
+          </li>)}</ul></section>}
+          {!!detail?.revisionOperations.length && <section aria-label="报告改稿"><h3>报告改稿</h3><ul>{detail.revisionOperations.map(operation => <li key={operation.operationId}>
+            {operation.taskId ? <a href={`/tasks/${operation.taskId}`}>报告改稿</a> : <span>报告改稿</span>}
+            {' · '}{statusLabel[operation.status] ?? operation.status}{' · '}{operation.modelId}（{operation.protocol}）
+            {' · '}{operation.verification === 'verified' ? '已有成功报告记录' : '尚未实测'}
+            {operation.sourceVersionId && operation.taskId ? <> · <a href={`/tasks/${operation.taskId}?version=${operation.sourceVersionId}`}>源成果 {operation.sourceVersionId.slice(0, 8)}</a></> : null}
+            {operation.runId ? ` · 新 Run ${operation.runId.slice(0, 8)}` : ''}
+            <br /><small>修改要求：{operation.content} · 选择理由：{operation.reason}{operation.failure ? ` · ${operation.failure}` : ''}</small>
           </li>)}</ul></section>}
           {!!detail?.relatedTasks.length && <section aria-label="关联工作"><h3>关联工作</h3><ul>{detail.relatedTasks.map(task => <li key={task.id}>
             <a href={task.href}>{task.goal}</a> <span>{statusLabel[task.status] ?? task.status}</span>

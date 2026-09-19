@@ -102,7 +102,8 @@ export async function startServer(config: Config) {
       modelStats: work.stewardModelStats, createFromSteward: work.createFromSteward,
       freezeStewardControl: work.freezeStewardControl, applyStewardControl: work.applyStewardControl,
       freezeStewardInteraction: work.freezeStewardInteraction, applyStewardInteraction: work.applyStewardInteraction,
-      freezeStewardRetry: work.freezeStewardRetry, applyStewardRetry: work.applyStewardRetry } : undefined) : null
+      freezeStewardRetry: work.freezeStewardRetry, applyStewardRetry: work.applyStewardRetry,
+      freezeStewardRevision: work.freezeStewardRevision, applyStewardRevision: work.applyStewardRevision } : undefined) : null
   const sessions = new Map<string, Session>()
   const attempts = new Map<string, { count: number; until: number }>()
   const secure = config.secureCookie ?? false

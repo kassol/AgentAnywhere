@@ -8,6 +8,7 @@ import { lockStewardTurnBudget, stewardBudgetFailure, stewardOperationBudget } f
 type RunConnection = { endpoint: string; hasCredential: boolean; credentialRef: string | null; models: ModelSelection[] }
 type CreateRequest = { requestId: string; goal: string; sourceUrl: string | null; modelId: string; protocol: Protocol | null }
 type FrozenResearchModel = ModelSelection & { endpoint: string }
+type ContinueRequest = { requestId: string; content: string; modelId: string; protocol: Protocol | null }
 type AppendRunMessageInput = { commandId: string; kind: 'steer'; content: string }
 
 export class WorkInputError extends Error {}
@@ -33,6 +34,17 @@ function parseRequest(body: unknown): CreateRequest {
   if (typeof value.modelId !== 'string' || !value.modelId.trim()) throw new WorkInputError('请选择模型')
   if (value.protocol !== undefined && value.protocol !== null && value.protocol !== 'chat-completions' && value.protocol !== 'responses') throw new WorkInputError('协议无效')
   return { requestId: value.requestId, goal, sourceUrl, modelId: value.modelId, protocol: value.protocol as Protocol | null ?? null }
+}
+
+function parseContinueRequest(body: unknown): ContinueRequest {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) throw new WorkInputError('修改要求无效')
+  const input = body as Record<string, unknown>
+  if (typeof input.requestId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(input.requestId)) throw new WorkInputError('请求 ID 无效')
+  const content = typeof input.content === 'string' ? input.content.trim() : ''
+  if (!content || content.length > 4000) throw new WorkInputError('修改要求须为 1–4000 字')
+  if (typeof input.modelId !== 'string' || !input.modelId.trim()) throw new WorkInputError('请选择模型')
+  if (input.protocol !== undefined && input.protocol !== null && input.protocol !== 'chat-completions' && input.protocol !== 'responses') throw new WorkInputError('协议无效')
+  return { requestId: input.requestId, content, modelId: input.modelId, protocol: input.protocol as Protocol | null ?? null }
 }
 
 export async function createWorkStore(databaseUrl: string, artifactDir = join(process.cwd(), 'data', 'artifacts')) {
@@ -686,6 +698,74 @@ export async function createWorkStore(databaseUrl: string, artifactDir = join(pr
     })
   }
 
+  async function freezeStewardRevision(currentTurnId: string, operationId: string, taskId: string, versionId: string, currentTime: () => number) {
+    return db.begin(async sql => {
+      const turn = await lockStewardTurnBudget(sql, currentTurnId)
+      const [operation] = await sql`SELECT turn_id AS "turnId", status, task_id AS "taskId", base_run_id AS "baseRunId",
+        source_version_id AS "sourceVersionId" FROM steward_revision_operations WHERE operation_id=${operationId} FOR UPDATE`
+      if (!turn || !operation || operation.turnId !== currentTurnId) throw new WorkInputError('改稿操作回执无效')
+      if (operation.status === 'planned' || operation.status === 'accepted') {
+        if (operation.taskId !== taskId || operation.sourceVersionId !== versionId) throw new WorkConflictError('当前轮次的改稿目标已冻结')
+        return { operationId, taskId, baseRunId: operation.baseRunId, sourceVersionId: operation.sourceVersionId, status: operation.status }
+      }
+      if (operation.status !== 'intent') throw new WorkConflictError('改稿操作已结束')
+      const budget = await stewardOperationBudget(sql, turn, currentTime)
+      if (budget.reason) throw new WorkConflictError(budget.reason === 'stopped' ? '管家轮次已停止' : stewardBudgetFailure(budget.reason))
+      await sql`SELECT pg_advisory_xact_lock(720, hashtext(${taskId}))`
+      const [run] = await sql`SELECT r.id, r.status, r.active, r.cleanup_state AS "cleanupState" FROM work_runs r JOIN work_tasks t ON t.id=r.task_id
+        WHERE t.id=${taskId} AND t.owner_id='owner' ORDER BY r.created_at DESC, r.id DESC LIMIT 1 FOR UPDATE OF r`
+      if (!run) throw new WorkInputError('改稿目标不存在')
+      if (run.active || run.cleanupState !== 'cleaned' || !['succeeded', 'failed', 'lost', 'cancelled'].includes(run.status)) throw new WorkConflictError('当前工作尚未完成')
+      const [report] = await sql`SELECT v.id FROM work_artifact_versions v JOIN work_artifacts a ON a.id=v.artifact_id
+        JOIN work_runs source ON source.id=v.run_id
+        WHERE v.id=${versionId} AND a.task_id=${taskId} AND a.kind='report' AND source.status='succeeded'`
+      if (!report) throw new WorkConflictError('所选报告版本不可修改')
+      await sql`UPDATE steward_revision_operations SET task_id=${taskId}, base_run_id=${run.id}, source_version_id=${versionId}, status='planned'
+        WHERE operation_id=${operationId}`
+      return { operationId, taskId, baseRunId: run.id, sourceVersionId: versionId, status: 'planned' as const }
+    })
+  }
+
+  async function applyStewardRevision(currentTurnId: string, operationId: string, currentTime: () => number) {
+    return db.begin(async sql => {
+      const turn = await lockStewardTurnBudget(sql, currentTurnId)
+      const [operation] = await sql`SELECT turn_id AS "turnId", request_id AS "requestId", content, model_snapshot AS "modelSnapshot",
+        credential_ref AS "credentialRef", reason, status, task_id AS "taskId", base_run_id AS "baseRunId",
+        source_version_id AS "sourceVersionId", run_id AS "runId", result_json AS "resultJson", failure
+        FROM steward_revision_operations WHERE operation_id=${operationId} FOR UPDATE`
+      const [resume] = operation ? await sql`SELECT 1 FROM steward_revision_resumes WHERE turn_id=${currentTurnId} AND operation_id=${operationId}` : []
+      if (!turn || !operation || operation.turnId !== currentTurnId && !resume) throw new WorkInputError('改稿操作回执无效')
+      if (operation.status === 'accepted') return typeof operation.resultJson === 'string' ? JSON.parse(operation.resultJson) : operation.resultJson
+      if (operation.status !== 'planned') return { operationId, status: operation.status, failure: operation.failure }
+      const budget = await stewardOperationBudget(sql, turn, currentTime)
+      if (budget.reason) {
+        const failure = budget.reason === 'stopped' ? '管家轮次已停止' : stewardBudgetFailure(budget.reason)
+        await sql`UPDATE steward_revision_operations SET status='unexecuted', failure=${failure}, finished_at=now() WHERE operation_id=${operationId}`
+        return { operationId, status: 'unexecuted' as const, failure }
+      }
+      const snapshot = typeof operation.modelSnapshot === 'string' ? JSON.parse(operation.modelSnapshot) : operation.modelSnapshot
+      let continued
+      try {
+        continued = await continueTaskInTransaction(sql, operation.taskId, {
+          requestId: operation.requestId, content: operation.content, modelId: snapshot.id, protocol: snapshot.protocol,
+        }, snapshot, operation.credentialRef, { runId: operation.baseRunId, versionId: operation.sourceVersionId })
+        if (!continued) throw new WorkInputError('已冻结工作不存在')
+      } catch (error) {
+        if (!(error instanceof WorkConflictError || error instanceof WorkInputError)) throw error
+        const failure = error.message.slice(0, 500)
+        await sql`UPDATE steward_revision_operations SET status='failed', failure=${failure}, finished_at=now() WHERE operation_id=${operationId}`
+        return { operationId, status: 'failed' as const, failure }
+      }
+      const receipt = { operationId, status: 'accepted', taskId: operation.taskId, runId: continued.runId,
+        sourceVersionId: operation.sourceVersionId, modelId: snapshot.id, protocol: snapshot.protocol, reason: operation.reason }
+      await sql`UPDATE steward_revision_operations SET status='accepted', run_id=${continued.runId}, result_json=${JSON.stringify(receipt)}::jsonb,
+        failure=NULL, finished_at=now() WHERE operation_id=${operationId}`
+      await sql`INSERT INTO steward_thread_tasks (thread_id, task_id) VALUES (${turn.threadId}, ${operation.taskId}) ON CONFLICT DO NOTHING`
+      await sql`INSERT INTO steward_events (turn_id, event_id, type, payload) VALUES (${currentTurnId}, ${crypto.randomUUID()}, 'work.revision-accepted', ${JSON.stringify(receipt)}::jsonb)`
+      return receipt
+    })
+  }
+
   async function requestCleanupRetry(taskId: string) {
     const rows = await db`UPDATE work_runs SET cleanup_state='retry_requested'
       WHERE id = (SELECT r.id FROM work_runs r JOIN work_tasks t ON t.id = r.task_id
@@ -790,56 +870,58 @@ export async function createWorkStore(databaseUrl: string, artifactDir = join(pr
     return { task: await detail(winner.id), created: false }
   }
 
+  async function continueTaskInTransaction(sql: SQL, taskId: string, input: ContinueRequest, snapshot: FrozenResearchModel,
+    credentialRef: string, expected?: { runId: string; versionId: string }) {
+    const requestHash = createHash('sha256').update(JSON.stringify({ taskId, content: input.content, modelId: input.modelId, protocol: input.protocol })).digest('hex')
+    await sql`SELECT pg_advisory_xact_lock(720, hashtext(${taskId}))`
+    const [task] = await sql`SELECT t.id, h.id AS "threadId" FROM work_tasks t JOIN work_threads h ON h.task_id=t.id
+      WHERE t.id=${taskId} AND t.owner_id='owner'`
+    if (!task) return null
+    const [existing] = await sql`SELECT id, task_id AS "taskId", request_hash AS "requestHash" FROM work_runs WHERE request_id=${input.requestId}`
+    if (existing) {
+      if (existing.taskId !== taskId || existing.requestHash !== requestHash) throw new WorkConflictError('请求 ID 已用于其他修改')
+      return { runId: existing.id, created: false }
+    }
+    const [previous] = await sql`SELECT id, status, active, cleanup_state AS "cleanupState" FROM work_runs
+      WHERE task_id=${taskId} ORDER BY created_at DESC, id DESC LIMIT 1 FOR UPDATE`
+    if (!previous || previous.active || previous.cleanupState !== 'cleaned' || !['succeeded', 'failed', 'lost', 'cancelled'].includes(previous.status)) throw new WorkConflictError('当前工作尚未完成')
+    if (expected && previous.id !== expected.runId) throw new WorkConflictError('已冻结 Run 已被新的 Run 替代')
+    const [report] = expected
+      ? await sql`SELECT v.id FROM work_artifact_versions v JOIN work_artifacts a ON a.id=v.artifact_id
+          JOIN work_runs source ON source.id=v.run_id
+          WHERE v.id=${expected.versionId} AND a.task_id=${taskId} AND a.kind='report' AND source.status='succeeded'`
+      : await sql`SELECT v.id FROM work_artifact_versions v JOIN work_artifacts a ON a.id=v.artifact_id
+          JOIN work_runs source ON source.id=v.run_id
+          WHERE a.task_id=${taskId} AND a.kind='report' AND source.status='succeeded'
+          ORDER BY v.created_at DESC, v.id DESC LIMIT 1`
+    if (!report) throw new WorkConflictError('当前工作尚无可修改报告')
+    const messages = await sql`SELECT content FROM work_messages WHERE thread_id=${task.threadId} ORDER BY created_at, id`
+    const runId = crypto.randomUUID()
+    const inserted = await sql`INSERT INTO work_runs (id, task_id, status, model_snapshot, credential_ref, request_id, request_hash,
+      previous_report_version_id, context_snapshot) VALUES (${runId}, ${taskId}, 'queued', ${JSON.stringify(snapshot)}::jsonb,
+      ${credentialRef}, ${input.requestId}, ${requestHash}, ${report.id}, ${JSON.stringify({ messages: messages.map((row: { content: string }) => row.content), instruction: input.content })}::jsonb)
+      ON CONFLICT (request_id) DO NOTHING RETURNING id`
+    if (!inserted.length) {
+      const [winner] = await sql`SELECT id, task_id AS "taskId", request_hash AS "requestHash" FROM work_runs WHERE request_id=${input.requestId}`
+      if (!winner || winner.taskId !== taskId || winner.requestHash !== requestHash) throw new WorkConflictError('请求 ID 已用于其他修改')
+      return { runId: winner.id, created: false }
+    }
+    await sql`INSERT INTO work_outbox (run_id) VALUES (${runId})`
+    await sql`UPDATE work_messages SET status='carried' WHERE thread_id=${task.threadId} AND status='pending'`
+    await sql`INSERT INTO work_messages (id, thread_id, run_id, role, content, status)
+      VALUES (${crypto.randomUUID()}, ${task.threadId}, ${runId}, 'user', ${input.content}, 'applied')`
+    await sql`UPDATE work_tasks SET status='queued' WHERE id=${taskId}`
+    return { runId, created: true }
+  }
+
   async function continueTask(taskId: string, body: unknown, connection: RunConnection) {
-    if (!body || typeof body !== 'object' || Array.isArray(body)) throw new WorkInputError('修改要求无效')
-    const input = body as Record<string, unknown>
-    if (typeof input.requestId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(input.requestId)) throw new WorkInputError('请求 ID 无效')
-    const content = typeof input.content === 'string' ? input.content.trim() : ''
-    if (!content || content.length > 4000) throw new WorkInputError('修改要求须为 1–4000 字')
-    if (typeof input.modelId !== 'string' || !input.modelId.trim()) throw new WorkInputError('请选择模型')
-    if (input.protocol !== undefined && input.protocol !== null && input.protocol !== 'chat-completions' && input.protocol !== 'responses') throw new WorkInputError('协议无效')
-    const requestHash = createHash('sha256').update(JSON.stringify({ taskId, content, modelId: input.modelId, protocol: input.protocol ?? null })).digest('hex')
-    const created = await db.begin(async sql => {
-      await sql`SELECT pg_advisory_xact_lock(720, hashtext(${taskId}))`
-      const [task] = await sql`SELECT t.id, h.id AS "threadId" FROM work_tasks t JOIN work_threads h ON h.task_id=t.id
-        WHERE t.id=${taskId} AND t.owner_id='owner'`
-      if (!task) return null
-      const [existing] = await sql`SELECT id, task_id AS "taskId", request_hash AS "requestHash" FROM work_runs WHERE request_id=${input.requestId}`
-      if (existing) {
-        if (existing.taskId !== taskId || existing.requestHash !== requestHash) throw new WorkConflictError('请求 ID 已用于其他修改')
-        return false
-      }
-      const [previous] = await sql`SELECT id, status, active, cleanup_state AS "cleanupState" FROM work_runs
-        WHERE task_id=${taskId} ORDER BY created_at DESC, id DESC LIMIT 1 FOR UPDATE`
-      if (!previous || previous.active || previous.cleanupState !== 'cleaned' || !['succeeded', 'failed', 'lost', 'cancelled'].includes(previous.status)) throw new WorkConflictError('当前工作尚未完成')
-      const [report] = await sql`SELECT v.id FROM work_artifact_versions v JOIN work_artifacts a ON a.id=v.artifact_id
-        JOIN work_runs source ON source.id=v.run_id
-        WHERE a.task_id=${taskId} AND a.kind='report' AND source.status='succeeded'
-        ORDER BY v.created_at DESC, v.id DESC LIMIT 1`
-      if (!report) throw new WorkConflictError('当前工作尚无可修改报告')
-      const model = connection.models.find(item => item.id === input.modelId)
-      if (!connection.endpoint || !connection.hasCredential || !connection.credentialRef || !model) throw new WorkInputError('请先选择可用模型并配置连接')
-      if (!model.contextWindow || !model.maxTokens || !model.input?.includes('text') || typeof model.reasoning !== 'boolean') throw new WorkInputError('请补充模型的上下文、输出上限、文本输入和推理配置')
-      const snapshot = { ...model, protocol: input.protocol ?? model.protocol, endpoint: connection.endpoint }
-      const messages = await sql`SELECT content FROM work_messages WHERE thread_id=${task.threadId} ORDER BY created_at, id`
-      const runId = crypto.randomUUID()
-      const inserted = await sql`INSERT INTO work_runs (id, task_id, status, model_snapshot, credential_ref, request_id, request_hash,
-        previous_report_version_id, context_snapshot) VALUES (${runId}, ${taskId}, 'queued', ${JSON.stringify(snapshot)}::jsonb,
-        ${connection.credentialRef}, ${input.requestId}, ${requestHash}, ${report.id}, ${JSON.stringify({ messages: messages.map((row: { content: string }) => row.content), instruction: content })}::jsonb)
-        ON CONFLICT (request_id) DO NOTHING RETURNING id`
-      if (!inserted.length) {
-        const [winner] = await sql`SELECT task_id AS "taskId", request_hash AS "requestHash" FROM work_runs WHERE request_id=${input.requestId}`
-        if (!winner || winner.taskId !== taskId || winner.requestHash !== requestHash) throw new WorkConflictError('请求 ID 已用于其他修改')
-        return false
-      }
-      await sql`INSERT INTO work_outbox (run_id) VALUES (${runId})`
-      await sql`UPDATE work_messages SET status='carried' WHERE thread_id=${task.threadId} AND status='pending'`
-      await sql`INSERT INTO work_messages (id, thread_id, run_id, role, content, status)
-        VALUES (${crypto.randomUUID()}, ${task.threadId}, ${runId}, 'user', ${content}, 'applied')`
-      await sql`UPDATE work_tasks SET status='queued' WHERE id=${taskId}`
-      return true
-    })
-    return created === null ? null : { task: await detail(taskId), created }
+    const input = parseContinueRequest(body)
+    const model = connection.models.find(item => item.id === input.modelId)
+    if (!connection.endpoint || !connection.hasCredential || !connection.credentialRef || !model) throw new WorkInputError('请先选择可用模型并配置连接')
+    if (!model.contextWindow || !model.maxTokens || !model.input?.includes('text') || typeof model.reasoning !== 'boolean') throw new WorkInputError('请补充模型的上下文、输出上限、文本输入和推理配置')
+    const snapshot = { ...model, protocol: input.protocol ?? model.protocol, endpoint: connection.endpoint }
+    const result = await db.begin(sql => continueTaskInTransaction(sql, taskId, input, snapshot, connection.credentialRef!))
+    return result === null ? null : { task: await detail(taskId), created: result.created }
   }
 
   async function retryTask(taskId: string, body: unknown) {
@@ -1046,5 +1128,5 @@ export async function createWorkStore(databaseUrl: string, artifactDir = join(pr
 
   async function close() { await db.close() }
 
-  return { list, detail, events, create, continueTask, retryTask, appendRunMessage, resolveInteraction, pendingInteractions, pendingRunMessages, acknowledgeRunMessage, cancel, isRunStopped, artifactVersion, readArtifact, stewardCatalog, stewardMetadata, stewardStatusCards, stewardRead, stewardRetryContext, stewardModelStats, createFromSteward, freezeStewardControl, applyStewardControl, freezeStewardInteraction, applyStewardInteraction, freezeStewardRetry, applyStewardRetry, requestCleanupRetry, resolveRunModelConnection, authorizeModelProxy, reserveModelAttempt, recordModelUsage, close }
+  return { list, detail, events, create, continueTask, retryTask, appendRunMessage, resolveInteraction, pendingInteractions, pendingRunMessages, acknowledgeRunMessage, cancel, isRunStopped, artifactVersion, readArtifact, stewardCatalog, stewardMetadata, stewardStatusCards, stewardRead, stewardRetryContext, stewardModelStats, createFromSteward, freezeStewardControl, applyStewardControl, freezeStewardInteraction, applyStewardInteraction, freezeStewardRetry, applyStewardRetry, freezeStewardRevision, applyStewardRevision, requestCleanupRetry, resolveRunModelConnection, authorizeModelProxy, reserveModelAttempt, recordModelUsage, close }
 }

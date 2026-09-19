@@ -39,7 +39,7 @@ const reset = await fetch(`${origin}/api/model-connection/models`, { method: 'PU
 assert.ok(reset.ok, `Reset isolated model selection: ${reset.status}`)
 console.log('Running model-settings public API regression')
 execFileSync('docker', ['exec', 'agentanywhere-r1-test-web-1', 'sh', '-lc', 'AGENTANYWHERE_TEST_DATABASE_URL="$DATABASE_URL" bun test src/model-connection.test.ts src/work.test.ts src/steward.test.ts src/steward-summary.test.ts'], { stdio: 'inherit' })
-for (const name of ['run', 'report-contract', 'research', 'steering', 'interaction', 'cancel', 'continuation', 'recovery', 'steward-query', 'steward-dispatch', 'steward-control', 'steward-status', 'steward-interaction', 'steward-summary', 'steward-retry']) {
+for (const name of ['run', 'report-contract', 'research', 'steering', 'interaction', 'cancel', 'continuation', 'recovery', 'steward-query', 'steward-dispatch', 'steward-control', 'steward-status', 'steward-interaction', 'steward-summary', 'steward-retry', 'steward-revision']) {
   console.log(`Running ${name}`)
   execFileSync(process.execPath, [fileURLToPath(new URL(`test-${name}.mjs`, import.meta.url))], { stdio: 'inherit' })
 }
