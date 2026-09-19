@@ -237,7 +237,7 @@ try {
   assert.deepEqual(afterRead.runs.map(run => run.id), beforeReadRuns, 'Reading created a new Run')
   assert.deepEqual(afterRead.artifacts.map(artifact => artifact.versionId), completed.artifacts.map(artifact => artifact.versionId))
 
-  const revision = await startTurn(`请修改工作 ${completed.id} 的报告 ${source.versionId}：新增一段验收摘要，保留来源。`, reading.threadId)
+  const revision = await startTurn(`请修改工作 ${completed.id} 的报告 ${source.versionId}：新增一段验收摘要，保留来源。直接基于已有报告完成修改，无需重复首次调研的提问步骤。`, reading.threadId)
   let revisionDetail = await until(
     () => api(`/api/steward/threads/${revision.threadId}`),
     detail => detail.revisionOperations.some(operation => operation.status === 'accepted') || terminalTurn(turn(detail, revision.turnId)),
