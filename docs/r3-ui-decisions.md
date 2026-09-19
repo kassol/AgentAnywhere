@@ -43,4 +43,4 @@ R2 已完成发布，验证证据见 [R2-12](evidence/r2-12.md)。当前界面�
 - 原型使用固定 Craft 基线的适用组件，先验证组件依赖及平台适配；记录原路径、许可与本地修改。当前版本差异不自动引入本轮范围。
 - 原型覆盖普通讨论、调研执行、等待回答、失败恢复、报告批注改稿及设置；明暗主题、键盘和小屏均检查。最终实现复用现有后端，保留授权、幂等、恢复与成果版本回归，并经 ego-browser 验证真实流程。
 
-原型已完成，用户确认以 A 经典侧栏为基准；原型保留在 [prototype/r3-craft-ui](https://github.com/kassol/AgentAnywhere/tree/prototype/r3-craft-ui)，选择结论提交 `75efffa`。原型用于确定设计方向，真实功能仍须逐项验收。规格已发布为 [Spec #32](https://github.com/kassol/AgentAnywhere/issues/32)，仓库副本见 [R3 Spec](r3-ui-spec.md)；下一阶段为 to-tickets。
+原型已完成，用户确认以 A 经典侧栏为基准；原型保留在 [prototype/r3-craft-ui](https://github.com/kassol/AgentAnywhere/tree/prototype/r3-craft-ui)，选择结论提交 `75efffa`。原型用于确定设计方向，真实功能仍须逐项验收。规格已发布为 [Spec #32](https://github.com/kassol/AgentAnywhere/issues/32)，仓库副本见 [R3 Spec](r3-ui-spec.md)；任务已拆分为 #33–#40，依赖与验收映射见 [R3 任务拆分](r3-tickets.md)；首项为 #33。
