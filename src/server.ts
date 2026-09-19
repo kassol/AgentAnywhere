@@ -98,7 +98,8 @@ export async function startServer(config: Config) {
   const steward = config.databaseUrl ? await createStewardService(config.databaseUrl, modelConnection.resolveCredential, config.testNow,
     work ? { catalog: work.stewardCatalog, metadata: work.stewardMetadata,
       read: (taskIds: string[], versionIds: string[]) => work.stewardRead(taskIds, versionIds, artifactDir),
-      modelStats: work.stewardModelStats, createFromSteward: work.createFromSteward } : undefined) : null
+      modelStats: work.stewardModelStats, createFromSteward: work.createFromSteward,
+      freezeStewardControl: work.freezeStewardControl, applyStewardControl: work.applyStewardControl } : undefined) : null
   const sessions = new Map<string, Session>()
   const attempts = new Map<string, { count: number; until: number }>()
   const secure = config.secureCookie ?? false

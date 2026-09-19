@@ -6,12 +6,22 @@ type Message = { id: string; turnId: string; role: 'user' | 'assistant'; content
 type Turn = { id: string; status: string; modelCalls: number; modelCallLimit: number; activeMs: number; activeLimitMs: number; budgetReason?: string; failure?: string }
 type RelatedTask = { id: string; goal: string; status: string; href: string; reports: { versionId: string; href: string }[] }
 type ResearchOperation = { operationId: string; status: string; taskId?: string; runId?: string; goal: string; modelId: string; protocol: string; reason: string; verification: string; sources?: Record<string, { source: string }>; failure?: string }
-type Detail = Thread & { messages: Message[]; turns: Turn[]; relatedTasks: RelatedTask[]; researchOperations: ResearchOperation[] }
+type ControlOperation = { operationId: string; kind: 'steer' | 'cancel'; status: string; taskId?: string; runId?: string; content?: string; messageStatus?: 'pending' | 'applied' | 'carried'; failure?: string }
+type Detail = Thread & { messages: Message[]; turns: Turn[]; relatedTasks: RelatedTask[]; researchOperations: ResearchOperation[]; controlOperations: ControlOperation[] }
 const statusLabel: Record<string, string> = {
   queued: '排队中', running: '回复中', streaming: '生成中', stopping: '停止中', stopped: '已停止',
   completed: '已完成', interrupted: '已中断', limited: '已达上限', failed: '失败',
   waiting: '等待回答', cancelling: '正在取消', cancelled: '已取消', succeeded: '已完成', lost: '执行中断', save_failed: '成果保存失败',
   planned: '待派发', accepted: '已接收', unexecuted: '未执行',
+}
+
+function controlStatus(operation: ControlOperation) {
+  if (operation.status === 'intent') return '待明确目标'
+  if (operation.status === 'planned') return '待执行'
+  if (operation.kind !== 'steer' || operation.status !== 'accepted') return statusLabel[operation.status] ?? operation.status
+  if (operation.messageStatus === 'applied') return '已应用'
+  if (operation.messageStatus === 'carried') return '已纳入后续执行'
+  return '已接收，等待安全时机'
 }
 
 export function Steward() {
@@ -118,6 +128,13 @@ export function Steward() {
               <br /><small>选择理由：{operation.reason}{operation.runId ? ` · Run ${operation.runId.slice(0, 8)}` : ''}{operation.failure ? ` · ${operation.failure}` : ''}</small>
             </li>
           })}</ul></section>}
+          {!!detail?.controlOperations.length && <section aria-label="工作控制"><h3>工作控制</h3><ul>{detail.controlOperations.map(operation => <li key={operation.operationId}>
+            {operation.taskId ? <a href={`/tasks/${operation.taskId}`}>{operation.kind === 'steer' ? '追加要求' : '取消工作'}</a> : <span>{operation.kind === 'steer' ? '追加要求' : '取消工作'}</span>}
+            {' · '}{controlStatus(operation)}
+            {operation.runId ? ` · Run ${operation.runId.slice(0, 8)}` : ''}
+            {operation.content ? <><br /><small>{operation.content}</small></> : null}
+            {operation.failure ? <><br /><small>{operation.failure}</small></> : null}
+          </li>)}</ul></section>}
           {!!detail?.relatedTasks.length && <section aria-label="关联工作"><h3>关联工作</h3><ul>{detail.relatedTasks.map(task => <li key={task.id}>
             <a href={task.href}>{task.goal}</a> <span>{statusLabel[task.status] ?? task.status}</span>
             {task.reports.map(report => <span key={report.versionId}> · <a href={report.href}>成果 {report.versionId.slice(0, 8)}</a></span>)}

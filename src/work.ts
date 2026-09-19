@@ -7,6 +7,7 @@ import type { ModelSelection, Protocol } from './model-connection'
 type RunConnection = { endpoint: string; hasCredential: boolean; credentialRef: string | null; models: ModelSelection[] }
 type CreateRequest = { requestId: string; goal: string; sourceUrl: string | null; modelId: string; protocol: Protocol | null }
 type FrozenResearchModel = ModelSelection & { endpoint: string }
+type AppendRunMessageInput = { commandId: string; kind: 'steer'; content: string }
 
 export class WorkInputError extends Error {}
 export class WorkConflictError extends Error {}
@@ -313,6 +314,101 @@ export async function createWorkStore(databaseUrl: string) {
     return result.taskId ? { ...result, task: await detail(result.taskId) } : result
   }
 
+  async function freezeStewardControl(currentTurnId: string, operationId: string, taskId: string, currentTime: () => number) {
+    return db.begin(async sql => {
+      const [turn] = await sql`SELECT id, status, active, active_ms AS "activeMs", active_limit_ms AS "activeLimitMs",
+        active_since AS "activeSince", budget_reason AS "budgetReason" FROM steward_turns WHERE id=${currentTurnId} FOR UPDATE`
+      const [operation] = await sql`SELECT turn_id AS "turnId", kind, status, task_id AS "taskId", run_id AS "runId"
+        FROM steward_control_operations WHERE operation_id=${operationId} FOR UPDATE`
+      if (!turn || !operation || operation.turnId !== currentTurnId) throw new WorkInputError('控制操作回执无效')
+      if (operation.status === 'planned' || operation.status === 'accepted') {
+        if (operation.taskId !== taskId) throw new WorkConflictError('当前轮次的控制目标已冻结')
+        return { operationId, taskId: operation.taskId, runId: operation.runId, status: operation.status }
+      }
+      if (operation.status !== 'intent') throw new WorkConflictError('控制操作已结束')
+      if (!turn.active || turn.status !== 'running') throw new WorkConflictError('管家轮次已停止')
+      if (turn.budgetReason) throw new WorkConflictError('管家轮次额度已用尽')
+      const elapsed = Number(turn.activeMs) + (turn.activeSince ? Math.max(0, currentTime() - new Date(turn.activeSince).getTime()) : 0)
+      if (elapsed >= Number(turn.activeLimitMs)) throw new WorkConflictError('管家轮次活跃时间已用尽')
+      await sql`SELECT pg_advisory_xact_lock(720, hashtext(${taskId}))`
+      const [run] = await sql`SELECT r.id, r.status, r.active FROM work_runs r JOIN work_tasks t ON t.id=r.task_id
+        WHERE t.id=${taskId} AND t.owner_id='owner' ORDER BY r.created_at DESC, r.id DESC LIMIT 1 FOR UPDATE OF r`
+      if (!run) throw new WorkInputError('控制目标不存在')
+      if (operation.kind === 'steer' && (run.status !== 'running' || !run.active)) throw new WorkConflictError('当前 Run 不在执行中')
+      if (operation.kind === 'cancel' && !['queued', 'provisioning', 'running', 'waiting'].includes(run.status)) throw new WorkConflictError('当前 Run 不可取消')
+      await sql`UPDATE steward_control_operations SET task_id=${taskId}, run_id=${run.id}, status='planned' WHERE operation_id=${operationId}`
+      return { operationId, taskId, runId: run.id, status: 'planned' as const }
+    })
+  }
+
+  async function applyStewardControl(currentTurnId: string, operationId: string, currentTime: () => number) {
+    return db.begin(async sql => {
+      const [turn] = await sql`SELECT id, thread_id AS "threadId", status, active, active_ms AS "activeMs",
+        active_limit_ms AS "activeLimitMs", active_since AS "activeSince", budget_reason AS "budgetReason"
+        FROM steward_turns WHERE id=${currentTurnId} FOR UPDATE`
+      const [operation] = await sql`SELECT turn_id AS "turnId", kind, content, command_id AS "commandId", status,
+        task_id AS "taskId", run_id AS "runId", result_json AS "resultJson", failure
+        FROM steward_control_operations WHERE operation_id=${operationId} FOR UPDATE`
+      const [resume] = operation ? await sql`SELECT 1 FROM steward_control_resumes WHERE turn_id=${currentTurnId} AND operation_id=${operationId}` : []
+      if (!turn || !operation || operation.turnId !== currentTurnId && !resume) throw new WorkInputError('控制操作回执无效')
+      if (operation.status === 'accepted') return typeof operation.resultJson === 'string' ? JSON.parse(operation.resultJson) : operation.resultJson
+      if (operation.status !== 'planned') return { operationId, status: operation.status, failure: operation.failure }
+      if (!turn.active || turn.status !== 'running') {
+        const failure = '管家轮次已停止'
+        await sql`UPDATE steward_control_operations SET status='unexecuted', failure=${failure}, finished_at=now() WHERE operation_id=${operationId}`
+        return { operationId, status: 'unexecuted' as const, failure }
+      }
+      if (turn.budgetReason) {
+        const failure = '管家轮次额度已用尽'
+        await sql`UPDATE steward_control_operations SET status='unexecuted', failure=${failure}, finished_at=now() WHERE operation_id=${operationId}`
+        return { operationId, status: 'unexecuted' as const, failure }
+      }
+      const elapsed = Number(turn.activeMs) + (turn.activeSince ? Math.max(0, currentTime() - new Date(turn.activeSince).getTime()) : 0)
+      if (elapsed >= Number(turn.activeLimitMs)) {
+        const failure = '管家轮次活跃时间已用尽'
+        await sql`UPDATE steward_turns SET budget_reason='time' WHERE id=${currentTurnId}`
+        await sql`UPDATE steward_control_operations SET status='unexecuted', failure=${failure}, finished_at=now() WHERE operation_id=${operationId}`
+        return { operationId, status: 'unexecuted' as const, failure }
+      }
+      await sql`SELECT pg_advisory_xact_lock(720, hashtext(${operation.taskId}))`
+      const [latest] = await sql`SELECT r.id, r.status FROM work_runs r JOIN work_tasks t ON t.id=r.task_id
+        WHERE t.id=${operation.taskId} AND t.owner_id='owner' ORDER BY r.created_at DESC, r.id DESC LIMIT 1 FOR UPDATE OF r`
+      if (!latest || latest.id !== operation.runId) {
+        const failure = '已冻结 Run 已被新的 Run 替代'
+        await sql`UPDATE steward_control_operations SET status='failed', failure=${failure}, finished_at=now() WHERE operation_id=${operationId}`
+        return { operationId, status: 'failed' as const, failure }
+      }
+      let receipt: Record<string, unknown>
+      if (operation.kind === 'steer') {
+        try {
+          const appended = await appendRunMessageInTransaction(sql, operation.runId, { commandId: operation.commandId, kind: 'steer', content: operation.content })
+          if (!appended) throw new WorkInputError('已冻结 Run 不存在')
+          receipt = { kind: 'steer', taskId: operation.taskId, runId: operation.runId,
+            messageId: appended.message.id, messageStatus: appended.message.status }
+        } catch (error) {
+          if (!(error instanceof WorkConflictError || error instanceof WorkInputError)) throw error
+          const failure = error.message.slice(0, 500)
+          await sql`UPDATE steward_control_operations SET status='failed', failure=${failure}, finished_at=now() WHERE operation_id=${operationId}`
+          return { operationId, status: 'failed' as const, failure }
+        }
+      } else {
+        const cancelled = await cancelInTransaction(sql, operation.taskId, operation.runId)
+        if (!cancelled?.accepted) {
+          const failure = cancelled?.stale ? '已冻结 Run 已被新的 Run 替代' : '当前 Run 不可取消'
+          await sql`UPDATE steward_control_operations SET status='failed', failure=${failure}, finished_at=now() WHERE operation_id=${operationId}`
+          return { operationId, status: 'failed' as const, failure }
+        }
+        receipt = { kind: 'cancel', taskId: operation.taskId, runId: operation.runId, runStatus: cancelled.runStatus }
+      }
+      await sql`UPDATE steward_control_operations SET status='accepted', result_json=${JSON.stringify(receipt)}::jsonb,
+        failure=NULL, finished_at=now() WHERE operation_id=${operationId}`
+      await sql`INSERT INTO steward_thread_tasks (thread_id, task_id) VALUES (${turn.threadId}, ${operation.taskId}) ON CONFLICT DO NOTHING`
+      await sql`INSERT INTO steward_events (turn_id, event_id, type, payload) VALUES (${currentTurnId}, ${crypto.randomUUID()},
+        ${operation.kind === 'steer' ? 'work.steered' : 'work.cancelled'}, ${JSON.stringify({ operationId, ...receipt })}::jsonb)`
+      return receipt
+    })
+  }
+
   async function requestCleanupRetry(taskId: string) {
     const rows = await db`UPDATE work_runs SET cleanup_state='retry_requested'
       WHERE id = (SELECT r.id FROM work_runs r JOIN work_tasks t ON t.id = r.task_id
@@ -346,31 +442,35 @@ export async function createWorkStore(databaseUrl: string) {
     }
   }
 
+  async function cancelInTransaction(sql: SQL, taskId: string, expectedRunId?: string) {
+    await sql`SELECT pg_advisory_xact_lock(720, hashtext(${taskId}))`
+    const [run] = await sql`SELECT r.id, r.epoch, r.status, r.active, r.checkpoint_ref AS "checkpointRef" FROM work_runs r
+      JOIN work_tasks t ON t.id = r.task_id WHERE t.id = ${taskId} AND t.owner_id = 'owner'
+      ORDER BY r.created_at DESC, r.id DESC LIMIT 1 FOR UPDATE OF r`
+    if (!run) return null
+    if (expectedRunId && run.id !== expectedRunId) return { accepted: false, stale: true, runId: run.id, runStatus: run.status }
+    if (run.status === 'cancelling' || run.status === 'cancelled') return { accepted: false, runId: run.id, runStatus: run.status }
+    if (!['queued', 'provisioning', 'running', 'waiting'].includes(run.status)) return { accepted: false, runId: run.id, runStatus: run.status }
+    if (run.active) {
+      const [terminal] = await sql`SELECT 1 FROM work_events WHERE run_id = ${run.id} AND epoch = ${run.epoch}
+        AND type IN ('run.finished', 'run.failed') LIMIT 1`
+      if (terminal) return { accepted: false, runId: run.id, runStatus: run.status }
+    }
+    if (run.status === 'waiting') await retainCheckpointArtifacts(sql, taskId, run)
+    const status = run.active ? 'cancelling' : 'cancelled'
+    await sql`UPDATE work_runs SET status = ${status}, run_token_hash = NULL,
+      finished_at = CASE WHEN ${status} = 'cancelled' THEN now() ELSE finished_at END
+      WHERE id = ${run.id}`
+    await sql`UPDATE work_tasks SET status = ${status} WHERE id = ${taskId}`
+    if (run.status === 'waiting') await sql`UPDATE work_interactions SET status='cancelled' WHERE run_id=${run.id} AND status='pending'`
+    if (!run.active) await sql`DELETE FROM work_outbox WHERE run_id = ${run.id}`
+    await sql`INSERT INTO work_events (run_id, epoch, event_id, type, payload, occurred_at)
+      VALUES (${run.id}, ${run.epoch}, ${crypto.randomUUID()}, ${run.active ? 'run.cancel_requested' : 'run.cancelled'}, '{}'::jsonb, now())`
+    return { accepted: true, runId: run.id, runStatus: status }
+  }
+
   async function cancel(taskId: string) {
-    return db.begin(async sql => {
-      const [run] = await sql`SELECT r.id, r.epoch, r.status, r.active, r.checkpoint_ref AS "checkpointRef" FROM work_runs r
-        JOIN work_tasks t ON t.id = r.task_id WHERE t.id = ${taskId} AND t.owner_id = 'owner'
-        ORDER BY r.created_at DESC, r.id DESC LIMIT 1 FOR UPDATE OF r`
-      if (!run) return null
-      if (run.status === 'cancelling' || run.status === 'cancelled') return { accepted: false }
-      if (!['queued', 'provisioning', 'running', 'waiting'].includes(run.status)) return { accepted: false }
-      if (run.active) {
-        const [terminal] = await sql`SELECT 1 FROM work_events WHERE run_id = ${run.id} AND epoch = ${run.epoch}
-          AND type IN ('run.finished', 'run.failed') LIMIT 1`
-        if (terminal) return { accepted: false }
-      }
-      if (run.status === 'waiting') await retainCheckpointArtifacts(sql, taskId, run)
-      const status = run.active ? 'cancelling' : 'cancelled'
-      await sql`UPDATE work_runs SET status = ${status}, run_token_hash = NULL,
-        finished_at = CASE WHEN ${status} = 'cancelled' THEN now() ELSE finished_at END
-        WHERE id = ${run.id}`
-      await sql`UPDATE work_tasks SET status = ${status} WHERE id = ${taskId}`
-      if (run.status === 'waiting') await sql`UPDATE work_interactions SET status='cancelled' WHERE run_id=${run.id} AND status='pending'`
-      if (!run.active) await sql`DELETE FROM work_outbox WHERE run_id = ${run.id}`
-      await sql`INSERT INTO work_events (run_id, epoch, event_id, type, payload, occurred_at)
-        VALUES (${run.id}, ${run.epoch}, ${crypto.randomUUID()}, ${run.active ? 'run.cancel_requested' : 'run.cancelled'}, '{}'::jsonb, now())`
-      return { accepted: true }
-    })
+    return db.begin(sql => cancelInTransaction(sql, taskId))
   }
 
   async function isRunStopped(runId: string, epoch: number) {
@@ -501,32 +601,41 @@ export async function createWorkStore(databaseUrl: string) {
     return created === null ? null : { task: await detail(taskId), created }
   }
 
-  async function appendRunMessage(runId: string, body: unknown) {
+  function parseAppendRunMessage(body: unknown): AppendRunMessageInput {
     if (!body || typeof body !== 'object' || Array.isArray(body)) throw new WorkInputError('追加要求无效')
     const input = body as Record<string, unknown>
     if (typeof input.commandId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(input.commandId)) throw new WorkInputError('命令 ID 无效')
     if (input.kind !== 'steer') throw new WorkInputError('追加类型无效')
     const content = typeof input.content === 'string' ? input.content.trim() : ''
     if (!content || content.length > 4000) throw new WorkInputError('追加要求须为 1–4000 字')
+    return { commandId: input.commandId, kind: 'steer', content }
+  }
+
+  async function appendRunMessageInTransaction(sql: SQL, runId: string, input: AppendRunMessageInput) {
+    const [run] = await sql`SELECT r.status, r.active, r.epoch, h.id AS "threadId" FROM work_runs r
+      JOIN work_tasks t ON t.id = r.task_id JOIN work_threads h ON h.task_id = t.id
+      WHERE r.id = ${runId} AND t.owner_id = 'owner' FOR UPDATE OF r`
+    if (!run) return null
+    const [existing] = await sql`SELECT id, run_id AS "runId", content, status FROM work_messages WHERE command_id = ${input.commandId}`
+    if (existing) {
+      if (existing.runId !== runId || existing.content !== input.content) throw new WorkConflictError('命令 ID 已用于其他追加要求')
+      return { message: existing, created: false }
+    }
+    if (run.status !== 'running' || !run.active) throw new WorkConflictError('当前 Run 不在执行中')
+    const id = crypto.randomUUID()
+    const rows = await sql`INSERT INTO work_messages (id, thread_id, run_id, command_id, role, content, status)
+      VALUES (${id}, ${run.threadId}, ${runId}, ${input.commandId}, 'user', ${input.content}, 'pending')
+      ON CONFLICT (command_id) DO NOTHING RETURNING id, run_id AS "runId", content, status`
+    if (rows.length) return { message: rows[0], created: true }
+    const [winner] = await sql`SELECT id, run_id AS "runId", content, status FROM work_messages WHERE command_id = ${input.commandId}`
+    if (!winner || winner.runId !== runId || winner.content !== input.content) throw new WorkConflictError('命令 ID 已用于其他追加要求')
+    return { message: winner, created: false }
+  }
+
+  async function appendRunMessage(runId: string, body: unknown) {
+    const input = parseAppendRunMessage(body)
     return db.begin(async sql => {
-      const [run] = await sql`SELECT r.status, r.active, r.epoch, h.id AS "threadId" FROM work_runs r
-        JOIN work_tasks t ON t.id = r.task_id JOIN work_threads h ON h.task_id = t.id
-        WHERE r.id = ${runId} AND t.owner_id = 'owner' FOR UPDATE OF r`
-      if (!run) return null
-      const [existing] = await sql`SELECT id, run_id AS "runId", content, status FROM work_messages WHERE command_id = ${input.commandId}`
-      if (existing) {
-        if (existing.runId !== runId || existing.content !== content) throw new WorkConflictError('命令 ID 已用于其他追加要求')
-        return { message: existing, created: false }
-      }
-      if (run.status !== 'running' || !run.active) throw new WorkConflictError('当前 Run 不在执行中')
-      const id = crypto.randomUUID()
-      const rows = await sql`INSERT INTO work_messages (id, thread_id, run_id, command_id, role, content, status)
-        VALUES (${id}, ${run.threadId}, ${runId}, ${input.commandId}, 'user', ${content}, 'pending')
-        ON CONFLICT (command_id) DO NOTHING RETURNING id, run_id AS "runId", content, status`
-      if (rows.length) return { message: rows[0], created: true }
-      const [winner] = await sql`SELECT id, run_id AS "runId", content, status FROM work_messages WHERE command_id = ${input.commandId}`
-      if (!winner || winner.runId !== runId || winner.content !== content) throw new WorkConflictError('命令 ID 已用于其他追加要求')
-      return { message: winner, created: false }
+      return appendRunMessageInTransaction(sql, runId, input)
     })
   }
 
@@ -647,5 +756,5 @@ export async function createWorkStore(databaseUrl: string) {
 
   async function close() { await db.close() }
 
-  return { list, detail, events, create, continueTask, retryTask, appendRunMessage, resolveInteraction, pendingRunMessages, acknowledgeRunMessage, cancel, isRunStopped, artifactVersion, readArtifact, stewardCatalog, stewardMetadata, stewardRead, stewardModelStats, createFromSteward, requestCleanupRetry, resolveRunModelConnection, authorizeModelProxy, reserveModelAttempt, recordModelUsage, close }
+  return { list, detail, events, create, continueTask, retryTask, appendRunMessage, resolveInteraction, pendingRunMessages, acknowledgeRunMessage, cancel, isRunStopped, artifactVersion, readArtifact, stewardCatalog, stewardMetadata, stewardRead, stewardModelStats, createFromSteward, freezeStewardControl, applyStewardControl, requestCleanupRetry, resolveRunModelConnection, authorizeModelProxy, reserveModelAttempt, recordModelUsage, close }
 }

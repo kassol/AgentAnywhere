@@ -29,7 +29,27 @@ function stewardQuery(body, response, responses) {
   let name, args, answer = '候选已列出；请明确需要读取的工作。'
   const dispatch = body.model.startsWith('fixture-steward-dispatch-')
   let holdDispatch = false
-  if (dispatch) {
+  const control = body.model.startsWith('fixture-steward-control-')
+  if (control) {
+    const results = outputs.map(output => { try { return JSON.parse(output) } catch { return {} } })
+    if (planner && user.includes('R2_CONTROL_RESUME') && !outputs.length) {
+      name = 'resume_work_control'; args = { operationId: ids[0] }
+    } else if (planner && !outputs.length) {
+      name = 'freeze_work_control'
+      args = { kind: user.includes('R2_CONTROL_CANCEL') ? 'cancel' : 'steer', query: ids[0] ?? 'R2_CONTROL_AMBIGUOUS', content: user.includes('R2_CONTROL_CANCEL') ? null : user }
+    } else if (planner && outputs.length === 1) {
+      name = 'find_control_candidates'; args = { cursor: 0 }
+    } else if (planner && outputs.length === 2 && ids.length) {
+      name = 'freeze_control_target'; args = { operationId: results[0].operationId, taskId: ids[0] }
+    } else if (planner) answer = '控制目标已确定；目标不唯一时需澄清。'
+    else {
+      const apply = tools.find(item => item.name === 'apply_frozen_control')
+      holdDispatch = user.includes('R2_CONTROL_HOLD') && outputs.length === 1
+      if (apply && !outputs.length) {
+        name = apply.name; args = { operationId: apply.parameters.properties.operationId.const }
+      } else answer = apply ? '操作结果请查看持久回执。' : '请明确要操作哪项工作。'
+    }
+  } else if (dispatch) {
     if (planner && user.includes('R2_DISPATCH_RESUME') && !outputs.length) {
       name = 'resume_research_dispatch'
       const receipt = JSON.parse(system.split('可信结构化回执：').at(-1))
@@ -137,7 +157,7 @@ http.createServer(async (request, response) => {
   request.setEncoding('utf8')
   for await (const chunk of request) raw += chunk
   const body = JSON.parse(raw)
-  if (body.model.startsWith('fixture-steward-query-') || body.model.startsWith('fixture-steward-dispatch-')) return stewardQuery(body, response, responses)
+  if (body.model.startsWith('fixture-steward-query-') || body.model.startsWith('fixture-steward-dispatch-') || body.model.startsWith('fixture-steward-control-')) return stewardQuery(body, response, responses)
   if (responses) {
     if (body.model === 'fixture-steward-responses') {
       calls.push({ model: body.model, protocol: 'responses', stream: body.stream, input: body.input })
