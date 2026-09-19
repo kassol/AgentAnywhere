@@ -115,7 +115,7 @@ test('owner creates one persisted queued work request through the public API', a
     expect((await send(`/api/tasks/${linked.id}/cancel`, 'POST')).status).toBe(200)
     expect((await send(`/api/tasks/${linked.id}`)).json()).resolves.toMatchObject({ status: 'cancelled', run: { status: 'cancelled' } })
     expect((await send(`/api/tasks/${linked.id}/events`)).json()).resolves.toMatchObject([{ type: 'run.cancelled' }])
-    app.stop(true)
+    await app.stop(true)
     app = await startServer({ password, port: 0, dataDir, databaseUrl: testDatabaseUrl, testNow: () => clock })
     base = app.url.origin
     cookie = await login()
@@ -274,7 +274,7 @@ test('owner creates one persisted queued work request through the public API', a
     expect((await send(`/api/tasks/${toFinish.id}`)).json()).resolves.toMatchObject({ run: { status: 'cancelled', modelCallLimit: 40 }, interaction: { status: 'answered', answer: 'finish' } })
     await versionDb.close()
   } finally {
-    app.stop(true)
+    await app.stop(true)
     await admin.unsafe(`DROP SCHEMA ${schema} CASCADE`)
     await admin.close()
     await rm(dataDir, { recursive: true, force: true })

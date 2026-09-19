@@ -4,10 +4,12 @@ import { ReportMarkdown } from './Work'
 type Thread = { id: string; title: string; status?: string }
 type Message = { id: string; turnId: string; role: 'user' | 'assistant'; content: string; status: string }
 type Turn = { id: string; status: string; modelCalls: number; modelCallLimit: number; activeMs: number; activeLimitMs: number; budgetReason?: string; failure?: string }
-type Detail = Thread & { messages: Message[]; turns: Turn[] }
+type RelatedTask = { id: string; goal: string; status: string; href: string; reports: { versionId: string; href: string }[] }
+type Detail = Thread & { messages: Message[]; turns: Turn[]; relatedTasks: RelatedTask[] }
 const statusLabel: Record<string, string> = {
   queued: '排队中', running: '回复中', streaming: '生成中', stopping: '停止中', stopped: '已停止',
   completed: '已完成', interrupted: '已中断', limited: '已达上限', failed: '失败',
+  waiting: '等待回答', cancelling: '正在取消', cancelled: '已取消', succeeded: '已完成', lost: '执行中断', save_failed: '成果保存失败',
 }
 
 export function Steward() {
@@ -104,6 +106,10 @@ export function Steward() {
           </article>)}
           {current?.failure && <p className="error" role="alert">{current.failure}</p>}
           {current?.status === 'limited' && <p className="error" role="status">本轮已达到{current.budgetReason === 'time' ? ' 5 分钟' : ' 8 次模型请求'}上限。发送新消息可开始下一轮。</p>}
+          {!!detail?.relatedTasks.length && <section aria-label="关联工作"><h3>关联工作</h3><ul>{detail.relatedTasks.map(task => <li key={task.id}>
+            <a href={task.href}>{task.goal}</a> <span>{statusLabel[task.status] ?? task.status}</span>
+            {task.reports.map(report => <span key={report.versionId}> · <a href={report.href}>成果 {report.versionId.slice(0, 8)}</a></span>)}
+          </li>)}</ul></section>}
         </div>
         <form className="steward-composer" onSubmit={submit}>
           <label htmlFor="steward-message">消息</label>

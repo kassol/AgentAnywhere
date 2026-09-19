@@ -1,9 +1,7 @@
 import { join } from 'node:path'
-import { createHash } from 'node:crypto'
-import { readFile } from 'node:fs/promises'
 import type { ServerWebSocket } from 'bun'
 import { createModelConnectionStore } from './model-connection'
-import { createWorkStore, WorkConflictError, WorkInputError } from './work'
+import { createWorkStore, WorkArtifactError, WorkConflictError, WorkInputError } from './work'
 import { createStewardService, StewardConflictError, StewardInputError } from './steward'
 
 function modelPath(protocol: 'chat-completions' | 'responses') {
@@ -95,9 +93,11 @@ export async function startServer(config: Config) {
   const passwordHash = await Bun.password.hash(config.password, { algorithm: 'argon2id' })
   const modelConnection = createModelConnectionStore(config.dataDir ?? join(process.cwd(), 'data'), config.modelTimeoutMs, config.directoryUrl)
   await modelConnection.load()
-  const work = config.databaseUrl ? await createWorkStore(config.databaseUrl) : null
-  const steward = config.databaseUrl ? await createStewardService(config.databaseUrl, modelConnection.resolveCredential, config.testNow) : null
   const artifactDir = config.artifactDir ?? join(config.dataDir ?? join(process.cwd(), 'data'), 'artifacts')
+  const work = config.databaseUrl ? await createWorkStore(config.databaseUrl) : null
+  const steward = config.databaseUrl ? await createStewardService(config.databaseUrl, modelConnection.resolveCredential, config.testNow,
+    work ? { catalog: work.stewardCatalog, metadata: work.stewardMetadata,
+      read: (taskIds: string[], versionIds: string[]) => work.stewardRead(taskIds, versionIds, artifactDir) } : undefined) : null
   const sessions = new Map<string, Session>()
   const attempts = new Map<string, { count: number; until: number }>()
   const secure = config.secureCookie ?? false
@@ -287,18 +287,18 @@ export async function startServer(config: Config) {
       }
       const artifactMatch = /^\/api\/artifacts\/([0-9a-f-]{36})\/(content|download)$/i.exec(path)
       if (artifactMatch && request.method === 'GET') {
-        const artifact = await work?.artifactVersion(artifactMatch[1])
-        if (!artifact || !/^[0-9a-f-]{36}\/(?:epoch-\d+\/|checkpoint-\d+\/generation-[0-9a-f-]{36}\/)?(report\.md|attachment-[0-4]\.(txt|csv|json|md))$/i.test(artifact.storageKey)
-          || !Number.isSafeInteger(Number(artifact.sizeBytes)) || Number(artifact.sizeBytes) < (artifact.kind === 'report' ? 1 : 0) || Number(artifact.sizeBytes) > 10_000_000
-          || !['text/markdown', 'text/plain'].includes(artifact.mimeType)) return json({ error: 'Not found' }, 404)
-        if (artifactMatch[2] === 'content' && artifact.kind !== 'report') return json({ error: 'Not found' }, 404)
         try {
-          const bytes = await readFile(join(artifactDir, artifact.storageKey))
-          if (bytes.length !== Number(artifact.sizeBytes) || createHash('sha256').update(bytes).digest('hex') !== artifact.sha256) return json({ error: '成果校验失败' }, 409)
+          if (!work) return json({ error: 'Not found' }, 404)
+          const { artifact, bytes } = await work.readArtifact(artifactMatch[1], artifactDir)
+          if (artifactMatch[2] === 'content' && artifact.kind !== 'report') return json({ error: 'Not found' }, 404)
           if (artifactMatch[2] === 'content') return json({ markdown: new TextDecoder('utf-8', { fatal: true }).decode(bytes) })
           const name = artifact.kind === 'report' ? 'report.md' : artifact.name
-          return new Response(bytes, { headers: { ...common, 'content-type': 'application/octet-stream', 'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(name)}`, 'content-security-policy': "default-src 'none'; sandbox" } })
-        } catch { return json({ error: '成果文件不可读取' }, 503) }
+          return new Response(new Uint8Array(bytes), { headers: { ...common, 'content-type': 'application/octet-stream', 'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(name)}`, 'content-security-policy': "default-src 'none'; sandbox" } })
+        } catch (error) {
+          if (error instanceof WorkArtifactError) return error.kind === 'invalid' ? json({ error: '成果校验失败' }, 409)
+            : error.kind === 'unavailable' ? json({ error: '成果文件不可读取' }, 503) : json({ error: 'Not found' }, 404)
+          return json({ error: '成果文件不可读取' }, 503)
+        }
       }
       if (path === '/api/tasks' && request.method === 'GET') return json(work ? await work.list() : [])
       if (/^\/api\/tasks\/[0-9a-f-]{36}\/cancel$/i.test(path) && request.method === 'POST') {
@@ -486,7 +486,7 @@ export async function startServer(config: Config) {
     },
   })
   const stop = app.stop.bind(app)
-  app.stop = async force => { stop(force); await steward?.close() }
+  app.stop = async force => { stop(force); await steward?.close(); await work?.close() }
   steward?.start()
   return app
 }

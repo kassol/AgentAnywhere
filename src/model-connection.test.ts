@@ -39,7 +39,7 @@ test('connection test sends the selected model and protocol to the configured ga
     expect(error).toContain('Responses unavailable')
     expect(error).not.toContain('test-key')
     expect(calls.at(-1)?.path).toBe('/v1/responses')
-  } finally { app.stop(true); gateway.stop(true); await rm(dataDir, { recursive: true, force: true }) }
+  } finally { await app.stop(true); gateway.stop(true); await rm(dataDir, { recursive: true, force: true }) }
 })
 
 test('model settings survive restart; failed refresh retains selected model and never reveals the key', async () => {
@@ -100,7 +100,7 @@ test('model settings survive restart; failed refresh retains selected model and 
     expect(visible).toContain('gpt-6-astra')
     expect((await request('/api/model-connection', 'PUT', { endpoint: 'http://127.0.0.1:12345/v1', apiKey: '' })).status).toBe(400)
     expect((await request('/api/model-connection')).text().then(text => text.includes(gateway.url.origin))).resolves.toBe(true)
-    app.stop(true)
+    await app.stop(true)
     app = await startServer({ password, port: 0, dataDir, modelTimeoutMs: 40 })
     base = app.url.origin
     cookie = await signIn()
@@ -110,7 +110,7 @@ test('model settings survive restart; failed refresh retains selected model and 
     expect((await readFile(join(dataDir, 'model-connection.json'), 'utf8')).includes('secret-key')).toBe(true)
     expect((await stat(join(dataDir, 'model-connection.json'))).mode & 0o777).toBe(0o600)
   } finally {
-    app.stop(true)
+    await app.stop(true)
     gateway.stop(true)
     await rm(dataDir, { recursive: true, force: true })
   }
@@ -211,7 +211,7 @@ test('owner sees field sources, can revoke overrides and explicit alias mapping,
     expect(current.directory.status).toBe('error')
     expect(current.directory.cachedModels).toBe(2)
     expect(current.models[0]?.maxTokens).toBe(128000)
-    app.stop(true)
+    await app.stop(true)
     app = await startServer({ password, port: 0, dataDir, directoryUrl: directory.url.origin })
     base = app.url.origin
     cookie = await login()
@@ -224,7 +224,7 @@ test('owner sees field sources, can revoke overrides and explicit alias mapping,
     expect(current.models[0]?.maxTokens).toBeUndefined()
     expect(current.models[1]?.contextWindow).toBeUndefined()
   } finally {
-    app.stop(true)
+    await app.stop(true)
     gateway.stop(true)
     directory.stop(true)
     await rm(dataDir, { recursive: true, force: true })
@@ -277,7 +277,7 @@ test('owner persists a steward model and an explicit eligible research pool with
       expect((await rejected.json()).error).toMatch(/调研模型池|工具能力|运行参数/)
     }
 
-    app.stop(true)
+    await app.stop(true)
     app = await startServer({ password, port: 0, dataDir, databaseUrl: isolatedUrl.toString() })
     base = app.url.origin
     cookie = await login()
@@ -296,7 +296,7 @@ test('owner persists a steward model and an explicit eligible research pool with
     expect(created.status).toBe(201)
     expect(await created.json()).toMatchObject({ goal: 'R1 直接创建保持可用', run: { model: { id: 'research-model', protocol: 'responses' } } })
   } finally {
-    app.stop(true)
+    await app.stop(true)
     await admin.unsafe(`DROP SCHEMA ${schema} CASCADE`)
     await admin.close()
     await rm(dataDir, { recursive: true, force: true })

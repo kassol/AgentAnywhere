@@ -10,6 +10,9 @@ type Detail = Task & { run: { id: string; status: string; model: Model; cleanupS
 type RunEvent = { serverSeq: number; epoch: number; type: string; payload: Record<string, any>; occurredAt: string }
 const statusLabel: Record<string, string> = { queued: '待执行', provisioning: '准备环境', running: '执行中', waiting: '等待回答', cancelling: '正在取消', cancelled: '已取消', succeeded: '已完成', failed: '失败', lost: '执行中断', save_failed: '成果保存失败' }
 const safeLink = (url: string) => {
+  if (/^\/tasks\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(url)
+    || /^\/tasks\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\?version=[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(url)
+    || /^\/api\/artifacts\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\/(content|download)$/i.test(url)) return url
   try {
     const parsed = new URL(url)
     return ['https:', 'http:'].includes(parsed.protocol) && !parsed.username && !parsed.password ? parsed.href : ''
@@ -31,7 +34,8 @@ export function Work() {
   const detailId = location.pathname.startsWith('/tasks/') ? location.pathname.slice('/tasks/'.length) : null
   const [tasks, setTasks] = useState<Task[] | null>(null)
   const [detail, setDetail] = useState<Detail | null>(null)
-  const [selectedVersion, setSelectedVersion] = useState<string | null>(null)
+  const requestedVersion = new URLSearchParams(location.search).get('version')
+  const [selectedVersion, setSelectedVersion] = useState<string | null>(requestedVersion && /^[0-9a-f-]{36}$/i.test(requestedVersion) ? requestedVersion : null)
   const [report, setReport] = useState('')
   const [loadedVersion, setLoadedVersion] = useState<string | null>(null)
   const [events, setEvents] = useState<RunEvent[]>([])
@@ -83,7 +87,8 @@ export function Work() {
     return () => { disposed = true; if (timer) clearInterval(timer) }
   }, [detailId])
 
-  const currentVersion = selectedVersion ?? detail?.artifacts.find(item => item.kind === 'report' && item.runStatus === 'succeeded')?.versionId
+  const currentVersion = selectedVersion && detail?.artifacts.some(item => item.kind === 'report' && item.versionId === selectedVersion)
+    ? selectedVersion : detail?.artifacts.find(item => item.kind === 'report' && item.runStatus === 'succeeded')?.versionId
   useEffect(() => {
     if (!currentVersion) return
     let disposed = false

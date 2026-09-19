@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto'
+import { readFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { SQL } from 'bun'
 import type { ModelSelection, Protocol } from './model-connection'
 
@@ -7,6 +9,9 @@ type CreateRequest = { requestId: string; goal: string; sourceUrl: string | null
 
 export class WorkInputError extends Error {}
 export class WorkConflictError extends Error {}
+export class WorkArtifactError extends Error {
+  constructor(readonly kind: 'not-found' | 'invalid' | 'unavailable') { super(kind) }
+}
 
 function parseRequest(body: unknown): CreateRequest {
   if (!body || typeof body !== 'object') throw new WorkInputError('请填写工作内容')
@@ -136,6 +141,71 @@ export async function createWorkStore(databaseUrl: string) {
       FROM work_artifact_versions v JOIN work_artifacts a ON a.id = v.artifact_id
       JOIN work_tasks t ON t.id = a.task_id WHERE v.id = ${versionId} AND t.owner_id = 'owner'`
     return row ?? null
+  }
+
+  async function readArtifact(versionId: string, artifactDir: string) {
+    const artifact = await artifactVersion(versionId)
+    if (!artifact || !/^[0-9a-f-]{36}\/(?:epoch-\d+\/|checkpoint-\d+\/generation-[0-9a-f-]{36}\/)?(report\.md|attachment-[0-4]\.(txt|csv|json|md))$/i.test(artifact.storageKey)
+      || !Number.isSafeInteger(Number(artifact.sizeBytes)) || Number(artifact.sizeBytes) < (artifact.kind === 'report' ? 1 : 0) || Number(artifact.sizeBytes) > 10_000_000
+      || !['text/markdown', 'text/plain'].includes(artifact.mimeType)) throw new WorkArtifactError('not-found')
+    let bytes: Buffer
+    try { bytes = await readFile(join(artifactDir, artifact.storageKey)) } catch { throw new WorkArtifactError('unavailable') }
+    if (bytes.length !== Number(artifact.sizeBytes) || createHash('sha256').update(bytes).digest('hex') !== artifact.sha256) throw new WorkArtifactError('invalid')
+    return { artifact, bytes }
+  }
+
+  function workCards(rows: any[]) {
+    return rows.map(row => ({
+      id: row.id, goal: row.goal, sourceUrl: row.sourceUrl, status: row.status, createdAt: row.createdAt, href: `/tasks/${row.id}`,
+      runs: typeof row.runs === 'string' ? JSON.parse(row.runs) : row.runs,
+      reports: (typeof row.reports === 'string' ? JSON.parse(row.reports) : row.reports).map((report: any) => ({ ...report,
+        href: `/tasks/${row.id}?version=${report.versionId}`, contentHref: `/api/artifacts/${report.versionId}/content`, downloadHref: `/api/artifacts/${report.versionId}/download`,
+      })),
+    }))
+  }
+
+  async function stewardCatalog(cursor = 0, query = '') {
+    const pattern = `%${query.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_')}%`
+    const rows = await db`SELECT t.id, t.goal, t.source_url AS "sourceUrl", t.status, t.created_at AS "createdAt",
+      COALESCE((SELECT jsonb_agg(jsonb_build_object('id', r.id, 'status', r.status, 'createdAt', r.created_at, 'finishedAt', r.finished_at) ORDER BY r.created_at, r.id)
+        FROM work_runs r WHERE r.task_id=t.id), '[]'::jsonb) AS runs,
+      COALESCE((SELECT jsonb_agg(jsonb_build_object('versionId', v.id, 'runId', v.run_id, 'runStatus', r.status, 'createdAt', v.created_at) ORDER BY v.created_at DESC, v.id DESC)
+        FROM work_artifacts a JOIN work_artifact_versions v ON v.artifact_id=a.id JOIN work_runs r ON r.id=v.run_id
+        WHERE a.task_id=t.id AND a.kind='report'), '[]'::jsonb) AS reports
+      FROM work_tasks t WHERE t.owner_id='owner' AND (${query}='' OR t.id::text=${query} OR t.goal ILIKE ${pattern} ESCAPE '\\' OR COALESCE(t.source_url,'') ILIKE ${pattern} ESCAPE '\\')
+      ORDER BY t.created_at DESC, t.id DESC LIMIT 26 OFFSET ${cursor}`
+    return { items: workCards(rows.slice(0, 25)), nextCursor: rows.length > 25 ? cursor + 25 : null }
+  }
+
+  async function stewardMetadata(taskIds: string[]) {
+    if (!taskIds.length) return []
+    const rows = await db`SELECT t.id, t.goal, t.source_url AS "sourceUrl", t.status, t.created_at AS "createdAt",
+      COALESCE((SELECT jsonb_agg(jsonb_build_object('id', r.id, 'status', r.status, 'createdAt', r.created_at, 'finishedAt', r.finished_at) ORDER BY r.created_at, r.id)
+        FROM work_runs r WHERE r.task_id=t.id), '[]'::jsonb) AS runs,
+      COALESCE((SELECT jsonb_agg(jsonb_build_object('versionId', v.id, 'runId', v.run_id, 'runStatus', r.status, 'createdAt', v.created_at) ORDER BY v.created_at DESC, v.id DESC)
+        FROM work_artifacts a JOIN work_artifact_versions v ON v.artifact_id=a.id JOIN work_runs r ON r.id=v.run_id
+        WHERE a.task_id=t.id AND a.kind='report'), '[]'::jsonb) AS reports
+      FROM work_tasks t WHERE t.owner_id='owner' AND t.id=ANY(string_to_array(${taskIds.join(',')}, ',')::uuid[])
+      ORDER BY t.created_at DESC, t.id DESC`
+    return workCards(rows)
+  }
+
+  async function stewardRead(taskIds: string[], versionIds: string[], artifactDir: string) {
+    const tasks = await stewardMetadata(taskIds)
+    if (tasks.length !== taskIds.length) throw new WorkArtifactError('not-found')
+    const reports = tasks.flatMap((task: any) => task.reports.map((report: any) => ({ ...report, taskId: task.id })))
+    const byVersion = new Map(reports.map((report: any) => [report.versionId, report]))
+    if (versionIds.some(id => !byVersion.has(id))) throw new WorkArtifactError('not-found')
+    const contents = await Promise.all(versionIds.map(async versionId => {
+      const report: any = byVersion.get(versionId)
+      const { artifact, bytes } = await readArtifact(versionId, artifactDir)
+      let markdown: string
+      try { markdown = new TextDecoder('utf-8', { fatal: true }).decode(bytes) } catch { throw new WorkArtifactError('invalid') }
+      return { ...report, markdown, name: artifact.name }
+    }))
+    return tasks.map((task: any) => ({ ...task, reports: task.reports.map((report: any) => ({ ...report,
+      ...(contents.find(item => item.versionId === report.versionId) ?? {}),
+    })) }))
   }
 
   async function requestCleanupRetry(taskId: string) {
@@ -484,5 +554,7 @@ export async function createWorkStore(databaseUrl: string) {
       WHERE EXISTS (SELECT 1 FROM work_runs WHERE id = ${runId} AND epoch = ${epoch} AND active)`
   }
 
-  return { list, detail, events, create, continueTask, retryTask, appendRunMessage, resolveInteraction, pendingRunMessages, acknowledgeRunMessage, cancel, isRunStopped, artifactVersion, requestCleanupRetry, resolveRunModelConnection, authorizeModelProxy, reserveModelAttempt, recordModelUsage }
+  async function close() { await db.close() }
+
+  return { list, detail, events, create, continueTask, retryTask, appendRunMessage, resolveInteraction, pendingRunMessages, acknowledgeRunMessage, cancel, isRunStopped, artifactVersion, readArtifact, stewardCatalog, stewardMetadata, stewardRead, requestCleanupRetry, resolveRunModelConnection, authorizeModelProxy, reserveModelAttempt, recordModelUsage, close }
 }

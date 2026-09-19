@@ -29,7 +29,7 @@ test('owner creates and reopens an independent steward conversation', async () =
     const attempts = await Promise.all([send('/api/steward/threads', 'POST', { requestId }), send('/api/steward/threads', 'POST', { requestId })])
     expect(attempts.map(item => item.status).sort()).toEqual([200, 201])
     const thread = await attempts[0].json()
-    expect(thread).toMatchObject({ title: '新对话', messages: [], turns: [] })
+    expect(thread).toMatchObject({ title: '新对话', messages: [], turns: [], relatedTasks: [] })
     expect((await send(`/api/steward/threads/${thread.id}`)).json()).resolves.toMatchObject({ id: thread.id, messages: [], turns: [] })
     expect((await send('/api/steward/threads')).json()).resolves.toMatchObject([{ id: thread.id, title: '新对话' }])
   } finally {
@@ -140,9 +140,9 @@ test('steward streams both protocols through one global turn slot', async () => 
       if (firstDetail.turns[0]?.status === 'completed' && secondDetail.turns[0]?.status === 'completed') break
       await Bun.sleep(20)
     }
-    expect(firstDetail).toMatchObject({ messages: [{ role: 'user', content: '第一轮' }, { role: 'assistant', content: '聊天协议完成。', status: 'completed' }], turns: [{ status: 'completed', modelCalls: 1 }] })
-    expect(secondDetail).toMatchObject({ messages: [{ role: 'user', content: '第二轮' }, { role: 'assistant', content: '响应协议完成。', status: 'completed' }], turns: [{ status: 'completed', modelCalls: 1 }] })
-    expect(calls).toEqual(['/v1/chat/completions:steward-chat', '/v1/responses:steward-responses'])
+    expect(firstDetail).toMatchObject({ messages: [{ role: 'user', content: '第一轮' }, { role: 'assistant', content: '聊天协议完成。', status: 'completed' }], turns: [{ status: 'completed', modelCalls: 2 }] })
+    expect(secondDetail).toMatchObject({ messages: [{ role: 'user', content: '第二轮' }, { role: 'assistant', content: '响应协议完成。', status: 'completed' }], turns: [{ status: 'completed', modelCalls: 2 }] })
+    expect(calls).toEqual(['/v1/chat/completions:steward-chat', '/v1/chat/completions:steward-chat', '/v1/responses:steward-responses', '/v1/responses:steward-responses'])
     expect(responseRequests[0].reasoning).toMatchObject({ effort: 'medium' })
     expect(maxActiveRequests).toBe(1)
     const streamed = await (await send(`/api/steward/threads/${second.id}/events`)).json()
@@ -151,7 +151,7 @@ test('steward streams both protocols through one global turn slot', async () => 
     expect((await configure('steward-chat', 'chat-completions')).status).toBe(200)
     const stoppedThread = await (await send('/api/steward/threads', 'POST', { requestId: crypto.randomUUID() })).json()
     const stopping = await (await send(`/api/steward/threads/${stoppedThread.id}/turns`, 'POST', { requestId: crypto.randomUUID(), content: '等待停止' })).json()
-    for (let i = 0; i < 50 && calls.length < 3; i++) await Bun.sleep(20)
+    for (let i = 0; i < 50 && !chatContexts.some(context => context.at(-1) === 'user:等待停止'); i++) await Bun.sleep(20)
     expect((await send(`/api/steward/turns/${stopping.id}/stop`, 'POST')).status).toBe(202)
     releaseHold()
     let stopped: any
@@ -184,10 +184,10 @@ test('steward streams both protocols through one global turn slot', async () => 
     expect(queued.messages.map((message: any) => `${message.role}:${message.content}`)).toEqual([
       'user:队列一', 'assistant:聊天协议完成。', 'user:队列二', 'assistant:聊天协议完成。', 'user:队列三', 'assistant:聊天协议完成。',
     ])
-    expect(chatContexts.slice(-3)).toEqual([
-      ['user:队列一'],
-      ['user:队列一', 'assistant:聊天协议完成。', 'user:队列二'],
-      ['user:队列一', 'assistant:聊天协议完成。', 'user:队列二', 'assistant:聊天协议完成。', 'user:队列三'],
+    expect(chatContexts.slice(-6)).toEqual([
+      ['user:队列一'], ['user:队列一'],
+      ['user:队列二'], ['user:队列一', 'assistant:聊天协议完成。', 'user:队列二'],
+      ['user:队列三'], ['user:队列一', 'assistant:聊天协议完成。', 'user:队列二', 'assistant:聊天协议完成。', 'user:队列三'],
     ])
   } finally {
     await app.stop(true)
@@ -250,7 +250,7 @@ test('startup interrupts the active turn and a new explicit turn continues', asy
     base = app.url.origin
     cookie = await login()
     expect((await send(`/api/steward/threads/${thread.id}`)).json()).resolves.toMatchObject({
-      messages: [{ role: 'user' }, { role: 'assistant', content: '部分回复', status: 'interrupted' }], turns: [{ status: 'interrupted' }],
+      messages: [{ role: 'user' }, { role: 'assistant', content: '', status: 'interrupted' }], turns: [{ status: 'interrupted' }],
     })
     await send(`/api/steward/threads/${thread.id}/turns`, 'POST', { requestId: crypto.randomUUID(), content: '重新开始普通轮次' })
     let detail: any
@@ -307,6 +307,96 @@ test('five active minutes limits a turn before another model request', async () 
     }
     expect(detail).toMatchObject({ turns: [{ status: 'limited', budgetReason: 'time', modelCalls: 0, activeMs: 300000 }] })
     expect(upstreamCalls).toBe(0)
+  } finally {
+    await app.stop(true)
+    upstream.stop(true)
+    await admin.unsafe(`DROP SCHEMA ${schema} CASCADE`)
+    await admin.close()
+    await rm(dataDir, { recursive: true, force: true })
+  }
+})
+
+test('candidate browsing stays unlinked and an explicit work reference links without creating a run', async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'agentanywhere-steward-query-'))
+  const schema = `steward_query_${crypto.randomUUID().replaceAll('-', '')}`
+  const admin = new SQL(databaseUrl)
+  await admin.unsafe(`CREATE SCHEMA ${schema}`)
+  const isolatedUrl = new URL(databaseUrl)
+  isolatedUrl.searchParams.set('options', `-csearch_path=${schema}`)
+  let taskId = ''
+  const toolResponse = (model: string, name: string, args: unknown) => {
+    const common = { id: crypto.randomUUID(), object: 'chat.completion.chunk', created: 1, model }
+    return new Response([
+      `data: ${JSON.stringify({ ...common, choices: [{ index: 0, delta: { role: 'assistant', tool_calls: [{ index: 0, id: `call_${name}`, type: 'function', function: { name, arguments: '' } }] }, finish_reason: null }] })}`,
+      `data: ${JSON.stringify({ ...common, choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: JSON.stringify(args) } }] }, finish_reason: null }] })}`,
+      `data: ${JSON.stringify({ ...common, choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] })}`,
+      'data: [DONE]', '',
+    ].join('\n\n'), { headers: { 'content-type': 'text/event-stream' } })
+  }
+  const textResponse = (model: string, content: string) => {
+    const common = { id: crypto.randomUUID(), object: 'chat.completion.chunk', created: 1, model }
+    return new Response([
+      `data: ${JSON.stringify({ ...common, choices: [{ index: 0, delta: { role: 'assistant', content }, finish_reason: null }] })}`,
+      `data: ${JSON.stringify({ ...common, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}`,
+      'data: [DONE]', '',
+    ].join('\n\n'), { headers: { 'content-type': 'text/event-stream' } })
+  }
+  const upstream = Bun.serve({ port: 0, async fetch(request) {
+    const body = await request.json() as any
+    const names = (body.tools ?? []).map((tool: any) => tool.function?.name)
+    const results = body.messages.filter((message: any) => message.role === 'tool')
+    const user = JSON.stringify(body.messages.filter((message: any) => message.role === 'user').at(-1)?.content ?? '')
+    if (names.includes('find_work_candidates')) {
+      if (!results.length) return toolResponse(body.model, 'find_work_candidates', { purpose: user.includes('浏览') ? 'browse' : 'read', query: '', cursor: 0 })
+      if (user.includes('浏览')) return textResponse(body.model, '候选已确认。')
+      return toolResponse(body.model, 'freeze_work_selection', { purpose: 'read', taskIds: [taskId], versionIds: [] })
+    }
+    if (names.includes('read_frozen_work')) {
+      if (!results.length) return toolResponse(body.model, 'read_frozen_work', { operationId: body.tools[0].function.parameters.properties.operationId.const })
+      return textResponse(body.model, `已读取[原工作](/tasks/${taskId})的真实状态。`)
+    }
+    return textResponse(body.model, `候选包含[原工作](/tasks/${taskId})。`)
+  } })
+  const password = 'test-password-12345'
+  const app = await startServer({ password, port: 0, dataDir, databaseUrl: isolatedUrl.toString() })
+  try {
+    const login = await fetch(`${app.url.origin}/api/auth`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password }) })
+    const cookie = login.headers.get('set-cookie')!
+    const send = (path: string, method = 'GET', body?: unknown) => fetch(`${app.url.origin}${path}`, {
+      method, headers: { cookie, 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body),
+    })
+    await send('/api/model-connection', 'PUT', { endpoint: `${upstream.url.origin}/v1`, apiKey: 'fixture-key' })
+    await send('/api/model-connection/models', 'PUT', {
+      defaultModel: 'steward-query', stewardModel: { modelId: 'steward-query', protocol: 'chat-completions' }, researchModelPool: [],
+      models: [{ id: 'steward-query', protocol: 'chat-completions', contextWindow: 128000, maxTokens: 4096, input: ['text'], reasoning: false, tools: true }],
+    })
+    const created = await send('/api/tasks', 'POST', { requestId: crypto.randomUUID(), goal: '历史报告查询样本', modelId: 'steward-query' })
+    expect(created.status).toBe(201)
+    const task = await created.json()
+    taskId = task.id
+    const before = await (await send(`/api/tasks/${taskId}`)).json()
+    const ask = async (content: string) => {
+      const thread = await (await send('/api/steward/threads', 'POST', { requestId: crypto.randomUUID() })).json()
+      await send(`/api/steward/threads/${thread.id}/turns`, 'POST', { requestId: crypto.randomUUID(), content })
+      let detail: any
+      for (let i = 0; i < 150; i++) {
+        detail = await (await send(`/api/steward/threads/${thread.id}`)).json()
+        if (['completed', 'failed', 'limited'].includes(detail.turns[0]?.status)) break
+        await Bun.sleep(20)
+      }
+      expect(detail.turns[0]?.status).toBe('completed')
+      return detail
+    }
+    const browsed = await ask('浏览最近的历史工作')
+    expect(browsed.relatedTasks).toEqual([])
+    expect(browsed.messages.at(-1).content).toContain(`/tasks/${taskId}`)
+    const first = await ask(`解读工作 ${taskId} 的当前状态`)
+    const second = await ask(`再读取工作 ${taskId} 的当前状态`)
+    expect(first.relatedTasks).toMatchObject([{ id: taskId, status: 'queued', href: `/tasks/${taskId}` }])
+    expect(second.relatedTasks).toMatchObject([{ id: taskId, status: 'queued', href: `/tasks/${taskId}` }])
+    const after = await (await send(`/api/tasks/${taskId}`)).json()
+    expect(after.runs.map((run: any) => run.id)).toEqual(before.runs.map((run: any) => run.id))
+    expect(after.artifacts).toEqual(before.artifacts)
   } finally {
     await app.stop(true)
     upstream.stop(true)
