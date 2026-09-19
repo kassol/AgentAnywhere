@@ -1,0 +1,44 @@
+/*
+ * Palette and surface treatment adapted from Craft Agents OSS renderer/index.css
+ * at e8963854c3679edcceb105a42537a06749e6cb64 (v0.13.3).
+ * Copyright 2026 Craft Docs Ltd. Licensed under Apache-2.0.
+ */
+:root {
+  --background: oklch(0.98 0.003 265);
+  --foreground: oklch(0.185 0.01 270);
+  --foreground-rgb: 38, 36, 42;
+  --panel: oklch(0.995 0.002 265);
+  --sidebar: oklch(0.955 0.008 285);
+  --muted: color-mix(in srgb, var(--foreground) 56%, var(--background));
+  --subtle: color-mix(in srgb, var(--foreground) 5%, var(--background));
+  --hover: color-mix(in srgb, var(--foreground) 7%, var(--background));
+  --selected: oklch(0.925 0.028 292);
+  --selected-foreground: oklch(0.36 0.095 292);
+  --accent: oklch(0.52 0.14 293);
+  --accent-foreground: #fff;
+  --border: color-mix(in srgb, var(--foreground) 10%, transparent);
+  --border-strong: color-mix(in srgb, var(--foreground) 20%, transparent);
+  --danger: oklch(0.52 0.2 28);
+  --focus: oklch(0.66 0.16 293);
+  --shadow: rgba(28, 21, 35, 0.07);
+}
+
+:root[data-theme='dark'] {
+  --background: oklch(0.145 0.015 270);
+  --foreground: oklch(0.95 0.01 270);
+  --foreground-rgb: 237, 236, 240;
+  --panel: oklch(0.18 0.014 270);
+  --sidebar: oklch(0.16 0.017 275);
+  --muted: color-mix(in srgb, var(--foreground) 57%, var(--background));
+  --subtle: color-mix(in srgb, var(--foreground) 5%, var(--background));
+  --hover: color-mix(in srgb, var(--foreground) 8%, var(--background));
+  --selected: oklch(0.27 0.045 292);
+  --selected-foreground: oklch(0.86 0.08 292);
+  --accent: oklch(0.67 0.18 293);
+  --accent-foreground: oklch(0.14 0.01 270);
+  --border: color-mix(in srgb, var(--foreground) 11%, transparent);
+  --border-strong: color-mix(in srgb, var(--foreground) 22%, transparent);
+  --danger: oklch(0.72 0.17 28);
+  --focus: oklch(0.72 0.17 293);
+  --shadow: rgba(0, 0, 0, 0.24);
+}
