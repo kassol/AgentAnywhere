@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import { createRoot } from 'react-dom/client'
 import { ModelSettings } from './ModelSettings'
 import { Work } from './Work'
@@ -53,6 +53,21 @@ function Workbench() {
   const settings = location.pathname === '/settings'
   const work = location.pathname === '/tasks' || location.pathname.startsWith('/tasks/')
   const [error, setError] = useState('')
+  const [pendingInteractions, setPendingInteractions] = useState<{ id: string; question: string; goal: string; href: string }[]>([])
+
+  useEffect(() => {
+    let disposed = false
+    async function refreshPending() {
+      try {
+        const response = await fetch('/api/interactions/pending')
+        if (response.status === 401) return location.assign('/login')
+        if (response.ok && !disposed) setPendingInteractions(await response.json())
+      } catch { /* keep the last persisted view during a transient disconnect */ }
+    }
+    void refreshPending()
+    const timer = setInterval(refreshPending, 1000)
+    return () => { disposed = true; clearInterval(timer) }
+  }, [])
 
   async function logout() {
     const response = await fetch('/api/logout', { method: 'POST' })
@@ -67,8 +82,12 @@ function Workbench() {
         <nav>
           <a href="/" aria-current={!settings && !work ? 'page' : undefined}>管家</a>
           <a href="/tasks" aria-current={work ? 'page' : undefined}>工作</a>
+          <a href={pendingInteractions[0]?.href ?? '/tasks'}>待办 {pendingInteractions.length}</a>
           <a href="/settings" aria-current={settings ? 'page' : undefined}>设置</a>
         </nav>
+        {!!pendingInteractions.length && <section className="pending-interactions" aria-label="全局待办"><h2>待回答</h2><ul>{pendingInteractions.map(interaction => <li key={interaction.id}>
+          <a href={interaction.href}>{interaction.goal}</a><small>{interaction.question}</small>
+        </li>)}</ul></section>}
       </aside>
       <main className="content">
         <header className="page-header"><h1>{settings ? '设置' : work ? '工作' : '管家'}</h1></header>

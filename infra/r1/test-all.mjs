@@ -27,7 +27,7 @@ for (let attempt = 0; attempt < 30; attempt++) {
 assert.ok(ready, 'The model/search HTTP fixture did not start')
 console.log('Running model-settings public API regression')
 execFileSync('docker', ['exec', 'agentanywhere-r1-test-web-1', 'sh', '-lc', 'AGENTANYWHERE_TEST_DATABASE_URL="$DATABASE_URL" bun test src/model-connection.test.ts src/work.test.ts src/steward.test.ts'], { stdio: 'inherit' })
-for (const name of ['run', 'report-contract', 'research', 'steering', 'interaction', 'cancel', 'continuation', 'recovery', 'steward-query', 'steward-dispatch', 'steward-control']) {
+for (const name of ['run', 'report-contract', 'research', 'steering', 'interaction', 'cancel', 'continuation', 'recovery', 'steward-query', 'steward-dispatch', 'steward-control', 'steward-status']) {
   console.log(`Running ${name}`)
   execFileSync(process.execPath, [fileURLToPath(new URL(`test-${name}.mjs`, import.meta.url))], { stdio: 'inherit' })
 }

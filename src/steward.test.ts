@@ -431,8 +431,10 @@ test('candidate browsing stays unlinked and an explicit work reference links wit
     expect(skipped.turns[0].failure).toBe('管家未读取已冻结的工作回执')
     const first = await ask(`解读工作 ${taskId} 的当前状态`)
     const second = await ask(`再读取工作 ${taskId} 的当前状态`)
-    expect(first.relatedTasks).toMatchObject([{ id: taskId, status: 'queued', href: `/tasks/${taskId}` }])
-    expect(second.relatedTasks).toMatchObject([{ id: taskId, status: 'queued', href: `/tasks/${taskId}` }])
+    expect(first).toMatchObject({ relatedTasks: [{ id: taskId, status: 'queued', href: `/tasks/${taskId}` }], statusCards: [] })
+    expect(second).toMatchObject({ relatedTasks: [{ id: taskId, status: 'queued', href: `/tasks/${taskId}` }], statusCards: [] })
+    expect((await send('/api/interactions/pending')).status).toBe(200)
+    expect((await send('/api/interactions/pending')).json()).resolves.toEqual([])
     const oldCandidateThread = await (await send('/api/steward/threads', 'POST', { requestId: crypto.randomUUID() })).json()
     const submitExisting = async (content: string) => {
       await send(`/api/steward/threads/${oldCandidateThread.id}/turns`, 'POST', { requestId: crypto.randomUUID(), content })

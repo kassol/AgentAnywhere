@@ -177,9 +177,13 @@ export async function createWorkStore(databaseUrl: string) {
     return rows.map(row => ({
       id: row.id, goal: row.goal, sourceUrl: row.sourceUrl, status: row.status, createdAt: row.createdAt, href: `/tasks/${row.id}`,
       runs: typeof row.runs === 'string' ? JSON.parse(row.runs) : row.runs,
-      reports: (typeof row.reports === 'string' ? JSON.parse(row.reports) : row.reports).map((report: any) => ({ ...report,
-        href: `/tasks/${row.id}?version=${report.versionId}`, contentHref: `/api/artifacts/${report.versionId}/content`, downloadHref: `/api/artifacts/${report.versionId}/download`,
-      })),
+      reports: reportLinks(row.id, row.reports),
+    }))
+  }
+
+  function reportLinks(taskId: string, value: any) {
+    return (typeof value === 'string' ? JSON.parse(value) : value).map((report: any) => ({ ...report,
+      href: `/tasks/${taskId}?version=${report.versionId}`, contentHref: `/api/artifacts/${report.versionId}/content`, downloadHref: `/api/artifacts/${report.versionId}/download`,
     }))
   }
 
@@ -207,6 +211,53 @@ export async function createWorkStore(databaseUrl: string) {
       FROM work_tasks t WHERE t.owner_id='owner' AND t.id=ANY(string_to_array(${taskIds.join(',')}, ',')::uuid[])
       ORDER BY t.created_at DESC, t.id DESC`
     return workCards(rows)
+  }
+
+  async function stewardStatusCards(taskIds: string[]) {
+    const ids = [...new Set(taskIds)]
+    if (!ids.length) return []
+    const selected = ids.join(',')
+    const [runs, interactions] = await Promise.all([
+      db`SELECT r.id AS "runId", r.status AS "runStatus", r.failure, r.created_at AS "createdAt", r.finished_at AS "finishedAt",
+          t.id AS "taskId", t.goal,
+          COALESCE((SELECT jsonb_agg(jsonb_build_object('versionId', v.id, 'runId', v.run_id, 'runStatus', r.status, 'createdAt', v.created_at) ORDER BY v.created_at DESC, v.id DESC)
+            FROM work_artifacts a JOIN work_artifact_versions v ON v.artifact_id=a.id
+            WHERE a.task_id=t.id AND a.kind='report' AND v.run_id=r.id), '[]'::jsonb) AS reports
+        FROM work_runs r JOIN work_tasks t ON t.id=r.task_id
+        WHERE t.owner_id='owner' AND t.id=ANY(string_to_array(${selected}, ',')::uuid[])
+          AND r.status IN ('succeeded','failed','lost','save_failed')
+        ORDER BY r.created_at, r.id`,
+      db`SELECT i.id AS "interactionId", i.kind AS "interactionKind", i.question, i.status AS "interactionStatus", i.answer,
+          i.created_at AS "createdAt", i.answered_at AS "answeredAt", r.id AS "runId", r.status AS "runStatus",
+          t.id AS "taskId", t.goal,
+          COALESCE((SELECT jsonb_agg(jsonb_build_object('versionId', v.id, 'runId', v.run_id, 'runStatus', r.status, 'createdAt', v.created_at) ORDER BY v.created_at DESC, v.id DESC)
+            FROM work_artifacts a JOIN work_artifact_versions v ON v.artifact_id=a.id
+            WHERE a.task_id=t.id AND a.kind='report' AND v.run_id=r.id), '[]'::jsonb) AS reports
+        FROM work_interactions i JOIN work_runs r ON r.id=i.run_id JOIN work_tasks t ON t.id=r.task_id
+        WHERE t.owner_id='owner' AND t.id=ANY(string_to_array(${selected}, ',')::uuid[])
+        ORDER BY i.created_at, i.id`,
+    ])
+    return [
+      ...runs.map((row: any) => ({
+        id: `run:${row.runId}`, kind: row.runStatus === 'succeeded' ? 'completed' : 'failed', taskId: row.taskId,
+        runId: row.runId, goal: row.goal, runStatus: row.runStatus, failure: row.failure, createdAt: row.createdAt,
+        finishedAt: row.finishedAt, href: `/tasks/${row.taskId}`, reports: reportLinks(row.taskId, row.reports),
+      })),
+      ...interactions.map((row: any) => ({
+        id: `interaction:${row.interactionId}`, kind: 'interaction', taskId: row.taskId, runId: row.runId, goal: row.goal,
+        runStatus: row.runStatus, createdAt: row.createdAt, href: `/tasks/${row.taskId}`, reports: reportLinks(row.taskId, row.reports),
+        interaction: { id: row.interactionId, kind: row.interactionKind, question: row.question,
+          status: row.interactionStatus, answer: row.answer, answeredAt: row.answeredAt },
+      })),
+    ].sort((left, right) => new Date('finishedAt' in left && left.finishedAt || left.createdAt).getTime()
+      - new Date('finishedAt' in right && right.finishedAt || right.createdAt).getTime() || left.id.localeCompare(right.id))
+  }
+
+  async function pendingInteractions() {
+    return db`SELECT i.id, i.kind, i.question, i.created_at AS "createdAt", r.id AS "runId", r.status AS "runStatus",
+      t.id AS "taskId", t.goal, t.status AS "taskStatus", ('/tasks/' || t.id::text) AS href
+      FROM work_interactions i JOIN work_runs r ON r.id=i.run_id JOIN work_tasks t ON t.id=r.task_id
+      WHERE t.owner_id='owner' AND i.status='pending' ORDER BY i.created_at, i.id`
   }
 
   async function stewardRead(taskIds: string[], versionIds: string[], artifactDir: string) {
@@ -756,5 +807,5 @@ export async function createWorkStore(databaseUrl: string) {
 
   async function close() { await db.close() }
 
-  return { list, detail, events, create, continueTask, retryTask, appendRunMessage, resolveInteraction, pendingRunMessages, acknowledgeRunMessage, cancel, isRunStopped, artifactVersion, readArtifact, stewardCatalog, stewardMetadata, stewardRead, stewardModelStats, createFromSteward, freezeStewardControl, applyStewardControl, requestCleanupRetry, resolveRunModelConnection, authorizeModelProxy, reserveModelAttempt, recordModelUsage, close }
+  return { list, detail, events, create, continueTask, retryTask, appendRunMessage, resolveInteraction, pendingInteractions, pendingRunMessages, acknowledgeRunMessage, cancel, isRunStopped, artifactVersion, readArtifact, stewardCatalog, stewardMetadata, stewardStatusCards, stewardRead, stewardModelStats, createFromSteward, freezeStewardControl, applyStewardControl, requestCleanupRetry, resolveRunModelConnection, authorizeModelProxy, reserveModelAttempt, recordModelUsage, close }
 }

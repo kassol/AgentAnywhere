@@ -5,14 +5,15 @@ type Thread = { id: string; title: string; status?: string }
 type Message = { id: string; turnId: string; role: 'user' | 'assistant'; content: string; status: string }
 type Turn = { id: string; status: string; modelCalls: number; modelCallLimit: number; activeMs: number; activeLimitMs: number; budgetReason?: string; failure?: string }
 type RelatedTask = { id: string; goal: string; status: string; href: string; reports: { versionId: string; href: string }[] }
+type StatusCard = { id: string; kind: 'completed' | 'failed' | 'interaction'; taskId: string; runId: string; goal: string; runStatus: string; failure?: string; href: string; reports: { versionId: string; href: string }[]; interaction?: { id: string; kind: 'question' | 'limit'; question: string; status: string; answer?: string } }
 type ResearchOperation = { operationId: string; status: string; taskId?: string; runId?: string; goal: string; modelId: string; protocol: string; reason: string; verification: string; sources?: Record<string, { source: string }>; failure?: string }
 type ControlOperation = { operationId: string; kind: 'steer' | 'cancel'; status: string; taskId?: string; runId?: string; content?: string; messageStatus?: 'pending' | 'applied' | 'carried'; failure?: string }
-type Detail = Thread & { messages: Message[]; turns: Turn[]; relatedTasks: RelatedTask[]; researchOperations: ResearchOperation[]; controlOperations: ControlOperation[] }
+type Detail = Thread & { messages: Message[]; turns: Turn[]; relatedTasks: RelatedTask[]; statusCards: StatusCard[]; researchOperations: ResearchOperation[]; controlOperations: ControlOperation[] }
 const statusLabel: Record<string, string> = {
-  queued: '排队中', running: '回复中', streaming: '生成中', stopping: '停止中', stopped: '已停止',
+  queued: '排队中', provisioning: '准备环境', running: '回复中', streaming: '生成中', stopping: '停止中', stopped: '已停止',
   completed: '已完成', interrupted: '已中断', limited: '已达上限', failed: '失败',
   waiting: '等待回答', cancelling: '正在取消', cancelled: '已取消', succeeded: '已完成', lost: '执行中断', save_failed: '成果保存失败',
-  planned: '待派发', accepted: '已接收', unexecuted: '未执行',
+  planned: '待派发', accepted: '已接收', unexecuted: '未执行', pending: '待回答', answered: '已回答',
 }
 
 function controlStatus(operation: ControlOperation) {
@@ -50,15 +51,22 @@ export function Steward() {
     pending.current = null
     setDetail(null)
     if (!routeId) return
-    void loadDetail(routeId)
-    const timer = setInterval(async () => {
-      const response = await fetch(`/api/steward/threads/${routeId}/events?after=${cursor.current}`)
-      if (!response.ok) return
-      const events = await response.json() as { serverSeq: number }[]
-      if (!events.length) return
-      cursor.current = events.at(-1)!.serverSeq
-      await Promise.all([loadDetail(routeId), loadThreads()])
-    }, 500)
+    let refreshing = false
+    async function refresh() {
+      if (refreshing) return
+      refreshing = true
+      try {
+        const response = await fetch(`/api/steward/threads/${routeId}/events?after=${cursor.current}`)
+        if (!response.ok) return
+        const events = await response.json() as { serverSeq: number }[]
+        if (events.length) cursor.current = events.at(-1)!.serverSeq
+        await loadDetail(routeId!)
+        if (events.length) await loadThreads()
+      } catch { /* retain the last view until the connection recovers */ }
+      finally { refreshing = false }
+    }
+    void refresh()
+    const timer = setInterval(refresh, 500)
     return () => clearInterval(timer)
   }, [routeId])
 
@@ -138,6 +146,14 @@ export function Steward() {
           {!!detail?.relatedTasks.length && <section aria-label="关联工作"><h3>关联工作</h3><ul>{detail.relatedTasks.map(task => <li key={task.id}>
             <a href={task.href}>{task.goal}</a> <span>{statusLabel[task.status] ?? task.status}</span>
             {task.reports.map(report => <span key={report.versionId}> · <a href={report.href}>成果 {report.versionId.slice(0, 8)}</a></span>)}
+          </li>)}</ul></section>}
+          {!!detail?.statusCards.length && <section aria-label="工作状态卡"><h3>工作状态</h3><ul>{detail.statusCards.map(card => <li key={card.id}>
+            <a href={card.href}>{card.goal}</a>{' · '}
+            {card.interaction
+              ? `${card.interaction.kind === 'limit' ? '额度等待' : '提问'}：${card.interaction.question} · ${statusLabel[card.interaction.status] ?? card.interaction.status}`
+              : statusLabel[card.runStatus] ?? card.runStatus}
+            {card.reports.map(report => <span key={report.versionId}> · <a href={report.href}>成果 {report.versionId.slice(0, 8)}</a></span>)}
+            {card.interaction?.answer && <><br /><small>回答：{card.interaction.answer}</small></>}
           </li>)}</ul></section>}
         </div>
         <form className="steward-composer" onSubmit={submit}>

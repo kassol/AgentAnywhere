@@ -96,7 +96,7 @@ export async function startServer(config: Config) {
   const artifactDir = config.artifactDir ?? join(config.dataDir ?? join(process.cwd(), 'data'), 'artifacts')
   const work = config.databaseUrl ? await createWorkStore(config.databaseUrl) : null
   const steward = config.databaseUrl ? await createStewardService(config.databaseUrl, modelConnection.resolveCredential, config.testNow,
-    work ? { catalog: work.stewardCatalog, metadata: work.stewardMetadata,
+    work ? { catalog: work.stewardCatalog, metadata: work.stewardMetadata, statusCards: work.stewardStatusCards,
       read: (taskIds: string[], versionIds: string[]) => work.stewardRead(taskIds, versionIds, artifactDir),
       modelStats: work.stewardModelStats, createFromSteward: work.createFromSteward,
       freezeStewardControl: work.freezeStewardControl, applyStewardControl: work.applyStewardControl } : undefined) : null
@@ -302,6 +302,7 @@ export async function startServer(config: Config) {
         }
       }
       if (path === '/api/tasks' && request.method === 'GET') return json(work ? await work.list() : [])
+      if (path === '/api/interactions/pending' && request.method === 'GET') return json(work ? await work.pendingInteractions() : [])
       if (/^\/api\/tasks\/[0-9a-f-]{36}\/cancel$/i.test(path) && request.method === 'POST') {
         if (!sameOrigin(request)) return json({ error: 'Forbidden' }, 403)
         const result = await work?.cancel(path.split('/')[3])

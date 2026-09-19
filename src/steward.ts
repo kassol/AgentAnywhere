@@ -14,6 +14,7 @@ type WorkCard = { id: string; goal: string; status: string; href: string; runs: 
 type WorkAccess = {
   catalog(cursor: number, query: string): Promise<{ items: WorkCard[]; nextCursor: number | null }>
   metadata(taskIds: string[]): Promise<WorkCard[]>
+  statusCards(taskIds: string[]): Promise<unknown[]>
   read(taskIds: string[], versionIds: string[]): Promise<unknown[]>
   modelStats(models: { id: string; protocol: Protocol; endpoint: string }[]): Promise<{ id: string; protocol: Protocol; endpoint: string; successCount: number; lastSucceededAt: string | null }[]>
   createFromSteward(turnId: string, operationId: string, now: () => number): Promise<any>
@@ -172,11 +173,13 @@ export async function createStewardService(databaseUrl: string, resolveCredentia
         linkedIds: links.map((link: any) => link.id) }
     })
     if (!value) return null
-    const cards = workAccess && value.linkedIds.length ? await workAccess.metadata(value.linkedIds) : []
+    const [cards, statusCards] = workAccess && value.linkedIds.length
+      ? await Promise.all([workAccess.metadata(value.linkedIds), workAccess.statusCards(value.linkedIds)])
+      : [[], []]
     const byId = new Map(cards.map(card => [card.id, card]))
     const relatedTasks = value.linkedIds.map((id: string) => byId.get(id)).filter(Boolean)
     const { linkedIds: _, ...thread } = value
-    return { ...thread, relatedTasks }
+    return { ...thread, relatedTasks, statusCards }
   }
 
   async function create(body: unknown) {

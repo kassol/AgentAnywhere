@@ -24,6 +24,12 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .sidebar nav { display: grid; gap: 4px; }
 .sidebar a { display: block; padding: 10px 12px; border-radius: 8px; color: #625c6b; text-decoration: none; }
 .sidebar a:hover, .sidebar a[aria-current="page"] { background: #e8e0ef; color: #543574; }
+.pending-interactions { margin-top: 22px; padding: 0 12px; }
+.pending-interactions h2 { margin: 0 0 8px; font-size: 13px; }
+.pending-interactions ul { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.pending-interactions li { min-width: 0; }
+.pending-interactions a { padding: 0; color: #543574; overflow-wrap: anywhere; }
+.pending-interactions small { display: block; margin-top: 3px; color: #716b77; overflow-wrap: anywhere; }
 .content { min-width: 0; padding: 36px clamp(24px, 6vw, 80px); }
 .page-header { border-bottom: 1px solid var(--border); margin-bottom: 36px; }
 .page-header h1 { margin: 0 0 24px; font-size: 26px; }
