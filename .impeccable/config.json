@@ -8,6 +8,15 @@
         "value": "inter",
         "createdAt": "2026-09-18T16:14:18.525Z",
         "reason": "user confirmed: 保留现有 Inter 字体，仅忽略此字体提示"
+      },
+      {
+        "rule": "side-tab",
+        "value": "*",
+        "files": [
+          "src/web/r3-prototype.css"
+        ],
+        "createdAt": "2026-09-19T23:13:05.097Z",
+        "reason": "agent review: line 308 styles a semantic blockquote containing the selected report quotation; the 2px neutral divider distinguishes quoted text and is not a card accent border"
       }
     ]
   }
