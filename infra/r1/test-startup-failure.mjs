@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process'
 import assert from 'node:assert/strict'
 
 const base = 'http://127.0.0.1:19114'
-const password = (await readFile('/opt/agentanywhere-r1/test-password', 'utf8')).trim()
+const password = (await readFile(process.env.TEST_PASSWORD_FILE || '/opt/agentanywhere/runtime/test-password', 'utf8')).trim()
 const login = await fetch(`${base}/api/auth`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password }) })
 assert.equal(login.status, 204)
 const cookie = login.headers.get('set-cookie')?.split(';')[0]

@@ -1,9 +1,22 @@
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
+import { readFile, realpath } from 'node:fs/promises'
 import { execFileSync } from 'node:child_process'
+import { dirname } from 'node:path'
 
 const base = process.env.TEST_WEB_ORIGIN || 'http://127.0.0.1:19114'
-const password = (await readFile(process.env.TEST_PASSWORD_FILE || '/opt/agentanywhere-r1/test-password', 'utf8')).trim()
+const configFile = process.env.TEST_ISOLATED_MODEL_CONFIG_FILE
+assert.ok(configFile, 'Set TEST_ISOLATED_MODEL_CONFIG_FILE to the isolated model configuration')
+const configPath = await realpath(configFile)
+const formalConfigPaths = await Promise.all([
+  '/opt/agentanywhere/runtime/data/model-connection.json',
+  '/opt/agentanywhere-r1/data/model-connection.json',
+].map(path => realpath(path).catch(() => path)))
+assert.ok(!formalConfigPaths.includes(configPath), 'Refusing to use the formal model configuration')
+const mounts = JSON.parse(execFileSync('docker', ['inspect', '--format', '{{json .Mounts}}', 'agentanywhere-r1-live-test-web-1'], { encoding: 'utf8' }))
+const mounted = mounts.find(mount => mount.Destination === '/data')
+assert.ok(mounted, 'Mount the isolated model directory at /data')
+assert.equal(await realpath(mounted.Source), dirname(configPath), 'Mount the isolated model directory at /data')
+const password = (await readFile(process.env.TEST_PASSWORD_FILE || '/opt/agentanywhere/runtime/test-password', 'utf8')).trim()
 const login = await fetch(`${base}/api/auth`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password }) })
 assert.equal(login.status, 204)
 const cookie = login.headers.get('set-cookie')?.split(';')[0]

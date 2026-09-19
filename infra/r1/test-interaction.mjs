@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises'
 
 const base = process.env.TEST_WEB_ORIGIN || 'http://127.0.0.1:19112'
 const fixture = process.env.TEST_FIXTURE_ORIGIN || 'http://127.0.0.1:19113'
-const password = (await readFile(process.env.TEST_PASSWORD_FILE || '/opt/agentanywhere-r1/test-password', 'utf8')).trim()
+const password = (await readFile(process.env.TEST_PASSWORD_FILE || '/opt/agentanywhere/runtime/test-password', 'utf8')).trim()
 async function login() {
   const response = await fetch(`${base}/api/auth`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password }) })
   assert.equal(response.status, 204)

@@ -5,24 +5,24 @@
 在仓库根目录执行部署准备命令，目标目录已存在时只覆盖本服务的 Compose 和 settings 文件。首次创建密钥文件使用排他创建，不读取或打印密钥：
 
 ```sh
-ssh cc-la 'test -d /opt/agentanywhere-r1'
-scp infra/r1/search/searxng.compose.yaml infra/r1/search/searxng-settings.yml cc-la:/opt/agentanywhere-r1/
+ssh cc-la 'test -d /opt/agentanywhere/runtime'
+scp infra/r1/search/searxng.compose.yaml infra/r1/search/searxng-settings.yml cc-la:/opt/agentanywhere/runtime/
 ssh cc-la 'python3 -' <<'PY'
 import os
 import secrets
 
-path = "/opt/agentanywhere-r1/searxng.env"
+path = "/opt/agentanywhere/runtime/searxng.env"
 fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
 with os.fdopen(fd, "w") as stream:
     stream.write("SEARXNG_SECRET=" + secrets.token_hex(32) + "\n")
 PY
-ssh cc-la 'docker compose -f /opt/agentanywhere-r1/searxng.compose.yaml config --quiet && docker compose -f /opt/agentanywhere-r1/searxng.compose.yaml up -d --no-build'
+ssh cc-la 'docker compose -f /opt/agentanywhere/runtime/searxng.compose.yaml config --quiet && docker compose -f /opt/agentanywhere/runtime/searxng.compose.yaml up -d --no-build'
 ```
 
 现有部署已有 `searxng.env`，再次更新时保留该文件；跳过密钥创建步骤。更新镜像先修改 Compose 中的固定 digest，重新复制两个配置文件后执行：
 
 ```sh
-ssh cc-la 'docker compose -f /opt/agentanywhere-r1/searxng.compose.yaml pull searxng && docker compose -f /opt/agentanywhere-r1/searxng.compose.yaml up -d --no-build'
+ssh cc-la 'docker compose -f /opt/agentanywhere/runtime/searxng.compose.yaml pull searxng && docker compose -f /opt/agentanywhere/runtime/searxng.compose.yaml up -d --no-build'
 ```
 
 Compose 只管理本搜索服务和专用网络，不操作其他项目。镜像声明 `/etc/searxng` 与 `/var/cache/searxng` 匿名卷；settings 文件另以只读方式挂载。
@@ -49,4 +49,4 @@ print("unresponsive_engines:", data.get("unresponsive_engines", []))
 PY
 ```
 
-结束使用本独立服务时，在确认队列容器已脱离专用网络后执行 `docker compose -f /opt/agentanywhere-r1/searxng.compose.yaml down -v`；该命令移除本 Compose 创建的容器、网络和匿名卷。按需仅删除 `/opt/agentanywhere-r1/` 下的 `searxng.compose.yaml`、`searxng-settings.yml`、`searxng.env`，保留同目录其他服务。官方依据：[容器部署](https://docs.searxng.org/admin/installation-docker.html)、[搜索 API](https://docs.searxng.org/dev/search_api.html)。
+结束使用本独立服务时，在确认队列容器已脱离专用网络后执行 `docker compose -f /opt/agentanywhere/runtime/searxng.compose.yaml down -v`；该命令移除本 Compose 创建的容器、网络和匿名卷。按需仅删除 `/opt/agentanywhere/runtime/` 下的 `searxng.compose.yaml`、`searxng-settings.yml`、`searxng.env`，保留同目录其他服务。官方依据：[容器部署](https://docs.searxng.org/admin/installation-docker.html)、[搜索 API](https://docs.searxng.org/dev/search_api.html)。

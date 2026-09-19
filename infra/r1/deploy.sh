@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-cd "${1:-/opt/agentanywhere-r1}"
+cd "${1:-/opt/agentanywhere/runtime}"
 AGENTANYWHERE_RELEASE="${2:?pass the full release commit SHA as the second argument}"
 case "$AGENTANYWHERE_RELEASE" in
   *[!0123456789abcdef]*|'') printf 'Release must be a full lowercase commit SHA\n' >&2; exit 1 ;;

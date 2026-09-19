@@ -8,8 +8,11 @@ assert.equal(base, 'http://127.0.0.1:19114', 'Use the isolated 19114 live-test s
 const configFile = process.env.TEST_ISOLATED_MODEL_CONFIG_FILE
 assert.ok(configFile, 'Set TEST_ISOLATED_MODEL_CONFIG_FILE to a writable copy of the model configuration')
 const configPath = await realpath(configFile)
-const formalConfigPath = await realpath('/opt/agentanywhere-r1/data/model-connection.json').catch(() => '/opt/agentanywhere-r1/data/model-connection.json')
-assert.notEqual(configPath, formalConfigPath, 'Refusing to change the formal model configuration')
+const formalConfigPaths = await Promise.all([
+  '/opt/agentanywhere/runtime/data/model-connection.json',
+  '/opt/agentanywhere-r1/data/model-connection.json',
+].map(path => realpath(path).catch(() => path)))
+assert.ok(!formalConfigPaths.includes(configPath), 'Refusing to change the formal model configuration')
 const webContainer = 'agentanywhere-r1-live-test-web-1'
 const queueContainer = 'agentanywhere-r1-live-test-queue-1'
 const mounts = JSON.parse(execFileSync('docker', ['inspect', '--format', '{{json .Mounts}}', webContainer], { encoding: 'utf8' }))
@@ -17,7 +20,7 @@ const mounted = mounts.find(mount => mount.Destination === '/data')
 assert.ok(mounted?.RW && await realpath(mounted.Source) === dirname(configPath), 'Mount the isolated model directory writable at /data in the live-test Web container')
 assert.ok(!mounts.some(mount => mount.Destination === '/data/model-connection.json'), 'A file bind mount prevents atomic model configuration updates')
 
-const password = (await readFile(process.env.TEST_PASSWORD_FILE || '/opt/agentanywhere-r1/test-password', 'utf8')).trim()
+const password = (await readFile(process.env.TEST_PASSWORD_FILE || '/opt/agentanywhere/runtime/test-password', 'utf8')).trim()
 const login = await fetch(`${base}/api/auth`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password }) })
 assert.equal(login.status, 204)
 const cookie = login.headers.get('set-cookie')?.split(';')[0]
