@@ -4,6 +4,9 @@ import { fileURLToPath } from 'node:url'
 import { readFile } from 'node:fs/promises'
 
 const mode = process.argv[2] || 'isolated'
+const checks = ['run', 'report-contract', 'research', 'steering', 'interaction', 'cancel', 'continuation', 'recovery', 'steward-query', 'steward-dispatch', 'steward-control', 'steward-status', 'steward-interaction', 'steward-summary', 'steward-retry', 'steward-revision']
+const resumeFrom = process.argv[3]
+assert.ok(!resumeFrom || mode === 'isolated' && checks.includes(resumeFrom), 'Resume requires an isolated check name')
 assert.ok(['isolated', 'live', 'public'].includes(mode), 'Mode must be isolated, live or public')
 if (mode !== 'isolated') {
   for (const name of mode === 'live' ? ['live-run', 'live-research', 'live-steward'] : ['public']) {
@@ -37,10 +40,13 @@ const connection = await connectionResponse.json()
 const reset = await fetch(`${origin}/api/model-connection/models`, { method: 'PUT', headers: { cookie, 'content-type': 'application/json' },
   body: JSON.stringify({ models: connection.models, defaultModel: connection.defaultModel, stewardModel: null, researchModelPool: [] }) })
 assert.ok(reset.ok, `Reset isolated model selection: ${reset.status}`)
-console.log('Running application regression with isolated PostgreSQL')
-execFileSync('docker', ['exec', 'agentanywhere-r1-test-web-1', 'sh', '-lc', 'AGENTANYWHERE_TEST_DATABASE_URL="$DATABASE_URL" bun test'], { stdio: 'inherit' })
-for (const name of ['run', 'report-contract', 'research', 'steering', 'interaction', 'cancel', 'continuation', 'recovery', 'steward-query', 'steward-dispatch', 'steward-control', 'steward-status', 'steward-interaction', 'steward-summary', 'steward-retry', 'steward-revision']) {
+if (resumeFrom) console.log(`Resuming isolated acceptance from ${resumeFrom}; earlier checks retain their recorded results`)
+else {
+  console.log('Running application regression with isolated PostgreSQL')
+  execFileSync('docker', ['exec', 'agentanywhere-r1-test-web-1', 'sh', '-lc', 'AGENTANYWHERE_TEST_DATABASE_URL="$DATABASE_URL" bun test'], { stdio: 'inherit' })
+}
+for (const name of checks.slice(resumeFrom ? checks.indexOf(resumeFrom) : 0)) {
   console.log(`Running ${name}`)
   execFileSync(process.execPath, [fileURLToPath(new URL(`test-${name}.mjs`, import.meta.url))], { stdio: 'inherit' })
 }
-console.log('All isolated integration checks passed')
+console.log(resumeFrom ? `Remaining isolated checks passed from ${resumeFrom}` : 'All isolated integration checks passed')

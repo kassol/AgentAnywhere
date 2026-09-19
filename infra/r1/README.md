@@ -117,13 +117,15 @@ docker exec agentanywhere-r1-postgres psql -U agentanywhere_admin -d agentanywhe
 
 ```sh
 TEST_RELEASE="$release" docker compose -f test.compose.yaml config --quiet
-TEST_RELEASE="$release" docker compose -f test.compose.yaml up -d
+TEST_RELEASE="$release" TEST_CONTROL_PLANE_ORIGIN=https://agent.riverflows.in docker compose -f test.compose.yaml up -d
 TEST_PASSWORD_FILE=/opt/agentanywhere-r1/test-password \
-TEST_CONTROL_PLANE_ORIGIN=http://test-web:3000 \
+TEST_CONTROL_PLANE_ORIGIN=https://agent.riverflows.in \
 OPEN_SANDBOX_DOMAIN=127.0.0.1:19510 \
 OPEN_SANDBOX_API_KEY="$(sed -n 's/^OPEN_SANDBOX_API_KEY=//p' test.env)" \
 node "build-$release/infra/r1/test-all.mjs" isolated
 ```
+
+首次启动与验收使用相同的 `TEST_CONTROL_PLANE_ORIGIN=https://agent.riverflows.in`，以验证公网控制面 IP 拒绝。失败后可用 `test-all.mjs isolated <检查名>` 从该项继续，输出会注明前项沿用已有结果；不得将续跑单独描述为全量通过。
 
 该栈固定为 Web `127.0.0.1:19112`、fixture `127.0.0.1:19113`；`test-data/` 和 `test-artifacts/` 与正式数据分离。统一入口 `node infra/r1/test-all.mjs [isolated|live|public]` 默认 isolated；该模式重启隔离 fixture，先在 Web 镜像内使用真实数据库运行完整 Bun 测试，再顺序调用 R1 执行链路及 R2 管家查询、派发、控制、状态、回答、摘要、重试、改稿的 Web/API 测试。模型 HTTP fixture 是唯一可控响应边界；数据库、pg-boss、Pi 与 OpenSandbox 均使用真实服务。测试期间脚本会重启隔离 queue/Web 并临时修改隔离成果目录权限，勿与其他 19112/19113 验收并发。live 模式要求单独 19114 栈、私有模型连接副本和真实 SearXNG；执行 `TEST_ISOLATED_MODEL_CONFIG_FILE=/opt/agentanywhere-r1/live-data/model-connection.json TEST_PASSWORD_FILE=/opt/agentanywhere-r1/test-password node build-$release/infra/r1/test-all.mjs live`，其中 test-live-run 覆盖两种真实协议、取消和不存在模型的错误，test-live-research 验证搜索与网页读取，test-live-steward 验证管家派发、回答、追加、解读、改稿及取消。public 模式在公网切换后执行 `TEST_PASSWORD_FILE=/opt/agentanywhere-backups/20260918-r1-release/w0/webui-password node build-$release/infra/r1/test-all.mjs public`，密码从原 W0 安全文件读取，不输出内容。测试完按上文精确清理隔离 Compose、schema、数据和无引用的测试镜像。
 
