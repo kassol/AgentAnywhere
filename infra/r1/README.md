@@ -1,6 +1,6 @@
 # R1 执行链路
 
-`compose.yaml` 只管理 R1 的 Web、PostgreSQL 和 queue；`sandbox.compose.yaml` 继续管理 OpenSandbox。镜像版本固定为 Bun 1.3.10、Node 24.21、Pi 0.85.1、pg-boss 12.26.3、OpenSandbox SDK 0.1.11。`Dockerfile.agent` 将沙箱内运行程序与 Pi 依赖装入非 root 镜像。模型长期凭证只保存在 Web 的受限 `data/model-connection.json`；可信 queue 持有数据库与 OpenSandbox 管理凭证并生成每次 Run 的短 token。沙箱只持短 token，通过 Web 内部模型代理调用快照固定的模型与协议。
+`compose.yaml` 只管理 R1 的 Web、PostgreSQL 和 queue；`sandbox.compose.yaml` 继续管理 OpenSandbox。镜像版本固定为 Bun 1.4.2、Node 24.21、Pi 0.85.1、pg-boss 12.26.3、OpenSandbox SDK 0.1.11。`Dockerfile.agent` 将沙箱内运行程序与 Pi 依赖装入非 root 镜像。模型长期凭证只保存在 Web 的受限 `data/model-connection.json`；可信 queue 持有数据库与 OpenSandbox 管理凭证并生成每次 Run 的短 token。沙箱只持短 token，通过 Web 内部模型代理调用快照固定的模型与协议。
 
 部署目录为 `/opt/agentanywhere-r1`，目标仅为 `cc-la`。正式 Web、queue、agent 和隔离测试的模型 fixture 镜像都使用同一个完整 Git commit SHA 作为标签；不要复写运行中或回退所需的镜像标签。先在本地已提交且干净的发布工作树中，将固定提交导出到主机：
 
