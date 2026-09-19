@@ -17,12 +17,21 @@ function handshake(cookie) {
   })
 }
 assert.equal((await fetch(new URL('/api/tasks', base))).status, 401)
+for (const path of ['/api/steward/threads', '/api/interactions/pending']) assert.equal((await fetch(new URL(path, base))).status, 401)
 assert.equal(await handshake(), 401)
 const login = await fetch(new URL('/api/auth', base), { method: 'POST', headers: { 'content-type': 'application/json', origin: base.origin }, body: JSON.stringify({ password }) })
 assert.equal(login.status, 204)
 const setCookie = login.headers.get('set-cookie')
 for (const attribute of ['HttpOnly', 'Secure', 'SameSite=Strict']) assert.ok(setCookie.includes(attribute))
 const cookie = setCookie.split(';')[0]
+for (const path of ['/api/steward/threads', '/api/interactions/pending']) {
+  const response = await fetch(new URL(path, base), { headers: { cookie } })
+  assert.equal(response.status, 200)
+  assert.ok(Array.isArray(await response.json()))
+}
+assert.equal((await fetch(new URL('/api/steward/threads', base), { method: 'POST',
+  headers: { cookie, origin: 'https://other.example', 'content-type': 'application/json' },
+  body: JSON.stringify({ requestId: crypto.randomUUID() }) })).status, 403)
 assert.equal(await handshake(cookie), 101)
 for (const path of ['/api/share', '/api/channels', '/api/subscriptions', '/api/rpc', '/api/oauth', '/share', '/desktop']) {
   for (const method of ['GET', 'POST']) {
