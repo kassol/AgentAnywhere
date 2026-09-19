@@ -104,4 +104,10 @@ function Workbench() {
   )
 }
 
-createRoot(document.getElementById('root')!).render(location.pathname === '/login' ? <Login /> : <Workbench />)
+const root = createRoot(document.getElementById('root')!)
+if (import.meta.env.DEV && new URLSearchParams(location.search).get('prototype') === 'r3') {
+  document.title = 'AgentAnywhere · R3 原型'
+  import('./R3Prototype').then(({ default: R3Prototype }) => root.render(<R3Prototype />))
+} else {
+  root.render(location.pathname === '/login' ? <Login /> : <Workbench />)
+}

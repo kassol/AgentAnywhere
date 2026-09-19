@@ -1,0 +1,93 @@
+/*
+ * PROTOTYPE ONLY. Tokens and surfaces adapted from Craft Agents OSS renderer/index.css,
+ * LoadingIndicator.tsx and FreeFormInput.tsx at e8963854c3679edcceb105a42537a06749e6cb64.
+ * Copyright 2026 Craft Docs Ltd. Licensed under Apache-2.0.
+ */
+.craft-prototype {
+  --craft-background: oklch(0.98 0.003 265);
+  --craft-foreground: oklch(0.185 0.01 270);
+  --craft-foreground-rgb: 38, 36, 42;
+  --craft-accent: oklch(0.62 0.13 293);
+  --craft-info: oklch(0.75 0.16 70);
+  --craft-success: oklch(0.55 0.17 145);
+  --craft-destructive: oklch(0.58 0.24 28);
+  --craft-border: oklch(from var(--craft-foreground) l c h / 0.05);
+  --craft-muted: color-mix(in srgb, var(--craft-foreground) 50%, var(--craft-background));
+  --craft-hover: color-mix(in srgb, var(--craft-foreground) 5%, var(--craft-background));
+  --craft-shadow-blur-opacity: 0.06;
+  color: var(--craft-foreground);
+  background: var(--craft-background);
+}
+
+.craft-prototype[data-theme='dark'],
+.dark .craft-prototype {
+  --craft-background: oklch(0.145 0.015 270);
+  --craft-foreground: oklch(0.95 0.01 270);
+  --craft-foreground-rgb: 237, 236, 240;
+  --craft-accent: oklch(0.65 0.22 293);
+  --craft-info: oklch(0.78 0.14 70);
+  --craft-success: oklch(0.60 0.17 145);
+  --craft-destructive: oklch(0.65 0.22 28);
+  --craft-shadow-blur-opacity: 0.12;
+}
+
+.craft-surface {
+  color: var(--craft-foreground);
+  background: var(--craft-background);
+}
+
+.craft-surface-input {
+  overflow: hidden;
+  border-radius: 16px;
+  box-shadow:
+    rgba(0, 0, 0, 0) 0 0 0 0,
+    rgba(0, 0, 0, 0) 0 0 0 0,
+    rgba(var(--craft-foreground-rgb), 0.06) 0 0 0 1px,
+    rgba(0, 0, 0, var(--craft-shadow-blur-opacity)) 0 1px 1px -0.5px,
+    rgba(0, 0, 0, var(--craft-shadow-blur-opacity)) 0 3px 3px -1.5px,
+    rgba(0, 0, 0, var(--craft-shadow-blur-opacity)) 0 6px 6px -3px;
+}
+
+.craft-surface-tool {
+  border-radius: 8px;
+  box-shadow:
+    rgba(0, 0, 0, 0) 0 0 0 0,
+    rgba(0, 0, 0, 0) 0 0 0 0,
+    rgba(var(--craft-foreground-rgb), 0.06) 0 0 0 1px,
+    rgba(0, 0, 0, var(--craft-shadow-blur-opacity)) 0 1px 1px -0.5px,
+    rgba(0, 0, 0, var(--craft-shadow-blur-opacity)) 0 3px 3px -1.5px;
+}
+
+.craft-spinner {
+  display: inline-grid;
+  grid-template-columns: repeat(3, 1fr);
+  width: 1em;
+  height: 1em;
+  gap: 0.08em;
+  color: currentColor;
+}
+
+.craft-spinner-cube {
+  background: currentColor;
+  animation: craft-spinner-grid 1.3s infinite ease-in-out;
+  transform: scale3d(0.5, 0.5, 1);
+}
+
+.craft-spinner-cube:nth-child(1) { animation-delay: 0.2s; }
+.craft-spinner-cube:nth-child(2) { animation-delay: 0.3s; }
+.craft-spinner-cube:nth-child(3) { animation-delay: 0.4s; }
+.craft-spinner-cube:nth-child(4) { animation-delay: 0.1s; }
+.craft-spinner-cube:nth-child(5) { animation-delay: 0.2s; }
+.craft-spinner-cube:nth-child(6) { animation-delay: 0.3s; }
+.craft-spinner-cube:nth-child(7) { animation-delay: 0s; }
+.craft-spinner-cube:nth-child(8) { animation-delay: 0.1s; }
+.craft-spinner-cube:nth-child(9) { animation-delay: 0.2s; }
+
+@keyframes craft-spinner-grid {
+  0%, 70%, 100% { transform: scale3d(0.5, 0.5, 1); }
+  35% { transform: scale3d(0, 0, 1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .craft-spinner-cube { animation: none; transform: scale3d(0.65, 0.65, 1); }
+}
