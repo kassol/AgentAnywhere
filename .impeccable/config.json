@@ -7,7 +7,7 @@
         "rule": "overused-font",
         "value": "inter",
         "createdAt": "2026-09-18T16:14:18.525Z",
-        "reason": "Agent review: src/web/style.css:2 uses Inter with native system fallbacks in a Chinese task workbench; preserve the accepted operational layout and typography consistency. Font popularity alone is not a usability defect."
+        "reason": "user confirmed: 保留现有 Inter 字体，仅忽略此字体提示"
       }
     ]
   }
