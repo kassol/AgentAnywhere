@@ -30,7 +30,11 @@ function stewardQuery(body, response, responses) {
   const dispatch = body.model.startsWith('fixture-steward-dispatch-')
   let holdDispatch = false
   if (dispatch) {
-    if (planner && user.includes('R2_DISPATCH') && !outputs.length) {
+    if (planner && user.includes('R2_DISPATCH_RESUME') && !outputs.length) {
+      name = 'resume_research_dispatch'
+      const receipt = JSON.parse(system.split('可信结构化回执：').at(-1))
+      args = { operationIds: receipt.resumableResearch.map(item => item.operationId) }
+    } else if (planner && user.includes('R2_DISPATCH') && !outputs.length) {
       name = 'freeze_research_dispatch'
       const count = user.includes('R2_DISPATCH_FOUR') ? 4 : 2
       args = { items: Array.from({ length: count }, (_, index) => ({
@@ -43,7 +47,7 @@ function stewardQuery(body, response, responses) {
       const creator = tools.find(item => item.name === 'create_frozen_research')
       const property = creator?.parameters?.properties?.operationId
       const operations = property?.enum ?? (property?.const ? [property.const] : [])
-      holdDispatch = user.includes('R2_DISPATCH_STOP') && outputs.length === 1
+      holdDispatch = user.includes('R2_DISPATCH_STOP') && outputs.length === 1 || user.includes('R2_DISPATCH_RESUME_HOLD') && outputs.length === 0
       const repeat = user.includes('R2_DISPATCH_REPEAT')
       const index = repeat ? Math.max(0, outputs.length - 1) : outputs.length
       if (creator && index < operations.length && !holdDispatch) {

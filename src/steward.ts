@@ -33,7 +33,7 @@ const plannerPrompt = `你是受限意图规划器。你只根据当前用户消
 
 export class StewardInputError extends Error {}
 export class StewardConflictError extends Error {}
-class BudgetError extends Error { constructor(readonly reason: 'time' | 'calls') { super(reason) } }
+class BudgetError extends Error { constructor(readonly reason: 'time' | 'calls' | 'creates') { super(reason) } }
 
 function contentOf(message: AssistantMessage) {
   return message.content.filter(part => part.type === 'text').map(part => part.text).join('')
@@ -106,7 +106,8 @@ export async function createStewardService(databaseUrl: string, resolveCredentia
     created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY (turn_id, operation_id)
   )`
   await db`UPDATE steward_research_operations SET status='unexecuted', failure='服务中断，需明确继续后执行', finished_at=now()
-    WHERE status='planned' AND turn_id IN (SELECT id FROM steward_turns WHERE active)`
+    WHERE status='planned' AND (turn_id IN (SELECT id FROM steward_turns WHERE active)
+      OR operation_id IN (SELECT operation_id FROM steward_research_resumes WHERE turn_id IN (SELECT id FROM steward_turns WHERE active)))`
   await db`UPDATE steward_messages SET status='interrupted'
     WHERE role='assistant' AND turn_id IN (SELECT id FROM steward_turns WHERE active)`
   await db`WITH interrupted AS (
@@ -232,10 +233,10 @@ export async function createStewardService(databaseUrl: string, resolveCredentia
   async function reserveAttempt(turnId: string) {
     const result = await db.begin(async sql => {
       const [turn] = await sql`SELECT status, model_calls AS "modelCalls", model_call_limit AS "modelCallLimit", active_ms AS "activeMs",
-        active_limit_ms AS "activeLimitMs", active_since AS "activeSince" FROM steward_turns WHERE id=${turnId} FOR UPDATE`
+        active_limit_ms AS "activeLimitMs", active_since AS "activeSince", budget_reason AS "budgetReason" FROM steward_turns WHERE id=${turnId} FOR UPDATE`
       if (!turn || turn.status !== 'running') return 'stopped'
       const elapsed = Number(turn.activeMs) + Math.max(0, now() - new Date(turn.activeSince).getTime())
-      const reason = elapsed >= Number(turn.activeLimitMs) ? 'time' : turn.modelCalls >= turn.modelCallLimit ? 'calls' : null
+      const reason = turn.budgetReason ?? (elapsed >= Number(turn.activeLimitMs) ? 'time' : turn.modelCalls >= turn.modelCallLimit ? 'calls' : null)
       if (reason) {
         await sql`UPDATE steward_turns SET budget_reason=${reason} WHERE id=${turnId}`
         return reason
@@ -296,16 +297,17 @@ export async function createStewardService(databaseUrl: string, resolveCredentia
     const associatedIds: string[] = jsonArray(trusted?.associated)
     const associatedCards = workAccess && associatedIds.length ? await workAccess.metadata(associatedIds) : []
     const recentCandidates: WorkCard[] = jsonArray(trusted?.candidates)
-    const resumableResearch = await db`SELECT o.operation_id AS "operationId", o.goal, o.source_url AS "sourceUrl",
-      o.model_snapshot->>'id' AS "modelId", o.model_snapshot->>'protocol' AS protocol, o.reason, o.status
+    const resumableResearch = await db`SELECT o.operation_id AS "operationId", o.ordinal,
+      o.model_snapshot->>'id' AS "modelId", o.model_snapshot->>'protocol' AS protocol, o.status
       FROM steward_research_operations o JOIN steward_turns source ON source.id=o.turn_id
       JOIN steward_turns current ON current.id=${turn.id}
       WHERE source.thread_id=current.thread_id AND source.turn_seq<current.turn_seq AND o.status='unexecuted'
       ORDER BY source.turn_seq, o.ordinal`
     const ensureToolAllowed = async () => {
-      const [row] = await db`SELECT status, active, active_ms AS "activeMs", active_limit_ms AS "activeLimitMs", active_since AS "activeSince" FROM steward_turns WHERE id=${turn.id}`
+      const [row] = await db`SELECT status, active, active_ms AS "activeMs", active_limit_ms AS "activeLimitMs", active_since AS "activeSince", budget_reason AS "budgetReason" FROM steward_turns WHERE id=${turn.id}`
       const elapsed = Number(row?.activeMs ?? 0) + (row?.activeSince ? Math.max(0, now() - new Date(row.activeSince).getTime()) : 0)
       if (!row?.active || row.status !== 'running') throw new DOMException('Stopped', 'AbortError')
+      if (row.budgetReason) throw new BudgetError(row.budgetReason)
       if (elapsed >= Number(row.activeLimitMs)) throw new BudgetError('time')
     }
     let candidateCards: WorkCard[] = []
@@ -435,6 +437,7 @@ export async function createStewardService(databaseUrl: string, resolveCredentia
               ${JSON.stringify(item.selected)}::text::jsonb, ${turn.credentialRef}, ${item.reason}, ${JSON.stringify(item.evidence)}::text::jsonb, 'planned')`
           return items.map(item => item.operationId)
         })
+        researchPlanningFailure = null
         return { content: [{ type: 'text', text: JSON.stringify({ operationIds }) }], details: {}, terminate: true }
       }, replay: 'safe', executionMode: 'sequential',
     }, {
@@ -448,19 +451,37 @@ export async function createStewardService(databaseUrl: string, resolveCredentia
         const operationIds = [...new Set(params.operationIds as string[])]
         const allowed = new Set(resumableResearch.map((item: any) => item.operationId))
         if (!operationIds.length || operationIds.some(id => !allowed.has(id))) throw new Error('继续操作回执不属于当前对话的未执行调研')
+        const currentResearchModels = Array.isArray(turn.model.researchModels) ? turn.model.researchModels : []
+        const rejected: { operationId: string; failure: string }[] = []
+        const resumed: string[] = []
         await db.begin(async sql => {
           const [running] = await sql`SELECT status, active FROM steward_turns WHERE id=${turn.id} FOR UPDATE`
           if (!running?.active || running.status !== 'running') throw new DOMException('Stopped', 'AbortError')
           for (const operationId of operationIds) {
-            const updated = await sql`UPDATE steward_research_operations SET status='planned', failure=NULL, finished_at=NULL
-              WHERE operation_id=${operationId} AND status='unexecuted' AND turn_id IN (
+            const [operation] = await sql`SELECT o.request_id AS "requestId", o.goal, o.source_url AS "sourceUrl", o.model_snapshot->>'id' AS "modelId"
+              FROM steward_research_operations o WHERE o.operation_id=${operationId} AND o.status='unexecuted' AND o.turn_id IN (
                 SELECT source.id FROM steward_turns source JOIN steward_turns current ON current.id=${turn.id}
-                WHERE source.thread_id=current.thread_id AND source.turn_seq<current.turn_seq) RETURNING operation_id`
-            if (!updated.length) throw new Error('未执行调研状态已变化')
+                WHERE source.thread_id=current.thread_id AND source.turn_seq<current.turn_seq) FOR UPDATE`
+            if (!operation) throw new Error('未执行调研状态已变化')
+            const selected = currentResearchModels.find((model: any) => model.id === operation.modelId)
+            if (!selected) {
+              const failure = `模型 ${operation.modelId} 已不在当前有效调研模型池`
+              await sql`UPDATE steward_research_operations SET failure=${failure}, finished_at=now() WHERE operation_id=${operationId}`
+              rejected.push({ operationId, failure })
+              continue
+            }
+            const requestHash = hash({ requestId: operation.requestId, goal: operation.goal, sourceUrl: operation.sourceUrl, modelId: selected.id, protocol: selected.protocol })
+            const evidence = { sources: selected.sources ?? {}, successCount: selected.successCount ?? 0,
+              lastSucceededAt: selected.lastSucceededAt ?? null, verification: selected.verification ?? 'unverified' }
+            await sql`UPDATE steward_research_operations SET request_hash=${requestHash}, model_snapshot=${JSON.stringify(selected)}::text::jsonb,
+              credential_ref=${turn.credentialRef}, reason='明确继续未执行调研；模型仍在当前人工授权池', evidence=${JSON.stringify(evidence)}::text::jsonb,
+              status='planned', failure=NULL, finished_at=NULL WHERE operation_id=${operationId}`
             await sql`INSERT INTO steward_research_resumes (turn_id, operation_id) VALUES (${turn.id}, ${operationId})`
+            resumed.push(operationId)
           }
         })
-        return { content: [{ type: 'text', text: JSON.stringify({ operationIds }) }], details: {}, terminate: true }
+        researchPlanningFailure = rejected.length ? rejected.map(item => item.failure).join('；') : null
+        return { content: [{ type: 'text', text: JSON.stringify({ operationIds: resumed, rejected }) }], details: {}, terminate: true }
       }, replay: 'safe', executionMode: 'sequential',
     }] : []
     const planner = new Agent({
@@ -562,7 +583,7 @@ export async function createStewardService(databaseUrl: string, resolveCredentia
           } catch (caught) {
             const failure = caught instanceof Error ? caught.message.slice(0, 500) : '调研工作创建失败'
             await db`UPDATE steward_research_operations SET status='failed', failure=${failure}, finished_at=now()
-              WHERE turn_id=${turn.id} AND operation_id=${params.operationId} AND status='planned'`
+              WHERE operation_id=${params.operationId} AND status='planned'`
             throw caught
           }
         }, replay: 'safe', executionMode: 'sequential',
@@ -582,6 +603,7 @@ export async function createStewardService(databaseUrl: string, resolveCredentia
         })).then(() => {})
         await writes
       })
+      if (closed) throw new DOMException('Stopped', 'AbortError')
       active = { turnId: turn.id, agent, timer, heartbeat }
       let error: unknown
       try { await agent.prompt(turn.content) } catch (caught) { error = caught }
@@ -589,7 +611,8 @@ export async function createStewardService(databaseUrl: string, resolveCredentia
       if (finishedPlan && finishedPlan.status !== 'completed' && !error) {
         error = new Error(finishedPlan.failure || '管家未读取已冻结的工作回执')
       }
-      const [pendingResearch] = await db`SELECT 1 FROM steward_research_operations WHERE turn_id=${turn.id} AND status='planned' LIMIT 1`
+      const [pendingResearch] = await db`SELECT 1 FROM steward_research_operations o WHERE o.status='planned'
+        AND (o.turn_id=${turn.id} OR EXISTS (SELECT 1 FROM steward_research_resumes resume WHERE resume.turn_id=${turn.id} AND resume.operation_id=o.operation_id)) LIMIT 1`
       if (pendingResearch && !error) error = new Error('管家未处理全部已冻结的调研回执')
       clearTimeout(timer)
       clearInterval(heartbeat)
@@ -613,7 +636,7 @@ export async function createStewardService(databaseUrl: string, resolveCredentia
         await sql`UPDATE steward_turns SET status=${status}, active=false, active_ms=${elapsed}, active_since=NULL,
           budget_reason=${reason}, failure=${failure}, finished_at=now() WHERE id=${turn.id} AND active`
         await sql`UPDATE steward_messages SET status=${status === 'completed' ? 'completed' : status} WHERE id=${assistantId}`
-        if (status !== 'completed') await sql`UPDATE steward_research_operations o SET status='unexecuted', failure=COALESCE(o.failure, ${status === 'limited' ? '管家轮次额度已用尽' : '管家轮次已停止'}), finished_at=now()
+        if (status !== 'completed') await sql`UPDATE steward_research_operations o SET status='unexecuted', failure=COALESCE(o.failure, ${status === 'limited' ? reason === 'creates' ? '本轮已达到 3 项工作创建额度' : '管家轮次额度已用尽' : '管家轮次已停止'}), finished_at=now()
           WHERE o.status='planned' AND (o.turn_id=${turn.id} OR EXISTS (SELECT 1 FROM steward_research_resumes resume WHERE resume.turn_id=${turn.id} AND resume.operation_id=o.operation_id))`
         await sql`UPDATE steward_threads SET updated_at=now() WHERE id=${turn.threadId}`
         await sql`INSERT INTO steward_events (turn_id, event_id, type, payload) VALUES (${turn.id}, ${crypto.randomUUID()}, ${`turn.${status}`}, ${JSON.stringify({ status, budgetReason: reason, failure })}::jsonb)`

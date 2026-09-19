@@ -485,11 +485,16 @@ test('a clear steward delegation creates independent work with a persisted model
   const stopReleased = new Promise<void>(resolve => { releaseStop = resolve })
   let resumeOperationId = ''
   let clock = Date.now()
+  let releaseRestart!: () => void
+  const restartReleased = new Promise<void>(resolve => { releaseRestart = resolve })
+  let blockRestart = true
+  let fourItemCalls = 0
   const upstream = Bun.serve({ port: 0, async fetch(request) {
     const body = await request.json() as any
     const names = (body.tools ?? []).map((tool: any) => tool.function?.name)
     const results = body.messages.filter((message: any) => message.role === 'tool')
     const user = JSON.stringify(body.messages.filter((message: any) => message.role === 'user').at(-1)?.content ?? '')
+    if (user.includes('四项')) fourItemCalls += 1
     if (names.includes('resume_research_dispatch') && user.includes('继续剩余调研')) {
       return toolResponse(body.model, 'resume_research_dispatch', { operationIds: [resumeOperationId] })
     }
@@ -502,6 +507,7 @@ test('a clear steward delegation creates independent work with a persisted model
     }
     if (names.includes('create_frozen_research') && results.length === 0) {
       if (user.includes('时间边界')) clock += 5 * 60_000
+      if (user.includes('重启恢复') && blockRestart) { blockRestart = false; await restartReleased }
       const ids = body.tools[0].function.parameters.properties.operationId.enum
       return toolResponse(body.model, 'create_frozen_research', { operationId: ids[0] })
     }
@@ -517,10 +523,10 @@ test('a clear steward delegation creates independent work with a persisted model
     return textResponse(body.model, '两项调研已接收。')
   } })
   const password = 'test-password-12345'
-  const app = await startServer({ password, port: 0, dataDir, databaseUrl: isolatedUrl.toString(), testNow: () => clock })
+  let app = await startServer({ password, port: 0, dataDir, databaseUrl: isolatedUrl.toString(), testNow: () => clock })
   try {
     const login = await fetch(`${app.url.origin}/api/auth`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password }) })
-    const cookie = login.headers.get('set-cookie')!
+    let cookie = login.headers.get('set-cookie')!
     const send = (path: string, method = 'GET', body?: unknown) => fetch(`${app.url.origin}${path}`, {
       method, headers: { cookie, 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body),
     })
@@ -560,7 +566,8 @@ test('a clear steward delegation creates independent work with a persisted model
       if (!['queued', 'running'].includes(limited.turns[0]?.status)) break
       await Bun.sleep(20)
     }
-    expect(limited.turns[0]?.status).toBe('completed')
+    expect(limited.turns[0]).toMatchObject({ status: 'limited', budgetReason: 'creates', modelCalls: 5 })
+    expect(fourItemCalls).toBe(5)
     expect(limited.relatedTasks).toHaveLength(3)
     expect(limited.researchOperations.map((operation: any) => operation.status)).toEqual(['accepted', 'accepted', 'accepted', 'unexecuted'])
     expect(limited.researchOperations[3].failure).toBe('本轮已达到 3 项工作创建额度')
@@ -596,10 +603,26 @@ test('a clear steward delegation creates independent work with a persisted model
       if (stopped.turns[1]?.status === 'completed') break
       await Bun.sleep(20)
     }
+    expect(stopped.relatedTasks).toHaveLength(1)
+    expect(stopped.researchOperations.map((operation: any) => operation.status)).toEqual(['accepted', 'unexecuted'])
+    expect(stopped.researchOperations[1].failure).toBe('模型 research-a 已不在当前有效调研模型池')
+    expect((await send('/api/model-connection/models', 'PUT', {
+      defaultModel: 'research-a', stewardModel: { modelId: 'steward-a', protocol: 'chat-completions' }, researchModelPool: ['research-a'],
+      models: [
+        { id: 'steward-a', protocol: 'chat-completions', contextWindow: 128000, maxTokens: 4096, input: ['text'], reasoning: false, tools: true },
+        { id: 'research-a', protocol: 'chat-completions', contextWindow: 64000, maxTokens: 2048, input: ['text'], reasoning: false, tools: true },
+      ],
+    })).status).toBe(200)
+    await send(`/api/steward/threads/${stopThread.id}/turns`, 'POST', { requestId: crypto.randomUUID(), content: '再次明确继续剩余调研' })
+    for (let index = 0; index < 200; index++) {
+      stopped = await (await send(`/api/steward/threads/${stopThread.id}`)).json()
+      if (stopped.turns[2]?.status === 'completed') break
+      await Bun.sleep(20)
+    }
     expect(stopped.relatedTasks).toHaveLength(2)
     expect(stopped.researchOperations.map((operation: any) => operation.status)).toEqual(['accepted', 'accepted'])
     const resumedTask = await (await send(`/api/tasks/${stopped.researchOperations[1].taskId}`)).json()
-    expect(resumedTask.run.model).toMatchObject({ id: 'research-a', protocol: 'responses' })
+    expect(resumedTask.run.model).toMatchObject({ id: 'research-a', protocol: 'chat-completions', contextWindow: 64000, maxTokens: 2048, reasoning: false })
 
     await send('/api/model-connection/models', 'PUT', {
       defaultModel: 'research-a', stewardModel: { modelId: 'steward-a', protocol: 'chat-completions' }, researchModelPool: ['research-a'],
@@ -619,6 +642,34 @@ test('a clear steward delegation creates independent work with a persisted model
     expect(timed.turns[0]).toMatchObject({ status: 'limited', budgetReason: 'time' })
     expect(timed.relatedTasks).toEqual([])
     expect(timed.researchOperations).toMatchObject([{ status: 'unexecuted', failure: '管家轮次活跃时间已用尽' }])
+
+    resumeOperationId = timed.researchOperations[0].operationId
+    await send(`/api/steward/threads/${timeThread.id}/turns`, 'POST', { requestId: crypto.randomUUID(), content: '重启恢复：明确继续剩余调研' })
+    for (let index = 0; index < 200; index++) {
+      timed = await (await send(`/api/steward/threads/${timeThread.id}`)).json()
+      if (timed.researchOperations[0]?.status === 'planned') break
+      await Bun.sleep(20)
+    }
+    expect(timed.researchOperations[0]?.status).toBe('planned')
+    const stoppingApp = app.stop(true)
+    await Bun.sleep(20)
+    releaseRestart()
+    await stoppingApp
+    app = await startServer({ password, port: 0, dataDir, databaseUrl: isolatedUrl.toString(), testNow: () => clock })
+    const relogin = await fetch(`${app.url.origin}/api/auth`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password }) })
+    cookie = relogin.headers.get('set-cookie')!
+    timed = await (await send(`/api/steward/threads/${timeThread.id}`)).json()
+    expect(timed.turns[1]?.status).toBe('interrupted')
+    expect(timed.researchOperations[0]).toMatchObject({ status: 'unexecuted' })
+    expect(timed.researchOperations[0].failure).toMatch(/停止|中断/)
+    await send(`/api/steward/threads/${timeThread.id}/turns`, 'POST', { requestId: crypto.randomUUID(), content: '重启后再次明确继续剩余调研' })
+    for (let index = 0; index < 200; index++) {
+      timed = await (await send(`/api/steward/threads/${timeThread.id}`)).json()
+      if (timed.turns[2]?.status === 'completed') break
+      await Bun.sleep(20)
+    }
+    expect(timed.researchOperations[0]?.status).toBe('accepted')
+    expect(timed.relatedTasks).toHaveLength(1)
   } finally {
     await app.stop(true)
     upstream.stop(true)

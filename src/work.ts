@@ -246,7 +246,8 @@ export async function createWorkStore(databaseUrl: string) {
   async function createFromSteward(currentTurnId: string, operationId: string, currentTime: () => number) {
     const result = await db.begin(async sql => {
       const [turn] = await sql`SELECT id, thread_id AS "threadId", status, active, active_ms AS "activeMs",
-        active_limit_ms AS "activeLimitMs", active_since AS "activeSince"
+        active_limit_ms AS "activeLimitMs", active_since AS "activeSince", budget_reason AS "budgetReason",
+        model_snapshot AS "modelSnapshot", credential_ref AS "credentialRef"
         FROM steward_turns WHERE id=${currentTurnId} FOR UPDATE`
       const [operation] = await sql`SELECT turn_id AS "turnId", request_id AS "requestId", request_hash AS "requestHash",
         goal, source_url AS "sourceUrl", model_snapshot AS "modelSnapshot", credential_ref AS "credentialRef",
@@ -260,18 +261,35 @@ export async function createWorkStore(databaseUrl: string) {
         await sql`UPDATE steward_research_operations SET status='unexecuted', failure='管家轮次已停止', finished_at=now() WHERE operation_id=${operationId}`
         return { created: false, status: 'unexecuted' as const, failure: '管家轮次已停止' }
       }
+      if (turn.budgetReason) {
+        const failure = turn.budgetReason === 'creates' ? '本轮已达到 3 项工作创建额度' : '管家轮次额度已用尽'
+        await sql`UPDATE steward_research_operations SET status='unexecuted', failure=${failure}, finished_at=now() WHERE operation_id=${operationId}`
+        return { created: false, status: 'unexecuted' as const, failure }
+      }
       const elapsed = Number(turn.activeMs) + (turn.activeSince ? Math.max(0, currentTime() - new Date(turn.activeSince).getTime()) : 0)
       if (elapsed >= Number(turn.activeLimitMs)) {
         await sql`UPDATE steward_turns SET budget_reason='time' WHERE id=${currentTurnId}`
         await sql`UPDATE steward_research_operations SET status='unexecuted', failure='管家轮次活跃时间已用尽', finished_at=now() WHERE operation_id=${operationId}`
         return { created: false, status: 'unexecuted' as const, failure: '管家轮次活跃时间已用尽' }
       }
+      const snapshot = typeof operation.modelSnapshot === 'string' ? JSON.parse(operation.modelSnapshot) : operation.modelSnapshot
+      if (resume) {
+        const turnSnapshot = typeof turn.modelSnapshot === 'string' ? JSON.parse(turn.modelSnapshot) : turn.modelSnapshot
+        const selected = Array.isArray(turnSnapshot.researchModels) ? turnSnapshot.researchModels.find((model: any) => model.id === snapshot.id) : null
+        const matches = selected && ['id', 'protocol', 'endpoint', 'contextWindow', 'maxTokens', 'reasoning', 'tools'].every(field => selected[field] === snapshot[field])
+          && JSON.stringify(selected.input) === JSON.stringify(snapshot.input) && operation.credentialRef === turn.credentialRef
+        if (!matches) {
+          const failure = `模型 ${snapshot.id} 已不在当前有效调研模型池`
+          await sql`UPDATE steward_research_operations SET status='unexecuted', failure=${failure}, finished_at=now() WHERE operation_id=${operationId}`
+          return { created: false, status: 'unexecuted' as const, failure }
+        }
+      }
       const [usage] = await sql`SELECT COUNT(*)::integer AS count FROM steward_research_operations WHERE accepted_turn_id=${currentTurnId} AND status='accepted'`
       if (Number(usage.count) >= 3) {
+        await sql`UPDATE steward_turns SET budget_reason='creates' WHERE id=${currentTurnId}`
         await sql`UPDATE steward_research_operations SET status='unexecuted', failure='本轮已达到 3 项工作创建额度', finished_at=now() WHERE operation_id=${operationId}`
         return { created: false, status: 'unexecuted' as const, failure: '本轮已达到 3 项工作创建额度' }
       }
-      const snapshot = typeof operation.modelSnapshot === 'string' ? JSON.parse(operation.modelSnapshot) : operation.modelSnapshot
       const input: CreateRequest = { requestId: operation.requestId, goal: operation.goal, sourceUrl: operation.sourceUrl, modelId: snapshot.id, protocol: snapshot.protocol }
       const taskId = crypto.randomUUID()
       const created = await createWorkInTransaction(sql, input, operation.requestHash, snapshot, operation.credentialRef, taskId)
@@ -281,6 +299,7 @@ export async function createWorkStore(databaseUrl: string) {
         await sql`UPDATE steward_research_operations SET status='accepted', task_id=${existing.id}, accepted_turn_id=${currentTurnId}, finished_at=now()
           WHERE operation_id=${operationId}`
         await sql`INSERT INTO steward_thread_tasks (thread_id, task_id) VALUES (${turn.threadId}, ${existing.id}) ON CONFLICT DO NOTHING`
+        if (Number(usage.count) + 1 >= 3) await sql`UPDATE steward_turns SET budget_reason='creates' WHERE id=${currentTurnId}`
         return { taskId: existing.id, created: false, status: 'accepted' as const }
       }
       await sql`UPDATE steward_research_operations SET status='accepted', task_id=${created.taskId}, run_id=${created.runId},
@@ -288,6 +307,7 @@ export async function createWorkStore(databaseUrl: string) {
       await sql`INSERT INTO steward_thread_tasks (thread_id, task_id) VALUES (${turn.threadId}, ${created.taskId}) ON CONFLICT DO NOTHING`
       await sql`INSERT INTO steward_events (turn_id, event_id, type, payload) VALUES (${currentTurnId}, ${crypto.randomUUID()}, 'work.accepted',
         ${JSON.stringify({ operationId, taskId: created.taskId, runId: created.runId })}::jsonb)`
+      if (Number(usage.count) + 1 >= 3) await sql`UPDATE steward_turns SET budget_reason='creates' WHERE id=${currentTurnId}`
       return { ...created, created: true, status: 'accepted' as const }
     })
     return result.taskId ? { ...result, task: await detail(result.taskId) } : result

@@ -107,7 +107,7 @@ export function Steward() {
             {message.role === 'assistant' && message.status !== 'completed' && <small>{statusLabel[message.status] ?? message.status}</small>}
           </article>)}
           {current?.failure && <p className="error" role="alert">{current.failure}</p>}
-          {current?.status === 'limited' && <p className="error" role="status">本轮已达到{current.budgetReason === 'time' ? ' 5 分钟' : ' 8 次模型请求'}上限。发送新消息可开始下一轮。</p>}
+          {current?.status === 'limited' && <p className="error" role="status">本轮已达到{current.budgetReason === 'time' ? ' 5 分钟' : current.budgetReason === 'creates' ? ' 3 项工作创建' : ' 8 次模型请求'}上限。发送新消息可开始下一轮。</p>}
           {!!detail?.researchOperations.length && <section aria-label="调研派发"><h3>调研派发</h3><ul>{detail.researchOperations.map(operation => {
             const sourceLabels = [...new Set(Object.values(operation.sources ?? {}).map(source => source.source))]
             return <li key={operation.operationId}>

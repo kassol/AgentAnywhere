@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
+import { execFileSync } from 'node:child_process'
 
 const base = process.env.TEST_WEB_ORIGIN || 'http://127.0.0.1:19112'
 const fixture = process.env.TEST_FIXTURE_ORIGIN || 'http://127.0.0.1:19113'
@@ -7,7 +8,7 @@ assert.equal(base, 'http://127.0.0.1:19112', 'Use the isolated test stack')
 const password = (await readFile(process.env.TEST_PASSWORD_FILE || '/opt/agentanywhere-r1/test-password', 'utf8')).trim()
 const login = await fetch(`${base}/api/auth`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password }) })
 assert.equal(login.status, 204)
-const cookie = login.headers.get('set-cookie')?.split(';')[0]
+let cookie = login.headers.get('set-cookie')?.split(';')[0]
 async function api(path, method = 'GET', body) {
   const response = await fetch(`${base}${path}`, { method, headers: { cookie, 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) })
   const value = await response.json()
@@ -72,6 +73,25 @@ await api(`/api/steward/turns/${stopping.turn.id}/stop`, 'POST')
 const stopped = await until(() => api(`/api/steward/threads/${stopping.thread.id}`), terminal, 'stopped turn')
 assert.equal(stopped.turns.at(-1).status, 'stopped')
 assert.equal(accepted(stopped).length, 1)
+for (const operation of [...accepted(repeated), ...accepted(dual), ...accepted(limited), ...accepted(stopped)]) {
+  await until(() => api(`/api/tasks/${operation.taskId}`), item => ['succeeded', 'failed', 'lost', 'save_failed'].includes(item.run.status) && item.run.cleanupState === 'cleaned', 'settle research before web crash')
+}
+const pendingOperationId = stopped.researchOperations.find(item => item.status === 'unexecuted').operationId
+await api(`/api/steward/threads/${stopping.thread.id}/turns`, 'POST', { requestId: crypto.randomUUID(), content: 'R2_DISPATCH_RESUME_HOLD：明确继续剩余未执行的调研。' })
+await until(() => api(`/api/steward/threads/${stopping.thread.id}`), item => item.researchOperations.some(operation => operation.operationId === pendingOperationId && operation.status === 'planned'), 'resume plan before crash')
+execFileSync('docker', ['kill', '--signal=KILL', 'agentanywhere-r1-test-web-1'], { stdio: 'pipe' })
+execFileSync('docker', ['start', 'agentanywhere-r1-test-web-1'], { stdio: 'pipe' })
+await until(async () => { try { return (await fetch(`${base}/login`)).ok } catch { return false } }, Boolean, 'web restart')
+const relogin = await fetch(`${base}/api/auth`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password }) })
+assert.equal(relogin.status, 204)
+cookie = relogin.headers.get('set-cookie')?.split(';')[0]
+const interrupted = await api(`/api/steward/threads/${stopping.thread.id}`)
+assert.equal(interrupted.turns.at(-1).status, 'interrupted')
+assert.equal(interrupted.researchOperations.find(item => item.operationId === pendingOperationId).status, 'unexecuted')
+await api(`/api/steward/threads/${stopping.thread.id}/turns`, 'POST', { requestId: crypto.randomUUID(), content: 'R2_DISPATCH_RESUME：明确继续剩余未执行的调研。' })
+const resumed = await until(() => api(`/api/steward/threads/${stopping.thread.id}`), terminal, 'resume after crash')
+assert.equal(accepted(resumed).length, 2)
+assert.equal(resumed.researchOperations.find(item => item.operationId === pendingOperationId).status, 'accepted')
 const beforeRejected = (await api('/api/tasks')).length
 const outside = await finished('R2_DISPATCH_OUTSIDE：分别调研两个主题，每项生成独立报告。')
 assert.equal(accepted(outside).length, 0)
@@ -79,11 +99,11 @@ await configure('chat-completions', [])
 const empty = await finished('R2_DISPATCH：分别调研两个主题，每项生成独立报告。')
 assert.equal(accepted(empty).length, 0)
 assert.equal((await api('/api/tasks')).length, beforeRejected)
-for (const operation of [...accepted(repeated), ...accepted(dual), ...accepted(limited), ...accepted(stopped)]) {
+for (const operation of [...accepted(repeated), ...accepted(dual), ...accepted(limited), ...accepted(resumed)]) {
   const task = await until(() => api(`/api/tasks/${operation.taskId}`), item => ['succeeded', 'failed', 'lost', 'save_failed'].includes(item.run.status) && item.run.cleanupState === 'cleaned', 'research completion')
   assert.equal(task.run.id, operation.runId)
   assert.equal(task.run.status, 'succeeded')
   assert.equal(task.runs.length, 1)
   assert.equal(task.artifacts.filter(item => item.kind === 'report').length, 1)
 }
-console.log(JSON.stringify({ protocols: 'both', repeated: repeated.id, dual: dual.id, limited: limited.id, stopped: stopped.id, acceptedTasks: 8, emptyPool: empty.id, outsidePool: outside.id }))
+console.log(JSON.stringify({ protocols: 'both', repeated: repeated.id, dual: dual.id, limited: limited.id, stopped: stopped.id, resumed: resumed.id, acceptedTasks: 9, emptyPool: empty.id, outsidePool: outside.id }))
