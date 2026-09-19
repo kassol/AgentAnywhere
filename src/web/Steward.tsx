@@ -11,8 +11,10 @@ type ResearchOperation = { operationId: string; status: string; taskId?: string;
 type ControlOperation = { operationId: string; kind: 'steer' | 'cancel'; status: string; taskId?: string; runId?: string; content?: string; messageStatus?: 'pending' | 'applied' | 'carried'; failure?: string }
 type InteractionOperation = { operationId: string; status: string; taskId?: string; runId?: string; epoch?: number; interactionId?: string;
   interactionKind?: 'question' | 'limit'; answer?: string; decision?: 'continue' | 'finish'; failure?: string }
+type RetryOperation = { operationId: string; mode: 'same' | 'replacement'; status: string; taskId?: string; sourceRunId?: string; runId?: string;
+  modelId?: string; protocol?: string; failure?: string }
 type Detail = Thread & { messages: Message[]; summaries: Summary[]; turns: Turn[]; relatedTasks: RelatedTask[]; statusCards: StatusCard[]; researchOperations: ResearchOperation[];
-  controlOperations: ControlOperation[]; interactionOperations: InteractionOperation[] }
+  controlOperations: ControlOperation[]; interactionOperations: InteractionOperation[]; retryOperations: RetryOperation[] }
 const statusLabel: Record<string, string> = {
   queued: '排队中', provisioning: '准备环境', running: '回复中', streaming: '生成中', stopping: '停止中', stopped: '已停止',
   completed: '已完成', interrupted: '已中断', limited: '已达上限', failed: '失败',
@@ -157,6 +159,15 @@ export function Steward() {
             {' · '}{statusLabel[operation.status] ?? (operation.status === 'intent' ? '待明确目标' : operation.status)}
             {operation.runId ? ` · Run ${operation.runId.slice(0, 8)}` : ''}{operation.epoch === undefined ? '' : ` · epoch ${operation.epoch}`}
             {operation.answer ? <><br /><small>{operation.answer}</small></> : operation.decision ? <><br /><small>{operation.decision === 'continue' ? '继续工作' : '结束工作'}</small></> : null}
+            {operation.failure ? <><br /><small>{operation.failure}</small></> : null}
+          </li>)}</ul></section>}
+          {!!detail?.retryOperations.length && <section aria-label="工作重试"><h3>工作重试</h3><ul>{detail.retryOperations.map(operation => <li key={operation.operationId}>
+            {operation.taskId ? <a href={`/tasks/${operation.taskId}`}>{operation.mode === 'same' ? '同模型重试' : '替代模型重试'}</a>
+              : <span>{operation.mode === 'same' ? '同模型重试' : '替代模型重试'}</span>}
+            {' · '}{statusLabel[operation.status] ?? (operation.status === 'intent' ? '待明确目标' : operation.status)}
+            {operation.modelId ? ` · ${operation.modelId}${operation.protocol ? `（${operation.protocol}）` : ''}` : ''}
+            {operation.sourceRunId ? ` · 原 Run ${operation.sourceRunId.slice(0, 8)}` : ''}
+            {operation.runId ? ` · 新 Run ${operation.runId.slice(0, 8)}` : ''}
             {operation.failure ? <><br /><small>{operation.failure}</small></> : null}
           </li>)}</ul></section>}
           {!!detail?.relatedTasks.length && <section aria-label="关联工作"><h3>关联工作</h3><ul>{detail.relatedTasks.map(task => <li key={task.id}>

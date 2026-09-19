@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { readFile } from 'node:fs/promises'
 
 const mode = process.argv[2] || 'isolated'
 assert.ok(['isolated', 'live', 'public'].includes(mode), 'Mode must be isolated, live or public')
@@ -25,9 +26,20 @@ for (let attempt = 0; attempt < 30; attempt++) {
   await new Promise(resolve => setTimeout(resolve, 500))
 }
 assert.ok(ready, 'The model/search HTTP fixture did not start')
+const password = (await readFile(process.env.TEST_PASSWORD_FILE || '/opt/agentanywhere-r1/test-password', 'utf8')).trim()
+const login = await fetch(`${origin}/api/auth`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password }) })
+assert.equal(login.status, 204)
+const cookie = login.headers.get('set-cookie').split(';')[0]
+const connectionResponse = await fetch(`${origin}/api/model-connection`, { headers: { cookie } })
+assert.ok(connectionResponse.ok)
+const connection = await connectionResponse.json()
+// R1 configuration checks begin without a selected steward or research pool.
+const reset = await fetch(`${origin}/api/model-connection/models`, { method: 'PUT', headers: { cookie, 'content-type': 'application/json' },
+  body: JSON.stringify({ models: connection.models, defaultModel: connection.defaultModel, stewardModel: null, researchModelPool: [] }) })
+assert.ok(reset.ok, `Reset isolated model selection: ${reset.status}`)
 console.log('Running model-settings public API regression')
 execFileSync('docker', ['exec', 'agentanywhere-r1-test-web-1', 'sh', '-lc', 'AGENTANYWHERE_TEST_DATABASE_URL="$DATABASE_URL" bun test src/model-connection.test.ts src/work.test.ts src/steward.test.ts src/steward-summary.test.ts'], { stdio: 'inherit' })
-for (const name of ['run', 'report-contract', 'research', 'steering', 'interaction', 'cancel', 'continuation', 'recovery', 'steward-query', 'steward-dispatch', 'steward-control', 'steward-status', 'steward-interaction', 'steward-summary']) {
+for (const name of ['run', 'report-contract', 'research', 'steering', 'interaction', 'cancel', 'continuation', 'recovery', 'steward-query', 'steward-dispatch', 'steward-control', 'steward-status', 'steward-interaction', 'steward-summary', 'steward-retry']) {
   console.log(`Running ${name}`)
   execFileSync(process.execPath, [fileURLToPath(new URL(`test-${name}.mjs`, import.meta.url))], { stdio: 'inherit' })
 }

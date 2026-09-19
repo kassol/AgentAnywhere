@@ -40,7 +40,8 @@ function stewardQuery(body, response, responses) {
       name = 'resume_report_revision'; args = { operationId: ids[0] }
     } else if (planner && !outputs.length) {
       name = 'freeze_report_revision'
-      args = { query: ids[0] ?? '', content: user.split('：').slice(1).join('：'), modelId: 'fixture-continuation', reason: '人工池允许，保留原报告并生成新版。' }
+      const pool = JSON.parse(system.split('可信结构化回执：').at(-1)).researchModels ?? []
+      args = { query: ids[0] ?? '', content: user.split('：').slice(1).join('：'), modelId: pool.find(item => item.id === 'fixture-continuation')?.id ?? pool[0]?.id ?? 'fixture-continuation', reason: '人工池允许，保留原报告并生成新版。' }
     } else if (planner && outputs.length === 1) {
       name = 'find_revision_candidates'; args = { cursor: 0 }
     } else if (planner && outputs.length === 2) {
@@ -59,7 +60,7 @@ function stewardQuery(body, response, responses) {
   } else if (interaction || retry) {
     const results = outputs.map(output => { try { return JSON.parse(output) } catch { return {} } })
     const prefix = interaction ? 'R2_INTERACTION' : 'R2_RETRY'
-    if (planner && user.includes(`${prefix}_RESUME`) && !outputs.length) {
+    if (planner && (user.includes(`${prefix}_RESUME`) || retry && user.startsWith('继续重试回执 ')) && !outputs.length) {
       name = interaction ? 'resume_interaction_answer' : 'resume_work_retry'
       args = { operationId: ids[0] }
     } else if (planner && !outputs.length) {

@@ -35,7 +35,7 @@ function parseRequest(body: unknown): CreateRequest {
   return { requestId: value.requestId, goal, sourceUrl, modelId: value.modelId, protocol: value.protocol as Protocol | null ?? null }
 }
 
-export async function createWorkStore(databaseUrl: string) {
+export async function createWorkStore(databaseUrl: string, artifactDir = join(process.cwd(), 'data', 'artifacts')) {
   const db = new SQL(databaseUrl)
   await db`CREATE TABLE IF NOT EXISTS work_tasks (
     id uuid PRIMARY KEY, owner_id text NOT NULL, request_id uuid NOT NULL UNIQUE,
@@ -275,6 +275,8 @@ export async function createWorkStore(databaseUrl: string) {
   async function stewardRead(taskIds: string[], versionIds: string[], artifactDir: string) {
     const tasks = await stewardMetadata(taskIds)
     if (tasks.length !== taskIds.length) throw new WorkArtifactError('not-found')
+    const runContexts = await stewardLatestRunContexts(taskIds)
+    const contextByTask = new Map(runContexts.map((context: any) => [context.taskId, context]))
     const reports = tasks.flatMap((task: any) => task.reports.map((report: any) => ({ ...report, taskId: task.id })))
     const byVersion = new Map(reports.map((report: any) => [report.versionId, report]))
     if (versionIds.some(id => !byVersion.has(id))) throw new WorkArtifactError('not-found')
@@ -285,9 +287,40 @@ export async function createWorkStore(databaseUrl: string) {
       try { markdown = new TextDecoder('utf-8', { fatal: true }).decode(bytes) } catch { throw new WorkArtifactError('invalid') }
       return { ...report, markdown, name: artifact.name }
     }))
-    return tasks.map((task: any) => ({ ...task, reports: task.reports.map((report: any) => ({ ...report,
+    return tasks.map((task: any) => ({ ...task, latestRun: contextByTask.get(task.id) ?? null, reports: task.reports.map((report: any) => ({ ...report,
       ...(contents.find(item => item.versionId === report.versionId) ?? {}),
     })) }))
+  }
+
+  function publicRunContext(row: any) {
+    const model = typeof row.model === 'string' ? JSON.parse(row.model) : row.model
+    return {
+      taskId: row.taskId, runId: row.runId, status: row.status, failure: row.failure,
+      model: model ? { id: model.id, protocol: model.protocol, contextWindow: model.contextWindow,
+        maxTokens: model.maxTokens, input: model.input, reasoning: model.reasoning, tools: model.tools } : null,
+      checkpointAvailable: row.checkpointAvailable, pendingRequirements: Number(row.pendingRequirements),
+    }
+  }
+
+  async function stewardLatestRunContexts(taskIds: string[]) {
+    if (!taskIds.length) return []
+    const rows = await db`SELECT DISTINCT ON (r.task_id) r.task_id AS "taskId", r.id AS "runId", r.status, r.failure,
+      r.model_snapshot AS model, (r.checkpoint_ref IS NOT NULL) AS "checkpointAvailable",
+      (SELECT COUNT(*) FROM work_messages m WHERE m.run_id=r.id AND m.status='pending')::integer AS "pendingRequirements"
+      FROM work_runs r JOIN work_tasks t ON t.id=r.task_id
+      WHERE t.owner_id='owner' AND t.id=ANY(string_to_array(${taskIds.join(',')}, ',')::uuid[])
+      ORDER BY r.task_id, r.created_at DESC, r.id DESC`
+    return rows.map(publicRunContext)
+  }
+
+  async function stewardRetryContext(taskId: string, runId: string) {
+    const [row] = await db`SELECT r.task_id AS "taskId", r.id AS "runId", r.status, r.failure,
+      r.model_snapshot AS model, (r.checkpoint_ref IS NOT NULL) AS "checkpointAvailable",
+      (SELECT COUNT(*) FROM work_messages m WHERE m.run_id=r.id AND m.status='pending')::integer AS "pendingRequirements"
+      FROM work_runs r JOIN work_tasks t ON t.id=r.task_id
+      WHERE t.owner_id='owner' AND t.id=${taskId} AND r.id=${runId}`
+    if (!row) throw new WorkArtifactError('not-found')
+    return publicRunContext(row)
   }
 
   async function stewardModelStats(models: { id: string; protocol: Protocol; endpoint: string }[]) {
@@ -517,6 +550,138 @@ export async function createWorkStore(databaseUrl: string) {
       await sql`INSERT INTO steward_thread_tasks (thread_id, task_id) VALUES (${turn.threadId}, ${operation.taskId}) ON CONFLICT DO NOTHING`
       await sql`INSERT INTO steward_events (turn_id, event_id, type, payload) VALUES (${currentTurnId}, ${crypto.randomUUID()},
         'work.interaction-answered', ${JSON.stringify({ operationId, ...receipt })}::jsonb)`
+      return receipt
+    })
+  }
+
+  async function freezeStewardRetry(currentTurnId: string, operationId: string, taskId: string, currentTime: () => number) {
+    return db.begin(async sql => {
+      const turn = await lockStewardTurnBudget(sql, currentTurnId)
+      const [operation] = await sql`SELECT turn_id AS "turnId", mode, status, task_id AS "taskId", source_run_id AS "sourceRunId",
+        model_snapshot AS "modelSnapshot", credential_ref AS "credentialRef"
+        FROM steward_retry_operations WHERE operation_id=${operationId} FOR UPDATE`
+      if (!turn || !operation || operation.turnId !== currentTurnId) throw new WorkInputError('重试操作回执无效')
+      if (['planned', 'accepted', 'failed'].includes(operation.status)) {
+        if (operation.taskId !== taskId) throw new WorkConflictError('当前轮次的重试目标已冻结')
+        return { operationId, taskId: operation.taskId, sourceRunId: operation.sourceRunId, status: operation.status }
+      }
+      if (operation.status !== 'intent') throw new WorkConflictError('重试操作已结束')
+      const budget = await stewardOperationBudget(sql, turn, currentTime)
+      if (budget.reason) throw new WorkConflictError(budget.reason === 'stopped' ? '管家轮次已停止' : stewardBudgetFailure(budget.reason))
+      await sql`SELECT pg_advisory_xact_lock(720, hashtext(${taskId}))`
+      const [run] = await sql`SELECT r.id, r.status, r.active, r.cleanup_state AS "cleanupState", r.model_snapshot AS "modelSnapshot",
+        r.credential_ref AS "credentialRef" FROM work_runs r JOIN work_tasks t ON t.id=r.task_id
+        WHERE t.id=${taskId} AND t.owner_id='owner' ORDER BY r.created_at DESC, r.id DESC LIMIT 1 FOR UPDATE OF r`
+      if (!run) throw new WorkInputError('重试目标不存在')
+      if (run.active || run.cleanupState !== 'cleaned' || !['failed', 'lost'].includes(run.status)) throw new WorkConflictError('当前 Run 不可重试')
+      const source = typeof run.modelSnapshot === 'string' ? JSON.parse(run.modelSnapshot) : run.modelSnapshot
+      let snapshot = source
+      let credentialRef = run.credentialRef
+      let failure: string | null = null
+      if (operation.mode === 'replacement') {
+        const selected = typeof operation.modelSnapshot === 'string' ? JSON.parse(operation.modelSnapshot) : operation.modelSnapshot
+        if (!selected || selected.id === source.id) failure = '替代模型必须与原模型不同'
+        else if (selected.protocol !== source.protocol) failure = '替代模型协议与原 Run 不兼容'
+        else if (selected.tools !== true || !Array.isArray(selected.input) || !selected.input.includes('text')
+          || !Number.isSafeInteger(selected.contextWindow) || selected.contextWindow < 1
+          || !Number.isSafeInteger(selected.maxTokens) || selected.maxTokens < 1 || typeof selected.reasoning !== 'boolean') failure = '替代模型缺少完整的文本与工具运行参数'
+        else if (!Number.isSafeInteger(source.contextWindow) || selected.contextWindow < source.contextWindow) failure = '替代模型上下文长度小于原 Run'
+        else if (typeof operation.credentialRef !== 'string' || !operation.credentialRef) failure = '替代模型凭证版本无效'
+        else { snapshot = selected; credentialRef = operation.credentialRef }
+      }
+      if (failure) {
+        await sql`UPDATE steward_retry_operations SET task_id=${taskId}, source_run_id=${run.id}, status='failed', failure=${failure}, finished_at=now()
+          WHERE operation_id=${operationId}`
+        return { operationId, taskId, sourceRunId: run.id, status: 'failed' as const, failure }
+      }
+      await sql`UPDATE steward_retry_operations SET task_id=${taskId}, source_run_id=${run.id}, model_snapshot=${JSON.stringify(snapshot)}::jsonb,
+        credential_ref=${credentialRef}, status='planned', failure=NULL WHERE operation_id=${operationId}`
+      return { operationId, taskId, sourceRunId: run.id, status: 'planned' as const }
+    })
+  }
+
+  async function verifiedRetryCheckpoint(sql: SQL, taskId: string, run: { id: string; epoch: number; checkpointRef: any }) {
+    if (!run.checkpointRef) return null
+    const checkpoint = typeof run.checkpointRef === 'string' ? JSON.parse(run.checkpointRef) : run.checkpointRef
+    const sourceRunId = checkpoint.sourceRunId ?? run.id
+    if (typeof sourceRunId !== 'string' || !/^[0-9a-f-]{36}$/i.test(sourceRunId) || !Number.isSafeInteger(checkpoint.epoch)
+      || checkpoint.epoch < 0 || !Array.isArray(checkpoint.files) || checkpoint.files.length < 1 || checkpoint.files.length > 8) {
+      throw new WorkConflictError('检查点来源无效')
+    }
+    const [source] = await sql`WITH RECURSIVE chain AS (
+        SELECT id, task_id, retry_of_run_id, epoch FROM work_runs WHERE id=${run.id}
+        UNION ALL SELECT parent.id, parent.task_id, parent.retry_of_run_id, parent.epoch
+        FROM work_runs parent JOIN chain child ON parent.id=child.retry_of_run_id
+      ) SELECT id, task_id AS "taskId", epoch FROM chain WHERE id=${sourceRunId}`
+    if (!source || source.taskId !== taskId || Number(source.epoch) < checkpoint.epoch) throw new WorkConflictError('检查点来源链无效')
+    const names = new Set<string>()
+    let hasSession = false
+    for (const file of checkpoint.files) {
+      const limit = file?.name === 'manifest.json' ? 4096 : file?.name === 'session.jsonl' ? 10_000_000
+        : /^generation-[0-9a-f-]{36}\/report\.md$/i.test(file?.name) ? 2_000_000
+        : /^generation-[0-9a-f-]{36}\/attachment-[0-4]\.(txt|csv|json|md)$/i.test(file?.name) ? 10_000_000 : 0
+      const minimum = file?.name?.includes('/attachment-') ? 0 : 1
+      if (!limit || names.has(file.name) || !Number.isSafeInteger(file.size) || file.size < minimum || file.size > limit
+        || typeof file.sha256 !== 'string' || !/^[0-9a-f]{64}$/i.test(file.sha256)) throw new WorkConflictError('检查点文件清单无效')
+      names.add(file.name)
+      hasSession ||= file.name === 'session.jsonl'
+      let bytes: Buffer
+      try { bytes = await readFile(join(artifactDir, sourceRunId, `checkpoint-${checkpoint.epoch}`, file.name)) }
+      catch { throw new WorkConflictError('检查点文件不可读取') }
+      if (bytes.length !== file.size || createHash('sha256').update(bytes).digest('hex') !== file.sha256) throw new WorkConflictError('检查点文件校验失败')
+    }
+    if (!hasSession) throw new WorkConflictError('检查点会话缺失')
+    return { ...checkpoint, sourceRunId }
+  }
+
+  async function applyStewardRetry(currentTurnId: string, operationId: string, currentTime: () => number) {
+    return db.begin(async sql => {
+      const turn = await lockStewardTurnBudget(sql, currentTurnId)
+      const [operation] = await sql`SELECT turn_id AS "turnId", request_id AS "requestId", request_hash AS "requestHash", mode, status,
+        task_id AS "taskId", source_run_id AS "sourceRunId", model_snapshot AS "modelSnapshot", credential_ref AS "credentialRef",
+        result_json AS "resultJson", failure FROM steward_retry_operations WHERE operation_id=${operationId} FOR UPDATE`
+      const [resume] = operation ? await sql`SELECT 1 FROM steward_retry_resumes WHERE turn_id=${currentTurnId} AND operation_id=${operationId}` : []
+      if (!turn || !operation || operation.turnId !== currentTurnId && !resume) throw new WorkInputError('重试操作回执无效')
+      if (operation.status === 'accepted') return typeof operation.resultJson === 'string' ? JSON.parse(operation.resultJson) : operation.resultJson
+      if (operation.status !== 'planned') return { operationId, status: operation.status, failure: operation.failure }
+      const stop = async (failure: string) => {
+        await sql`UPDATE steward_retry_operations SET status='unexecuted', failure=${failure}, finished_at=now() WHERE operation_id=${operationId}`
+        return { operationId, status: 'unexecuted' as const, failure }
+      }
+      const budget = await stewardOperationBudget(sql, turn, currentTime)
+      if (budget.reason) return stop(budget.reason === 'stopped' ? '管家轮次已停止' : stewardBudgetFailure(budget.reason))
+      await sql`SELECT pg_advisory_xact_lock(720, hashtext(${operation.taskId}))`
+      const [source] = await sql`SELECT r.id, r.epoch, r.status, r.active, r.cleanup_state AS "cleanupState",
+        r.previous_report_version_id AS "previousReportVersionId", r.context_snapshot AS "contextSnapshot", r.checkpoint_ref AS "checkpointRef"
+        FROM work_runs r JOIN work_tasks t ON t.id=r.task_id WHERE t.id=${operation.taskId} AND t.owner_id='owner'
+        ORDER BY r.created_at DESC, r.id DESC LIMIT 1 FOR UPDATE OF r`
+      const fail = async (failure: string) => {
+        await sql`UPDATE steward_retry_operations SET status='failed', failure=${failure}, finished_at=now() WHERE operation_id=${operationId}`
+        return { operationId, status: 'failed' as const, failure }
+      }
+      if (!source || source.id !== operation.sourceRunId) return fail('已冻结 Run 已被新的 Run 替代')
+      if (source.active || source.cleanupState !== 'cleaned' || !['failed', 'lost'].includes(source.status)) return fail('已冻结 Run 当前不可重试')
+      let checkpoint
+      try { checkpoint = await verifiedRetryCheckpoint(sql, operation.taskId, source) }
+      catch (error) { if (error instanceof WorkConflictError) return fail(error.message); throw error }
+      const snapshot = typeof operation.modelSnapshot === 'string' ? JSON.parse(operation.modelSnapshot) : operation.modelSnapshot
+      const context = typeof source.contextSnapshot === 'string' ? JSON.parse(source.contextSnapshot) : source.contextSnapshot
+      const runId = crypto.randomUUID()
+      await sql`INSERT INTO work_runs (id, task_id, status, model_snapshot, credential_ref, request_id, request_hash,
+        previous_report_version_id, context_snapshot, checkpoint_ref, retry_of_run_id)
+        VALUES (${runId}, ${operation.taskId}, 'queued', ${JSON.stringify(snapshot)}::jsonb, ${operation.credentialRef},
+          ${operation.requestId}, ${operation.requestHash}, ${source.previousReportVersionId}, ${context ? JSON.stringify(context) : null}::text::jsonb,
+          ${checkpoint ? JSON.stringify(checkpoint) : null}::text::jsonb, ${source.id})`
+      await sql`UPDATE work_messages SET run_id=${runId} WHERE run_id=${source.id} AND status='pending'`
+      await sql`INSERT INTO work_outbox (run_id) VALUES (${runId})`
+      await sql`UPDATE work_tasks SET status='queued' WHERE id=${operation.taskId}`
+      const receipt = { kind: 'retry', mode: operation.mode, taskId: operation.taskId, sourceRunId: source.id, runId,
+        modelId: snapshot.id, protocol: snapshot.protocol }
+      await sql`UPDATE steward_retry_operations SET status='accepted', run_id=${runId}, result_json=${JSON.stringify(receipt)}::jsonb,
+        failure=NULL, finished_at=now() WHERE operation_id=${operationId}`
+      await sql`INSERT INTO steward_thread_tasks (thread_id, task_id) VALUES (${turn.threadId}, ${operation.taskId}) ON CONFLICT DO NOTHING`
+      await sql`INSERT INTO steward_events (turn_id, event_id, type, payload) VALUES (${currentTurnId}, ${crypto.randomUUID()}, 'work.retried',
+        ${JSON.stringify({ operationId, ...receipt })}::jsonb)`
       return receipt
     })
   }
@@ -881,5 +1046,5 @@ export async function createWorkStore(databaseUrl: string) {
 
   async function close() { await db.close() }
 
-  return { list, detail, events, create, continueTask, retryTask, appendRunMessage, resolveInteraction, pendingInteractions, pendingRunMessages, acknowledgeRunMessage, cancel, isRunStopped, artifactVersion, readArtifact, stewardCatalog, stewardMetadata, stewardStatusCards, stewardRead, stewardModelStats, createFromSteward, freezeStewardControl, applyStewardControl, freezeStewardInteraction, applyStewardInteraction, requestCleanupRetry, resolveRunModelConnection, authorizeModelProxy, reserveModelAttempt, recordModelUsage, close }
+  return { list, detail, events, create, continueTask, retryTask, appendRunMessage, resolveInteraction, pendingInteractions, pendingRunMessages, acknowledgeRunMessage, cancel, isRunStopped, artifactVersion, readArtifact, stewardCatalog, stewardMetadata, stewardStatusCards, stewardRead, stewardRetryContext, stewardModelStats, createFromSteward, freezeStewardControl, applyStewardControl, freezeStewardInteraction, applyStewardInteraction, freezeStewardRetry, applyStewardRetry, requestCleanupRetry, resolveRunModelConnection, authorizeModelProxy, reserveModelAttempt, recordModelUsage, close }
 }
