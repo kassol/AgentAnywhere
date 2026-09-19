@@ -3,6 +3,7 @@ import { ReportMarkdown } from './Work'
 
 type Thread = { id: string; title: string; status?: string }
 type Message = { id: string; turnId: string; role: 'user' | 'assistant'; content: string; status: string }
+type Summary = { id: string; content: string; fromTurnNumber: number; throughTurnNumber: number; coveredTurns: number }
 type Turn = { id: string; status: string; modelCalls: number; modelCallLimit: number; activeMs: number; activeLimitMs: number; budgetReason?: string; failure?: string }
 type RelatedTask = { id: string; goal: string; status: string; href: string; reports: { versionId: string; href: string }[] }
 type StatusCard = { id: string; kind: 'completed' | 'failed' | 'interaction'; taskId: string; runId: string; goal: string; runStatus: string; failure?: string; href: string; reports: { versionId: string; href: string }[]; interaction?: { id: string; kind: 'question' | 'limit'; question: string; status: string; answer?: string } }
@@ -10,7 +11,7 @@ type ResearchOperation = { operationId: string; status: string; taskId?: string;
 type ControlOperation = { operationId: string; kind: 'steer' | 'cancel'; status: string; taskId?: string; runId?: string; content?: string; messageStatus?: 'pending' | 'applied' | 'carried'; failure?: string }
 type InteractionOperation = { operationId: string; status: string; taskId?: string; runId?: string; epoch?: number; interactionId?: string;
   interactionKind?: 'question' | 'limit'; answer?: string; decision?: 'continue' | 'finish'; failure?: string }
-type Detail = Thread & { messages: Message[]; turns: Turn[]; relatedTasks: RelatedTask[]; statusCards: StatusCard[]; researchOperations: ResearchOperation[];
+type Detail = Thread & { messages: Message[]; summaries: Summary[]; turns: Turn[]; relatedTasks: RelatedTask[]; statusCards: StatusCard[]; researchOperations: ResearchOperation[];
   controlOperations: ControlOperation[]; interactionOperations: InteractionOperation[] }
 const statusLabel: Record<string, string> = {
   queued: '排队中', provisioning: '准备环境', running: '回复中', streaming: '生成中', stopping: '停止中', stopped: '已停止',
@@ -122,6 +123,10 @@ export function Steward() {
       <section className="conversation" aria-label="管家对话">
         <div className="conversation-messages" aria-live="polite">
           {!detail?.messages.length && <div className="steward-empty"><h2>有什么需要一起梳理？</h2><p className="muted">可以讨论，也可以直接委托一项或多项独立调研。</p></div>}
+          {!!detail?.summaries.length && <section aria-label="较早讨论摘要"><h3>较早讨论摘要</h3>{detail.summaries.map(summary => <article key={summary.id}>
+            <small>覆盖本对话第 {summary.fromTurnNumber}–{summary.throughTurnNumber} 轮，共 {summary.coveredTurns} 轮</small>
+            <ReportMarkdown markdown={summary.content} />
+          </article>)}</section>}
           {detail?.messages.map(message => <article key={message.id} className={`conversation-message ${message.role}`}>
             <strong>{message.role === 'user' ? '你' : '管家'}</strong>
             {message.role === 'assistant' ? <ReportMarkdown markdown={message.content || '…'} /> : <p>{message.content}</p>}

@@ -487,15 +487,19 @@ test('a clear steward delegation creates independent work with a persisted model
   const stopReleased = new Promise<void>(resolve => { releaseStop = resolve })
   let resumeOperationId = ''
   let clock = Date.now()
+  let markRestartBlocked!: () => void
+  const restartBlocked = new Promise<void>(resolve => { markRestartBlocked = resolve })
   let releaseRestart!: () => void
   const restartReleased = new Promise<void>(resolve => { releaseRestart = resolve })
   let blockRestart = true
   let fourItemCalls = 0
   const upstream = Bun.serve({ port: 0, async fetch(request) {
     const body = await request.json() as any
+    const messages = body.messages ?? []
     const names = (body.tools ?? []).map((tool: any) => tool.function?.name)
-    const results = body.messages.filter((message: any) => message.role === 'tool')
-    const user = JSON.stringify(body.messages.filter((message: any) => message.role === 'user').at(-1)?.content ?? '')
+    const currentUserIndex = messages.findLastIndex((message: any) => message.role === 'user')
+    const results = messages.slice(currentUserIndex + 1).filter((message: any) => message.role === 'tool')
+    const user = JSON.stringify(messages[currentUserIndex]?.content ?? '')
     if (user.includes('四项')) fourItemCalls += 1
     if (names.includes('resume_research_dispatch') && user.includes('继续剩余调研')) {
       return toolResponse(body.model, 'resume_research_dispatch', { operationIds: [resumeOperationId] })
@@ -509,7 +513,7 @@ test('a clear steward delegation creates independent work with a persisted model
     }
     if (names.includes('create_frozen_research') && results.length === 0) {
       if (user.includes('时间边界')) clock += 5 * 60_000
-      if (user.includes('重启恢复') && blockRestart) { blockRestart = false; await restartReleased }
+      if (user.includes('重启恢复') && blockRestart) { blockRestart = false; markRestartBlocked(); await restartReleased }
       const ids = body.tools[0].function.parameters.properties.operationId.enum
       return toolResponse(body.model, 'create_frozen_research', { operationId: ids[0] })
     }
@@ -653,8 +657,8 @@ test('a clear steward delegation creates independent work with a persisted model
       await Bun.sleep(20)
     }
     expect(timed.researchOperations[0]?.status).toBe('planned')
+    await restartBlocked
     const stoppingApp = app.stop(true)
-    await Bun.sleep(20)
     releaseRestart()
     await stoppingApp
     app = await startServer({ password, port: 0, dataDir, databaseUrl: isolatedUrl.toString(), testNow: () => clock })

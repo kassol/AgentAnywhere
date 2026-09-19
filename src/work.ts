@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { SQL } from 'bun'
 import type { ModelSelection, Protocol } from './model-connection'
+import { lockStewardTurnBudget, stewardBudgetFailure, stewardOperationBudget } from './steward-budget'
 
 type RunConnection = { endpoint: string; hasCredential: boolean; credentialRef: string | null; models: ModelSelection[] }
 type CreateRequest = { requestId: string; goal: string; sourceUrl: string | null; modelId: string; protocol: Protocol | null }
@@ -308,10 +309,7 @@ export async function createWorkStore(databaseUrl: string) {
 
   async function createFromSteward(currentTurnId: string, operationId: string, currentTime: () => number) {
     const result = await db.begin(async sql => {
-      const [turn] = await sql`SELECT id, thread_id AS "threadId", status, active, active_ms AS "activeMs",
-        active_limit_ms AS "activeLimitMs", active_since AS "activeSince", budget_reason AS "budgetReason",
-        model_snapshot AS "modelSnapshot", credential_ref AS "credentialRef"
-        FROM steward_turns WHERE id=${currentTurnId} FOR UPDATE`
+      const turn = await lockStewardTurnBudget(sql, currentTurnId)
       const [operation] = await sql`SELECT turn_id AS "turnId", request_id AS "requestId", request_hash AS "requestHash",
         goal, source_url AS "sourceUrl", model_snapshot AS "modelSnapshot", credential_ref AS "credentialRef",
         status, task_id AS "taskId", run_id AS "runId"
@@ -320,20 +318,15 @@ export async function createWorkStore(databaseUrl: string) {
       if (!turn || !operation || operation.turnId !== currentTurnId && !resume) throw new WorkInputError('调研操作回执无效')
       if (operation.status === 'accepted') return { taskId: operation.taskId, runId: operation.runId, created: false, status: 'accepted' as const }
       if (operation.status !== 'planned') return { created: false, status: operation.status as string, failure: '调研操作已结束' }
-      if (!turn.active || turn.status !== 'running') {
+      const budget = await stewardOperationBudget(sql, turn, currentTime)
+      if (budget.reason === 'stopped') {
         await sql`UPDATE steward_research_operations SET status='unexecuted', failure='管家轮次已停止', finished_at=now() WHERE operation_id=${operationId}`
         return { created: false, status: 'unexecuted' as const, failure: '管家轮次已停止' }
       }
-      if (turn.budgetReason) {
-        const failure = turn.budgetReason === 'creates' ? '本轮已达到 3 项工作创建额度' : '管家轮次额度已用尽'
+      if (budget.reason) {
+        const failure = stewardBudgetFailure(budget.reason)
         await sql`UPDATE steward_research_operations SET status='unexecuted', failure=${failure}, finished_at=now() WHERE operation_id=${operationId}`
         return { created: false, status: 'unexecuted' as const, failure }
-      }
-      const elapsed = Number(turn.activeMs) + (turn.activeSince ? Math.max(0, currentTime() - new Date(turn.activeSince).getTime()) : 0)
-      if (elapsed >= Number(turn.activeLimitMs)) {
-        await sql`UPDATE steward_turns SET budget_reason='time' WHERE id=${currentTurnId}`
-        await sql`UPDATE steward_research_operations SET status='unexecuted', failure='管家轮次活跃时间已用尽', finished_at=now() WHERE operation_id=${operationId}`
-        return { created: false, status: 'unexecuted' as const, failure: '管家轮次活跃时间已用尽' }
       }
       const snapshot = typeof operation.modelSnapshot === 'string' ? JSON.parse(operation.modelSnapshot) : operation.modelSnapshot
       if (resume) {
@@ -347,12 +340,6 @@ export async function createWorkStore(databaseUrl: string) {
           return { created: false, status: 'unexecuted' as const, failure }
         }
       }
-      const [usage] = await sql`SELECT COUNT(*)::integer AS count FROM steward_research_operations WHERE accepted_turn_id=${currentTurnId} AND status='accepted'`
-      if (Number(usage.count) >= 3) {
-        await sql`UPDATE steward_turns SET budget_reason='creates' WHERE id=${currentTurnId}`
-        await sql`UPDATE steward_research_operations SET status='unexecuted', failure='本轮已达到 3 项工作创建额度', finished_at=now() WHERE operation_id=${operationId}`
-        return { created: false, status: 'unexecuted' as const, failure: '本轮已达到 3 项工作创建额度' }
-      }
       const input: CreateRequest = { requestId: operation.requestId, goal: operation.goal, sourceUrl: operation.sourceUrl, modelId: snapshot.id, protocol: snapshot.protocol }
       const taskId = crypto.randomUUID()
       const created = await createWorkInTransaction(sql, input, operation.requestHash, snapshot, operation.credentialRef, taskId)
@@ -362,7 +349,7 @@ export async function createWorkStore(databaseUrl: string) {
         await sql`UPDATE steward_research_operations SET status='accepted', task_id=${existing.id}, accepted_turn_id=${currentTurnId}, finished_at=now()
           WHERE operation_id=${operationId}`
         await sql`INSERT INTO steward_thread_tasks (thread_id, task_id) VALUES (${turn.threadId}, ${existing.id}) ON CONFLICT DO NOTHING`
-        if (Number(usage.count) + 1 >= 3) await sql`UPDATE steward_turns SET budget_reason='creates' WHERE id=${currentTurnId}`
+        if (budget.createCount + 1 >= 3) await sql`UPDATE steward_turns SET budget_reason='creates' WHERE id=${currentTurnId}`
         return { taskId: existing.id, created: false, status: 'accepted' as const }
       }
       await sql`UPDATE steward_research_operations SET status='accepted', task_id=${created.taskId}, run_id=${created.runId},
@@ -370,7 +357,7 @@ export async function createWorkStore(databaseUrl: string) {
       await sql`INSERT INTO steward_thread_tasks (thread_id, task_id) VALUES (${turn.threadId}, ${created.taskId}) ON CONFLICT DO NOTHING`
       await sql`INSERT INTO steward_events (turn_id, event_id, type, payload) VALUES (${currentTurnId}, ${crypto.randomUUID()}, 'work.accepted',
         ${JSON.stringify({ operationId, taskId: created.taskId, runId: created.runId })}::jsonb)`
-      if (Number(usage.count) + 1 >= 3) await sql`UPDATE steward_turns SET budget_reason='creates' WHERE id=${currentTurnId}`
+      if (budget.createCount + 1 >= 3) await sql`UPDATE steward_turns SET budget_reason='creates' WHERE id=${currentTurnId}`
       return { ...created, created: true, status: 'accepted' as const }
     })
     return result.taskId ? { ...result, task: await detail(result.taskId) } : result
@@ -378,8 +365,7 @@ export async function createWorkStore(databaseUrl: string) {
 
   async function freezeStewardControl(currentTurnId: string, operationId: string, taskId: string, currentTime: () => number) {
     return db.begin(async sql => {
-      const [turn] = await sql`SELECT id, status, active, active_ms AS "activeMs", active_limit_ms AS "activeLimitMs",
-        active_since AS "activeSince", budget_reason AS "budgetReason" FROM steward_turns WHERE id=${currentTurnId} FOR UPDATE`
+      const turn = await lockStewardTurnBudget(sql, currentTurnId)
       const [operation] = await sql`SELECT turn_id AS "turnId", kind, status, task_id AS "taskId", run_id AS "runId"
         FROM steward_control_operations WHERE operation_id=${operationId} FOR UPDATE`
       if (!turn || !operation || operation.turnId !== currentTurnId) throw new WorkInputError('控制操作回执无效')
@@ -388,10 +374,8 @@ export async function createWorkStore(databaseUrl: string) {
         return { operationId, taskId: operation.taskId, runId: operation.runId, status: operation.status }
       }
       if (operation.status !== 'intent') throw new WorkConflictError('控制操作已结束')
-      if (!turn.active || turn.status !== 'running') throw new WorkConflictError('管家轮次已停止')
-      if (turn.budgetReason) throw new WorkConflictError('管家轮次额度已用尽')
-      const elapsed = Number(turn.activeMs) + (turn.activeSince ? Math.max(0, currentTime() - new Date(turn.activeSince).getTime()) : 0)
-      if (elapsed >= Number(turn.activeLimitMs)) throw new WorkConflictError('管家轮次活跃时间已用尽')
+      const budget = await stewardOperationBudget(sql, turn, currentTime)
+      if (budget.reason) throw new WorkConflictError(budget.reason === 'stopped' ? '管家轮次已停止' : stewardBudgetFailure(budget.reason))
       await sql`SELECT pg_advisory_xact_lock(720, hashtext(${taskId}))`
       const [run] = await sql`SELECT r.id, r.status, r.active FROM work_runs r JOIN work_tasks t ON t.id=r.task_id
         WHERE t.id=${taskId} AND t.owner_id='owner' ORDER BY r.created_at DESC, r.id DESC LIMIT 1 FOR UPDATE OF r`
@@ -405,9 +389,7 @@ export async function createWorkStore(databaseUrl: string) {
 
   async function applyStewardControl(currentTurnId: string, operationId: string, currentTime: () => number) {
     return db.begin(async sql => {
-      const [turn] = await sql`SELECT id, thread_id AS "threadId", status, active, active_ms AS "activeMs",
-        active_limit_ms AS "activeLimitMs", active_since AS "activeSince", budget_reason AS "budgetReason"
-        FROM steward_turns WHERE id=${currentTurnId} FOR UPDATE`
+      const turn = await lockStewardTurnBudget(sql, currentTurnId)
       const [operation] = await sql`SELECT turn_id AS "turnId", kind, content, command_id AS "commandId", status,
         task_id AS "taskId", run_id AS "runId", result_json AS "resultJson", failure
         FROM steward_control_operations WHERE operation_id=${operationId} FOR UPDATE`
@@ -415,20 +397,9 @@ export async function createWorkStore(databaseUrl: string) {
       if (!turn || !operation || operation.turnId !== currentTurnId && !resume) throw new WorkInputError('控制操作回执无效')
       if (operation.status === 'accepted') return typeof operation.resultJson === 'string' ? JSON.parse(operation.resultJson) : operation.resultJson
       if (operation.status !== 'planned') return { operationId, status: operation.status, failure: operation.failure }
-      if (!turn.active || turn.status !== 'running') {
-        const failure = '管家轮次已停止'
-        await sql`UPDATE steward_control_operations SET status='unexecuted', failure=${failure}, finished_at=now() WHERE operation_id=${operationId}`
-        return { operationId, status: 'unexecuted' as const, failure }
-      }
-      if (turn.budgetReason) {
-        const failure = '管家轮次额度已用尽'
-        await sql`UPDATE steward_control_operations SET status='unexecuted', failure=${failure}, finished_at=now() WHERE operation_id=${operationId}`
-        return { operationId, status: 'unexecuted' as const, failure }
-      }
-      const elapsed = Number(turn.activeMs) + (turn.activeSince ? Math.max(0, currentTime() - new Date(turn.activeSince).getTime()) : 0)
-      if (elapsed >= Number(turn.activeLimitMs)) {
-        const failure = '管家轮次活跃时间已用尽'
-        await sql`UPDATE steward_turns SET budget_reason='time' WHERE id=${currentTurnId}`
+      const budget = await stewardOperationBudget(sql, turn, currentTime)
+      if (budget.reason) {
+        const failure = budget.reason === 'stopped' ? '管家轮次已停止' : stewardBudgetFailure(budget.reason)
         await sql`UPDATE steward_control_operations SET status='unexecuted', failure=${failure}, finished_at=now() WHERE operation_id=${operationId}`
         return { operationId, status: 'unexecuted' as const, failure }
       }
@@ -473,8 +444,7 @@ export async function createWorkStore(databaseUrl: string) {
 
   async function freezeStewardInteraction(currentTurnId: string, operationId: string, taskId: string, interactionId: string, currentTime: () => number) {
     return db.begin(async sql => {
-      const [turn] = await sql`SELECT id, status, active, active_ms AS "activeMs", active_limit_ms AS "activeLimitMs",
-        active_since AS "activeSince", budget_reason AS "budgetReason" FROM steward_turns WHERE id=${currentTurnId} FOR UPDATE`
+      const turn = await lockStewardTurnBudget(sql, currentTurnId)
       const [operation] = await sql`SELECT turn_id AS "turnId", desired_kind AS "desiredKind", status, task_id AS "taskId",
         run_id AS "runId", run_epoch AS "runEpoch", interaction_id AS "interactionId"
         FROM steward_interaction_operations WHERE operation_id=${operationId} FOR UPDATE`
@@ -485,10 +455,8 @@ export async function createWorkStore(databaseUrl: string) {
           interactionId: operation.interactionId, interactionKind: operation.desiredKind, status: operation.status }
       }
       if (operation.status !== 'intent') throw new WorkConflictError('回答操作已结束')
-      if (!turn.active || turn.status !== 'running') throw new WorkConflictError('管家轮次已停止')
-      if (turn.budgetReason) throw new WorkConflictError('管家轮次额度已用尽')
-      const elapsed = Number(turn.activeMs) + (turn.activeSince ? Math.max(0, currentTime() - new Date(turn.activeSince).getTime()) : 0)
-      if (elapsed >= Number(turn.activeLimitMs)) throw new WorkConflictError('管家轮次活跃时间已用尽')
+      const budget = await stewardOperationBudget(sql, turn, currentTime)
+      if (budget.reason) throw new WorkConflictError(budget.reason === 'stopped' ? '管家轮次已停止' : stewardBudgetFailure(budget.reason))
       await sql`SELECT pg_advisory_xact_lock(720, hashtext(${taskId}))`
       const [target] = await sql`SELECT i.run_id AS "runId" FROM work_interactions i
         JOIN work_runs r ON r.id=i.run_id JOIN work_tasks t ON t.id=r.task_id
@@ -517,9 +485,7 @@ export async function createWorkStore(databaseUrl: string) {
 
   async function applyStewardInteraction(currentTurnId: string, operationId: string, currentTime: () => number) {
     return db.begin(async sql => {
-      const [turn] = await sql`SELECT id, thread_id AS "threadId", status, active, active_ms AS "activeMs",
-        active_limit_ms AS "activeLimitMs", active_since AS "activeSince", budget_reason AS "budgetReason"
-        FROM steward_turns WHERE id=${currentTurnId} FOR UPDATE`
+      const turn = await lockStewardTurnBudget(sql, currentTurnId)
       const [operation] = await sql`SELECT turn_id AS "turnId", answer, decision, status, task_id AS "taskId", run_id AS "runId",
         run_epoch AS "runEpoch", interaction_id AS "interactionId", interaction_kind AS "interactionKind",
         result_json AS "resultJson", failure FROM steward_interaction_operations WHERE operation_id=${operationId} FOR UPDATE`
@@ -531,13 +497,8 @@ export async function createWorkStore(databaseUrl: string) {
         await sql`UPDATE steward_interaction_operations SET status=${status}, failure=${failure}, finished_at=now() WHERE operation_id=${operationId}`
         return { operationId, status, failure }
       }
-      if (!turn.active || turn.status !== 'running') return fail('unexecuted', '管家轮次已停止')
-      if (turn.budgetReason) return fail('unexecuted', '管家轮次额度已用尽')
-      const elapsed = Number(turn.activeMs) + (turn.activeSince ? Math.max(0, currentTime() - new Date(turn.activeSince).getTime()) : 0)
-      if (elapsed >= Number(turn.activeLimitMs)) {
-        await sql`UPDATE steward_turns SET budget_reason='time' WHERE id=${currentTurnId}`
-        return fail('unexecuted', '管家轮次活跃时间已用尽')
-      }
+      const budget = await stewardOperationBudget(sql, turn, currentTime)
+      if (budget.reason) return fail('unexecuted', budget.reason === 'stopped' ? '管家轮次已停止' : stewardBudgetFailure(budget.reason))
       const answer = operation.decision ?? operation.answer
       let resolved
       try {

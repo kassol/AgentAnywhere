@@ -489,7 +489,12 @@ export async function startServer(config: Config) {
     },
   })
   const stop = app.stop.bind(app)
-  app.stop = async force => { await stop(force); await steward?.close(); await work?.close() }
+  app.stop = async force => {
+    const closingSteward = steward?.close()
+    await stop(force)
+    await closingSteward
+    await work?.close()
+  }
   steward?.start()
   return app
 }

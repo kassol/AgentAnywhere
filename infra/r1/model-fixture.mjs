@@ -21,19 +21,40 @@ function stewardQuery(body, response, responses) {
   const text = value => typeof value === 'string' ? value : (value ?? []).filter(part => part.type === 'text' || part.type === 'input_text' || part.type === 'output_text').map(part => part.text).join('')
   const messages = responses ? body.input ?? [] : body.messages ?? []
   const system = [body.instructions ?? '', ...messages.filter(item => ['system', 'developer'].includes(item.role)).map(item => text(item.content))].join('\n')
-  const user = messages.filter(item => item.role === 'user').map(item => text(item.content)).at(-1) ?? ''
-  const outputs = messages.filter(item => responses ? item.type === 'function_call_output' : item.role === 'tool').map(item => responses ? item.output : text(item.content))
+  const currentUserIndex = messages.findLastIndex(item => item.role === 'user')
+  const user = text(messages[currentUserIndex]?.content)
+  const outputs = messages.slice(currentUserIndex + 1).filter(item => responses ? item.type === 'function_call_output' : item.role === 'tool').map(item => responses ? item.output : text(item.content))
   const tools = (body.tools ?? []).map(item => responses ? item : item.function)
   const planner = system.includes('受限意图规划器')
   const ids = [...user.matchAll(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi)].map(match => match[0])
-  const purpose = user.includes('R2_QUERY_COMPARE') ? 'compare' : user.includes('R2_QUERY_READ') || user.includes('R2_QUERY_AMBIGUOUS') ? 'read' : 'browse'
+  const purpose = user.includes('R2_QUERY_COMPARE') ? 'compare' : user.includes('R2_QUERY_READ') || user.startsWith('解释工作 ') || user.includes('R2_QUERY_AMBIGUOUS') ? 'read' : 'browse'
   let name, args, answer = '候选已列出；请明确需要读取的工作。'
   const dispatch = body.model.startsWith('fixture-steward-dispatch-')
   let holdDispatch = false
   const control = body.model.startsWith('fixture-steward-control-')
   const interaction = body.model.startsWith('fixture-steward-interaction-')
   const retry = body.model.startsWith('fixture-steward-retry-')
-  if (body.model.startsWith('fixture-steward-summary-')) {
+  if (body.model.startsWith('fixture-steward-revision-')) {
+    const results = outputs.map(output => { try { return JSON.parse(output) } catch { return {} } })
+    if (planner && user.startsWith('继续改稿回执 ') && !outputs.length) {
+      name = 'resume_report_revision'; args = { operationId: ids[0] }
+    } else if (planner && !outputs.length) {
+      name = 'freeze_report_revision'
+      args = { query: ids[0] ?? '', content: user.split('：').slice(1).join('：'), modelId: 'fixture-continuation', reason: '人工池允许，保留原报告并生成新版。' }
+    } else if (planner && outputs.length === 1) {
+      name = 'find_revision_candidates'; args = { cursor: 0 }
+    } else if (planner && outputs.length === 2) {
+      const candidate = results[1].items?.find(item => item.id === ids[0])
+      if (candidate?.reports?.length) {
+        name = 'freeze_revision_target'; args = { operationId: results[0].operationId, taskId: candidate.id, versionId: ids[1] ?? candidate.reports.at(-1).versionId }
+      }
+    } else if (!planner) {
+      const apply = tools.find(item => item.name === 'apply_frozen_revision')
+      holdDispatch = body.model.includes('-hold-') && outputs.length === 1
+      if (apply && !outputs.length) { name = apply.name; args = { operationId: apply.parameters.properties.operationId.const } }
+      else answer = '操作结果请查看持久回执。'
+    }
+  } else if (body.model.startsWith('fixture-steward-summary-')) {
     answer = system.includes('对话摘要器') ? '较早讨论摘要：保留 SUMMARY_GOAL、SUMMARY_CONSTRAINT 和 SUMMARY_PENDING，原文仍保留；没有获得新的工作操作授权。' : '已记录本轮讨论。'
   } else if (interaction || retry) {
     const results = outputs.map(output => { try { return JSON.parse(output) } catch { return {} } })
@@ -110,7 +131,7 @@ function stewardQuery(body, response, responses) {
       } else answer = creator ? '工作接收情况请查看真实操作回执。' : '当前没有可执行的调研操作，请补充目标或模型池配置。'
     }
   } else if (planner) {
-    if (user.includes('R2_QUERY_') && (!outputs.length || user.includes('R2_QUERY_LIMIT'))) {
+    if ((user.includes('R2_QUERY_') || user.startsWith('解释工作 ')) && (!outputs.length || user.includes('R2_QUERY_LIMIT'))) {
       name = 'find_work_candidates'
       args = { purpose, query: purpose !== 'browse' && ids.length ? ids[0] : 'R2_QUERY_REPORT', cursor: 0 }
     } else if (outputs.some(output => { try { return Boolean(JSON.parse(output).operationId) } catch { return false } })) answer = '读取目标已冻结。'
@@ -213,7 +234,7 @@ http.createServer(async (request, response) => {
     })
     if (response.destroyed) return
   }
-  if (['query', 'dispatch', 'control', 'interaction', 'retry', 'summary'].some(kind => body.model.startsWith(`fixture-steward-${kind}-`))) return stewardQuery(body, response, responses)
+  if (['query', 'dispatch', 'control', 'interaction', 'retry', 'summary', 'revision'].some(kind => body.model.startsWith(`fixture-steward-${kind}-`))) return stewardQuery(body, response, responses)
   if (responses) {
     if (body.model === 'fixture-steward-responses') {
       calls.push({ model: body.model, protocol: 'responses', stream: body.stream, input: body.input })
