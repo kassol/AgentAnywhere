@@ -48,15 +48,16 @@ async function control(content) {
 const beforeCalls = (await fetch(`${fixture}/calls`).then(response => response.json())).length
 const steered = await api('/api/tasks', 'POST', { requestId: crypto.randomUUID(), goal: 'R2_CONTROL_STEER：提交简短报告。', modelId: 'fixture-slow' })
 await until(() => api(`/api/tasks/${steered.id}/events`), events => events.some(event => event.type === 'message.delta'), 'stream before steering')
-const addition = `向工作 ${steered.id} 追加要求：R2_CONTROL_STEER 最终报告包含 STEERING_MARKER_12。`
+const requirement = 'R2_CONTROL_STEER 最终报告包含 STEERING_MARKER_12。'
+const addition = `向工作 ${steered.id} 追加要求：${requirement}`
 const steering = await control(addition)
 assert.equal(steering.turns.at(-1).status, 'completed')
 assert.equal(steering.controlOperations.length, 1)
 assert.equal(steering.controlOperations[0].status, 'accepted')
 assert.equal(steering.controlOperations[0].result.messageStatus, 'pending')
 const completed = await until(() => api(`/api/tasks/${steered.id}`), item => item.run.status === 'succeeded' && item.run.cleanupState === 'cleaned', 'steered report and cleanup')
-assert.equal(completed.thread.messages.filter(message => message.content === addition).length, 1)
-assert.equal(completed.thread.messages.find(message => message.content === addition).status, 'applied')
+assert.equal(completed.thread.messages.filter(message => message.content === requirement).length, 1)
+assert.equal(completed.thread.messages.find(message => message.content === requirement).status, 'applied')
 assert.equal((await api(`/api/steward/threads/${steering.id}`)).controlOperations[0].messageStatus, 'applied')
 const report = completed.artifacts.find(item => item.kind === 'report')
 assert.match((await api(`/api/artifacts/${report.versionId}/content`)).markdown, /STEERING_MARKER_12/)
