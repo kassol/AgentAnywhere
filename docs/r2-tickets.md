@@ -2,11 +2,11 @@
 
 来源：[Spec #18](https://github.com/kassol/AgentAnywhere/issues/18)；[规格正文](r2-steward-spec.md)；[已确认决定](r2-steward-decisions.md)。
 
-2026-09-19：拆分经确认后发布 12 项任务，均标记 `ready-for-agent`，20 条原生阻塞关系已读取核对。父 Spec 保持开放，正文与状态未修改。本文件记录任务拆分，不表示功能已实现。
+2026-09-19：拆分经确认后发布 12 项任务，均标记 `ready-for-agent`，20 条原生阻塞关系已读取核对。该段记录拆分时状态。12 项任务现已实现并通过验收，发布与 20 项 Spec 映射见 [R2-12](evidence/r2-12.md)。
 
 ## 实施顺序
 
-按依赖推进，当前首项为 [#19](https://github.com/kassol/AgentAnywhere/issues/19)。标签表示任务已明确；只有阻塞项全部完成的任务可开始。
+以下为已执行的依赖顺序；全部任务已经验收，保留依赖关系供追溯。
 
 | 任务 | 交付行为 | 直接阻塞项 |
 | --- | --- | --- |

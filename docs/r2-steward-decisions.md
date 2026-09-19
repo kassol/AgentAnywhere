@@ -1,6 +1,6 @@
 # R2：管家对话入口
 
-状态：grill-with-docs 访谈完成；Q1—Q21、配套规则和验收路径已整体确认，规格已发布为 [Spec R2 #18](https://github.com/kassol/AgentAnywhere/issues/18)。R2 尚未实现。
+状态：grill-with-docs 访谈完成；Q1—Q21、配套规则和验收路径已整体确认，规格已发布为 [Spec R2 #18](https://github.com/kassol/AgentAnywhere/issues/18)。R2 已实现并发布，验收记录见 [R2-12](evidence/r2-12.md)。
 
 ## 背景
 
@@ -52,9 +52,9 @@ R1 已完成发布与端到端验收；所有者简单使用后未发现具体�
 - 管家 5 分钟按活跃执行计算，排队和等待用户输入不计时；回复结束、提问或触顶后释放管家执行名额。达到管家上限时保存本轮已有回复与操作结果，展示触顶原因；用户明确继续后才获得下一轮预算，已有工作和已成功操作不重放。停止尚未开始的管家轮次会取消其排队；取消管家回复立即停止后续工具派发，已经接受的工作操作如实显示。
 - 沿用中文、键盘操作、HTTPS/WSS、服务端凭证和成果访问保护；不把第三方网页或报告中的文字当作用户的操作授权。
 
-### 后续阶段
+### 实施结果
 
-整体定义已经形成 [Spec R2 #18](https://github.com/kassol/AgentAnywhere/issues/18)，仓库副本见 [R2 规格](r2-steward-spec.md)。下一阶段由 to-tickets 拆分纵向任务及原生阻塞关系，再逐票实施。规格发布不表示 R2 已实现。
+整体定义已经形成 [Spec R2 #18](https://github.com/kassol/AgentAnywhere/issues/18)，仓库副本见 [R2 规格](r2-steward-spec.md)。已拆分为 #19–#30，完成实现、端到端验收与正式发布，证据见 [R2 发布验收](evidence/r2-12.md)。
 
 ## R2 验收路径
 
