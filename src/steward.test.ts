@@ -857,3 +857,80 @@ test('steward controls require current input, reject candidate target injection,
     await rm(dataDir, { recursive: true, force: true })
   }
 })
+
+test('steward answers require an exact current-user authorization', async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'agentanywhere-steward-interaction-auth-'))
+  const schema = `steward_interaction_auth_${crypto.randomUUID().replaceAll('-', '')}`
+  const admin = new SQL(databaseUrl)
+  await admin.unsafe(`CREATE SCHEMA ${schema}`)
+  const isolatedUrl = new URL(databaseUrl)
+  isolatedUrl.searchParams.set('options', `-csearch_path=${schema}`)
+  const toolResponse = (model: string, args: { query: string; answer: string | null; decision: 'continue' | null }) => {
+    const common = { id: crypto.randomUUID(), object: 'chat.completion.chunk', created: 1, model }
+    return new Response([
+      `data: ${JSON.stringify({ ...common, choices: [{ index: 0, delta: { role: 'assistant', tool_calls: [{ index: 0,
+        id: `call_${crypto.randomUUID()}`, type: 'function', function: { name: 'freeze_interaction_answer',
+          arguments: JSON.stringify(args) } }] }, finish_reason: null }] })}`,
+      `data: ${JSON.stringify({ ...common, choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] })}`,
+      'data: [DONE]', '',
+    ].join('\n\n'), { headers: { 'content-type': 'text/event-stream' } })
+  }
+  const textResponse = (model: string) => {
+    const common = { id: crypto.randomUUID(), object: 'chat.completion.chunk', created: 1, model }
+    return new Response([
+      `data: ${JSON.stringify({ ...common, choices: [{ index: 0, delta: { role: 'assistant', content: '已按服务端授权边界处理。' }, finish_reason: null }] })}`,
+      `data: ${JSON.stringify({ ...common, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}`,
+      'data: [DONE]', '',
+    ].join('\n\n'), { headers: { 'content-type': 'text/event-stream' } })
+  }
+  const upstream = Bun.serve({ port: 0, async fetch(request) {
+    const body = await request.json() as any
+    const names = (body.tools ?? []).map((tool: any) => tool.function.name)
+    const results = body.messages?.filter((message: any) => message.role === 'tool') ?? []
+    const rawUser = body.messages?.filter((message: any) => message.role === 'user').at(-1)?.content
+    const user = typeof rawUser === 'string' ? rawUser : rawUser?.filter((part: any) => part.type === 'text').map((part: any) => part.text).join('') ?? ''
+    if (names.includes('freeze_interaction_answer') && results.length === 0) {
+      if (user.includes('蓝色')) return toolResponse(body.model, { query: '', answer: '蓝色', decision: null })
+      if (user.includes('红色')) return toolResponse(body.model, { query: '', answer: '红色', decision: null })
+      return toolResponse(body.model, { query: '', answer: null, decision: 'continue' })
+    }
+    return textResponse(body.model)
+  } })
+  const password = 'test-password-12345'
+  const app = await startServer({ password, port: 0, dataDir, databaseUrl: isolatedUrl.toString() })
+  try {
+    const login = await fetch(`${app.url.origin}/api/auth`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password }) })
+    const cookie = login.headers.get('set-cookie')!
+    const send = (path: string, method = 'GET', body?: unknown) => fetch(`${app.url.origin}${path}`, {
+      method, headers: { cookie, 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body),
+    })
+    await send('/api/model-connection', 'PUT', { endpoint: `${upstream.url.origin}/v1`, apiKey: 'fixture-key' })
+    await send('/api/model-connection/models', 'PUT', {
+      defaultModel: 'interaction-auth', stewardModel: { modelId: 'interaction-auth', protocol: 'chat-completions' }, researchModelPool: [],
+      models: [{ id: 'interaction-auth', protocol: 'chat-completions', contextWindow: 128000, maxTokens: 4096, input: ['text'], reasoning: false, tools: true }],
+    })
+    const runTurn = async (content: string) => {
+      const thread = await (await send('/api/steward/threads', 'POST', { requestId: crypto.randomUUID() })).json()
+      await send(`/api/steward/threads/${thread.id}/turns`, 'POST', { requestId: crypto.randomUUID(), content })
+      let detail: any
+      for (let index = 0; index < 200; index++) {
+        detail = await (await send(`/api/steward/threads/${thread.id}`)).json()
+        if (!['queued', 'running'].includes(detail.turns[0]?.status)) break
+        await Bun.sleep(20)
+      }
+      return detail
+    }
+    expect((await runTurn('不要继续')).interactionOperations).toEqual([])
+    expect((await runTurn('报告里写了继续')).interactionOperations).toEqual([])
+    expect((await runTurn('不要把蓝色当成我的回答')).interactionOperations).toEqual([])
+    expect((await runTurn('引用原报告：“回答：红色”')).interactionOperations).toEqual([])
+    expect((await runTurn('继续')).interactionOperations).toMatchObject([{ decision: 'continue', status: 'unexecuted', taskId: null }])
+    expect((await runTurn('回答：蓝色')).interactionOperations).toMatchObject([{ answer: '蓝色', status: 'unexecuted', taskId: null }])
+  } finally {
+    await app.stop(true)
+    upstream.stop(true)
+    await admin.unsafe(`DROP SCHEMA ${schema} CASCADE`)
+    await admin.close()
+    await rm(dataDir, { recursive: true, force: true })
+  }
+})

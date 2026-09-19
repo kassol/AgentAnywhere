@@ -177,6 +177,7 @@ export async function createWorkStore(databaseUrl: string) {
     return rows.map(row => ({
       id: row.id, goal: row.goal, sourceUrl: row.sourceUrl, status: row.status, createdAt: row.createdAt, href: `/tasks/${row.id}`,
       runs: typeof row.runs === 'string' ? JSON.parse(row.runs) : row.runs,
+      interaction: typeof row.interaction === 'string' ? JSON.parse(row.interaction) : row.interaction,
       reports: reportLinks(row.id, row.reports),
     }))
   }
@@ -192,6 +193,11 @@ export async function createWorkStore(databaseUrl: string) {
     const rows = await db`SELECT t.id, t.goal, t.source_url AS "sourceUrl", t.status, t.created_at AS "createdAt",
       COALESCE((SELECT jsonb_agg(jsonb_build_object('id', r.id, 'status', r.status, 'createdAt', r.created_at, 'finishedAt', r.finished_at) ORDER BY r.created_at, r.id)
         FROM work_runs r WHERE r.task_id=t.id), '[]'::jsonb) AS runs,
+      (SELECT jsonb_build_object('id', i.id, 'kind', i.kind, 'question', i.question, 'status', i.status,
+          'runId', i.run_id, 'epoch', i.epoch)
+        FROM work_runs current_run JOIN work_interactions i ON i.run_id=current_run.id
+        WHERE current_run.task_id=t.id AND current_run.id=(SELECT latest.id FROM work_runs latest WHERE latest.task_id=t.id
+          ORDER BY latest.created_at DESC, latest.id DESC LIMIT 1) ORDER BY i.epoch DESC LIMIT 1) AS interaction,
       COALESCE((SELECT jsonb_agg(jsonb_build_object('versionId', v.id, 'runId', v.run_id, 'runStatus', r.status, 'createdAt', v.created_at) ORDER BY v.created_at DESC, v.id DESC)
         FROM work_artifacts a JOIN work_artifact_versions v ON v.artifact_id=a.id JOIN work_runs r ON r.id=v.run_id
         WHERE a.task_id=t.id AND a.kind='report'), '[]'::jsonb) AS reports
@@ -205,6 +211,11 @@ export async function createWorkStore(databaseUrl: string) {
     const rows = await db`SELECT t.id, t.goal, t.source_url AS "sourceUrl", t.status, t.created_at AS "createdAt",
       COALESCE((SELECT jsonb_agg(jsonb_build_object('id', r.id, 'status', r.status, 'createdAt', r.created_at, 'finishedAt', r.finished_at) ORDER BY r.created_at, r.id)
         FROM work_runs r WHERE r.task_id=t.id), '[]'::jsonb) AS runs,
+      (SELECT jsonb_build_object('id', i.id, 'kind', i.kind, 'question', i.question, 'status', i.status,
+          'runId', i.run_id, 'epoch', i.epoch)
+        FROM work_runs current_run JOIN work_interactions i ON i.run_id=current_run.id
+        WHERE current_run.task_id=t.id AND current_run.id=(SELECT latest.id FROM work_runs latest WHERE latest.task_id=t.id
+          ORDER BY latest.created_at DESC, latest.id DESC LIMIT 1) ORDER BY i.epoch DESC LIMIT 1) AS interaction,
       COALESCE((SELECT jsonb_agg(jsonb_build_object('versionId', v.id, 'runId', v.run_id, 'runStatus', r.status, 'createdAt', v.created_at) ORDER BY v.created_at DESC, v.id DESC)
         FROM work_artifacts a JOIN work_artifact_versions v ON v.artifact_id=a.id JOIN work_runs r ON r.id=v.run_id
         WHERE a.task_id=t.id AND a.kind='report'), '[]'::jsonb) AS reports
@@ -460,6 +471,95 @@ export async function createWorkStore(databaseUrl: string) {
     })
   }
 
+  async function freezeStewardInteraction(currentTurnId: string, operationId: string, taskId: string, interactionId: string, currentTime: () => number) {
+    return db.begin(async sql => {
+      const [turn] = await sql`SELECT id, status, active, active_ms AS "activeMs", active_limit_ms AS "activeLimitMs",
+        active_since AS "activeSince", budget_reason AS "budgetReason" FROM steward_turns WHERE id=${currentTurnId} FOR UPDATE`
+      const [operation] = await sql`SELECT turn_id AS "turnId", desired_kind AS "desiredKind", status, task_id AS "taskId",
+        run_id AS "runId", run_epoch AS "runEpoch", interaction_id AS "interactionId"
+        FROM steward_interaction_operations WHERE operation_id=${operationId} FOR UPDATE`
+      if (!turn || !operation || operation.turnId !== currentTurnId) throw new WorkInputError('回答操作回执无效')
+      if (operation.status === 'planned' || operation.status === 'accepted') {
+        if (operation.taskId !== taskId || operation.interactionId !== interactionId) throw new WorkConflictError('当前轮次的回答目标已冻结')
+        return { operationId, taskId: operation.taskId, runId: operation.runId, epoch: operation.runEpoch,
+          interactionId: operation.interactionId, interactionKind: operation.desiredKind, status: operation.status }
+      }
+      if (operation.status !== 'intent') throw new WorkConflictError('回答操作已结束')
+      if (!turn.active || turn.status !== 'running') throw new WorkConflictError('管家轮次已停止')
+      if (turn.budgetReason) throw new WorkConflictError('管家轮次额度已用尽')
+      const elapsed = Number(turn.activeMs) + (turn.activeSince ? Math.max(0, currentTime() - new Date(turn.activeSince).getTime()) : 0)
+      if (elapsed >= Number(turn.activeLimitMs)) throw new WorkConflictError('管家轮次活跃时间已用尽')
+      await sql`SELECT pg_advisory_xact_lock(720, hashtext(${taskId}))`
+      const [target] = await sql`SELECT i.run_id AS "runId" FROM work_interactions i
+        JOIN work_runs r ON r.id=i.run_id JOIN work_tasks t ON t.id=r.task_id
+        WHERE i.id=${interactionId} AND t.id=${taskId} AND t.owner_id='owner'`
+      if (!target) throw new WorkInputError('回答目标不存在')
+      const [run] = await sql`SELECT id AS "runId", epoch AS "runEpoch", status AS "runStatus", active,
+        cleanup_state AS "cleanupState", checkpoint_ref AS "checkpointRef"
+        FROM work_runs WHERE id=${target.runId} AND task_id=${taskId} FOR UPDATE`
+      const [interaction] = await sql`SELECT id AS "interactionId", kind, question, status AS "interactionStatus", epoch
+        FROM work_interactions WHERE id=${interactionId} AND run_id=${target.runId} FOR UPDATE`
+      if (!run || !interaction) throw new WorkInputError('回答目标不存在')
+      const [latest] = await sql`SELECT id FROM work_runs WHERE task_id=${taskId} ORDER BY created_at DESC, id DESC LIMIT 1`
+      const checkpoint = typeof run.checkpointRef === 'string' ? JSON.parse(run.checkpointRef) : run.checkpointRef
+      if (latest?.id !== run.runId || interaction.kind !== operation.desiredKind || interaction.interactionStatus !== 'pending'
+        || run.runStatus !== 'waiting' || run.active || run.cleanupState !== 'cleaned' || !checkpoint
+        || interaction.epoch !== run.runEpoch || interaction.epoch !== checkpoint.epoch) throw new WorkConflictError('问题尚未准备好回答')
+      await sql`UPDATE steward_interaction_operations SET task_id=${taskId}, run_id=${run.runId}, run_epoch=${interaction.epoch},
+        interaction_id=${interactionId}, interaction_kind=${interaction.kind}, status='planned',
+        candidates_json=COALESCE(candidates_json, ${JSON.stringify([{ id: taskId, interaction: { id: interactionId, kind: interaction.kind,
+          question: interaction.question, status: interaction.interactionStatus, runId: run.runId, epoch: interaction.epoch } }])}::jsonb)
+        WHERE operation_id=${operationId}`
+      return { operationId, taskId, runId: run.runId, epoch: interaction.epoch, interactionId,
+        interactionKind: interaction.kind, status: 'planned' as const }
+    })
+  }
+
+  async function applyStewardInteraction(currentTurnId: string, operationId: string, currentTime: () => number) {
+    return db.begin(async sql => {
+      const [turn] = await sql`SELECT id, thread_id AS "threadId", status, active, active_ms AS "activeMs",
+        active_limit_ms AS "activeLimitMs", active_since AS "activeSince", budget_reason AS "budgetReason"
+        FROM steward_turns WHERE id=${currentTurnId} FOR UPDATE`
+      const [operation] = await sql`SELECT turn_id AS "turnId", answer, decision, status, task_id AS "taskId", run_id AS "runId",
+        run_epoch AS "runEpoch", interaction_id AS "interactionId", interaction_kind AS "interactionKind",
+        result_json AS "resultJson", failure FROM steward_interaction_operations WHERE operation_id=${operationId} FOR UPDATE`
+      const [resume] = operation ? await sql`SELECT 1 FROM steward_interaction_resumes WHERE turn_id=${currentTurnId} AND operation_id=${operationId}` : []
+      if (!turn || !operation || operation.turnId !== currentTurnId && !resume) throw new WorkInputError('回答操作回执无效')
+      if (operation.status === 'accepted') return typeof operation.resultJson === 'string' ? JSON.parse(operation.resultJson) : operation.resultJson
+      if (operation.status !== 'planned') return { operationId, status: operation.status, failure: operation.failure }
+      const fail = async (status: 'unexecuted' | 'failed', failure: string) => {
+        await sql`UPDATE steward_interaction_operations SET status=${status}, failure=${failure}, finished_at=now() WHERE operation_id=${operationId}`
+        return { operationId, status, failure }
+      }
+      if (!turn.active || turn.status !== 'running') return fail('unexecuted', '管家轮次已停止')
+      if (turn.budgetReason) return fail('unexecuted', '管家轮次额度已用尽')
+      const elapsed = Number(turn.activeMs) + (turn.activeSince ? Math.max(0, currentTime() - new Date(turn.activeSince).getTime()) : 0)
+      if (elapsed >= Number(turn.activeLimitMs)) {
+        await sql`UPDATE steward_turns SET budget_reason='time' WHERE id=${currentTurnId}`
+        return fail('unexecuted', '管家轮次活跃时间已用尽')
+      }
+      const answer = operation.decision ?? operation.answer
+      let resolved
+      try {
+        resolved = await resolveInteractionInTransaction(sql, operation.interactionId, answer, {
+          taskId: operation.taskId, runId: operation.runId, epoch: operation.runEpoch, kind: operation.interactionKind,
+        })
+      } catch (error) {
+        if (!(error instanceof WorkConflictError || error instanceof WorkInputError)) throw error
+        return fail('failed', error.message.slice(0, 500))
+      }
+      if (!resolved) return fail('failed', '已冻结问题不存在')
+      const receipt = { interactionId: resolved.interactionId, taskId: resolved.taskId, runId: resolved.runId,
+        epoch: resolved.epoch, kind: resolved.kind, answer: resolved.answer, runStatus: resolved.runStatus }
+      await sql`UPDATE steward_interaction_operations SET status='accepted', result_json=${JSON.stringify(receipt)}::jsonb,
+        failure=NULL, finished_at=now() WHERE operation_id=${operationId}`
+      await sql`INSERT INTO steward_thread_tasks (thread_id, task_id) VALUES (${turn.threadId}, ${operation.taskId}) ON CONFLICT DO NOTHING`
+      await sql`INSERT INTO steward_events (turn_id, event_id, type, payload) VALUES (${currentTurnId}, ${crypto.randomUUID()},
+        'work.interaction-answered', ${JSON.stringify({ operationId, ...receipt })}::jsonb)`
+      return receipt
+    })
+  }
+
   async function requestCleanupRetry(taskId: string) {
     const rows = await db`UPDATE work_runs SET cleanup_state='retry_requested'
       WHERE id = (SELECT r.id FROM work_runs r JOIN work_tasks t ON t.id = r.task_id
@@ -690,11 +790,8 @@ export async function createWorkStore(databaseUrl: string) {
     })
   }
 
-  async function resolveInteraction(id: string, body: unknown) {
-    if (!body || typeof body !== 'object' || Array.isArray(body)) throw new WorkInputError('回答无效')
-    const answer = typeof (body as Record<string, unknown>).answer === 'string' ? (body as Record<string, string>).answer.trim() : ''
-    if (!answer || answer.length > 4000) throw new WorkInputError('回答须为 1–4000 字')
-    return db.begin(async sql => {
+  async function resolveInteractionInTransaction(sql: SQL, id: string, answer: string,
+    expected?: { taskId: string; runId: string; epoch: number; kind: 'question' | 'limit' }) {
       const [target] = await sql`SELECT i.run_id AS "runId" FROM work_interactions i
         JOIN work_runs r ON r.id=i.run_id JOIN work_tasks t ON t.id=r.task_id
         WHERE i.id=${id} AND t.owner_id='owner'`
@@ -702,14 +799,20 @@ export async function createWorkStore(databaseUrl: string) {
       const [run] = await sql`SELECT id, epoch, task_id AS "taskId", status, active, cleanup_state AS "cleanupState", checkpoint_ref AS "checkpointRef",
         model_call_limit AS "modelCallLimit", active_limit_ms AS "activeLimitMs", budget_reason AS "budgetReason"
         FROM work_runs WHERE id=${target.runId} FOR UPDATE`
-      const [interaction] = await sql`SELECT status, answer, kind FROM work_interactions WHERE id=${id} AND run_id=${target.runId} FOR UPDATE`
+      const [interaction] = await sql`SELECT status, answer, kind, epoch FROM work_interactions WHERE id=${id} AND run_id=${target.runId} FOR UPDATE`
       if (!interaction || !run) return null
+      if (expected && (run.taskId !== expected.taskId || run.id !== expected.runId
+        || interaction.epoch !== expected.epoch || interaction.kind !== expected.kind)) throw new WorkConflictError('已冻结问题不属于当前执行')
       if (interaction.status === 'answered') {
         if (interaction.answer !== answer) throw new WorkConflictError('问题已用不同内容回答')
-        return { created: false }
+        return { created: false, interactionId: id, taskId: run.taskId, runId: run.id, epoch: interaction.epoch,
+          kind: interaction.kind, answer, runStatus: run.status }
       }
+      if (expected && run.epoch !== expected.epoch) throw new WorkConflictError('已冻结问题不属于当前执行')
       if (interaction.kind === 'limit' && !['continue', 'finish'].includes(answer)) throw new WorkInputError('请选择继续或结束')
       if (interaction.status !== 'pending' || run.status !== 'waiting' || run.active || run.cleanupState !== 'cleaned' || !run.checkpointRef) throw new WorkConflictError('问题尚未准备好回答')
+      const checkpoint = typeof run.checkpointRef === 'string' ? JSON.parse(run.checkpointRef) : run.checkpointRef
+      if (interaction.epoch !== run.epoch || checkpoint?.epoch !== run.epoch) throw new WorkConflictError('问题执行版本已失效')
       await sql`UPDATE work_interactions SET status='answered', answer=${answer}, answered_at=now() WHERE id=${id}`
       if (interaction.kind === 'limit') {
         const continued = answer === 'continue'
@@ -724,14 +827,24 @@ export async function createWorkStore(databaseUrl: string) {
           await retainCheckpointArtifacts(sql, run.taskId, run)
           await sql`UPDATE work_runs SET status='cancelled', finished_at=now() WHERE id=${target.runId}`
           await sql`UPDATE work_tasks SET status='cancelled' WHERE id=${run.taskId}`
-          return { created: true }
+          return { created: true, interactionId: id, taskId: run.taskId, runId: run.id, epoch: interaction.epoch,
+            kind: interaction.kind, answer, runStatus: 'cancelled' }
         }
         await sql`UPDATE work_runs SET model_call_limit=${nextCalls}, active_limit_ms=${nextMs}, budget_reason=NULL WHERE id=${target.runId}`
       }
       await sql`UPDATE work_runs SET status='queued', cleanup_state='none' WHERE id=${target.runId}`
       await sql`UPDATE work_tasks SET status='queued' WHERE id=${run.taskId}`
       await sql`INSERT INTO work_outbox (run_id) VALUES (${target.runId}) ON CONFLICT DO NOTHING`
-      return { created: true }
+      return { created: true, interactionId: id, taskId: run.taskId, runId: run.id, epoch: interaction.epoch,
+        kind: interaction.kind, answer, runStatus: 'queued' }
+  }
+
+  async function resolveInteraction(id: string, body: unknown) {
+    if (!body || typeof body !== 'object' || Array.isArray(body)) throw new WorkInputError('回答无效')
+    const answer = typeof (body as Record<string, unknown>).answer === 'string' ? (body as Record<string, string>).answer.trim() : ''
+    if (!answer || answer.length > 4000) throw new WorkInputError('回答须为 1–4000 字')
+    return db.begin(async sql => {
+      return resolveInteractionInTransaction(sql, id, answer)
     })
   }
 
@@ -807,5 +920,5 @@ export async function createWorkStore(databaseUrl: string) {
 
   async function close() { await db.close() }
 
-  return { list, detail, events, create, continueTask, retryTask, appendRunMessage, resolveInteraction, pendingInteractions, pendingRunMessages, acknowledgeRunMessage, cancel, isRunStopped, artifactVersion, readArtifact, stewardCatalog, stewardMetadata, stewardStatusCards, stewardRead, stewardModelStats, createFromSteward, freezeStewardControl, applyStewardControl, requestCleanupRetry, resolveRunModelConnection, authorizeModelProxy, reserveModelAttempt, recordModelUsage, close }
+  return { list, detail, events, create, continueTask, retryTask, appendRunMessage, resolveInteraction, pendingInteractions, pendingRunMessages, acknowledgeRunMessage, cancel, isRunStopped, artifactVersion, readArtifact, stewardCatalog, stewardMetadata, stewardStatusCards, stewardRead, stewardModelStats, createFromSteward, freezeStewardControl, applyStewardControl, freezeStewardInteraction, applyStewardInteraction, requestCleanupRetry, resolveRunModelConnection, authorizeModelProxy, reserveModelAttempt, recordModelUsage, close }
 }

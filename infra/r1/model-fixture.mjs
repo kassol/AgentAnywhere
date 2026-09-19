@@ -2,6 +2,7 @@ import http from 'node:http'
 
 const calls = []
 const waitingSearch = []
+const waitingAnswers = []
 const waiting = new Set()
 const transientFailures = new Set()
 const interrupted = new Set()
@@ -30,7 +31,40 @@ function stewardQuery(body, response, responses) {
   const dispatch = body.model.startsWith('fixture-steward-dispatch-')
   let holdDispatch = false
   const control = body.model.startsWith('fixture-steward-control-')
-  if (control) {
+  const interaction = body.model.startsWith('fixture-steward-interaction-')
+  const retry = body.model.startsWith('fixture-steward-retry-')
+  if (body.model.startsWith('fixture-steward-summary-')) {
+    answer = system.includes('对话摘要器') ? '较早讨论摘要：保留 SUMMARY_GOAL、SUMMARY_CONSTRAINT 和 SUMMARY_PENDING，原文仍保留；没有获得新的工作操作授权。' : '已记录本轮讨论。'
+  } else if (interaction || retry) {
+    const results = outputs.map(output => { try { return JSON.parse(output) } catch { return {} } })
+    const prefix = interaction ? 'R2_INTERACTION' : 'R2_RETRY'
+    if (planner && user.includes(`${prefix}_RESUME`) && !outputs.length) {
+      name = interaction ? 'resume_interaction_answer' : 'resume_work_retry'
+      args = { operationId: ids[0] }
+    } else if (planner && !outputs.length) {
+      if (interaction) {
+        name = 'freeze_interaction_answer'
+        const decision = /^(继续|结束)(工作 [0-9a-f-]{36})?$/.exec(user)?.[1]
+        args = { query: ids[0] ?? '', answer: decision ? null : user.match(/^回答(?:工作 [0-9a-f-]{36})?[：:]([\s\S]+)$/)?.[1]?.trim() ?? user, decision: decision === '继续' ? 'continue' : decision === '结束' ? 'finish' : null }
+      } else {
+        name = 'freeze_work_retry'
+        args = { mode: user.includes('改用模型') || user.includes('R2_RETRY_REPLACE') ? 'replacement' : 'same', query: ids[0] ?? '', modelId: user.includes('改用模型') || user.includes('R2_RETRY_REPLACE') ? user.match(/模型[：: ]+([\w-]+)/)?.[1] ?? 'fixture-split' : null }
+      }
+    } else if (planner && outputs.length === 1) {
+      name = interaction ? 'find_interaction_candidates' : 'find_retry_candidates'; args = { cursor: 0 }
+    } else if (planner && outputs.length === 2) {
+      const candidate = results[1].items?.find(item => !ids.length || item.id === ids[0])
+      if (candidate) {
+        name = interaction ? 'freeze_interaction_target' : 'freeze_retry_target'
+        args = { operationId: results[0].operationId, taskId: candidate.id, ...(interaction ? { interactionId: candidate.interaction?.id } : {}) }
+      }
+    } else if (!planner) {
+      const apply = tools.find(item => item.name === (interaction ? 'apply_frozen_interaction_answer' : 'apply_frozen_retry'))
+      holdDispatch = (user.includes(`${prefix}_HOLD`) || body.model.includes('-hold-')) && outputs.length === 1
+      if (apply && !outputs.length) { name = apply.name; args = { operationId: apply.parameters.properties.operationId.const } }
+      else answer = '操作结果请查看持久回执。'
+    }
+  } else if (control) {
     const results = outputs.map(output => { try { return JSON.parse(output) } catch { return {} } })
     if (planner && user.includes('R2_CONTROL_RESUME') && !outputs.length) {
       name = 'resume_work_control'; args = { operationId: ids[0] }
@@ -139,6 +173,15 @@ http.createServer(async (request, response) => {
     response.writeHead(200, { 'content-type': 'application/json' })
     return response.end(JSON.stringify({ released: true }))
   }
+  if (request.url === '/release-answer' && request.method === 'POST') {
+    for (const release of waitingAnswers.splice(0)) release()
+    response.writeHead(200, { 'content-type': 'application/json' })
+    return response.end(JSON.stringify({ released: true }))
+  }
+  if (request.url === '/waiting-answer') {
+    response.writeHead(200, { 'content-type': 'application/json' })
+    return response.end(JSON.stringify({ count: waitingAnswers.length }))
+  }
   if (request.url === '/waiting-search') {
     response.writeHead(200, { 'content-type': 'application/json' })
     return response.end(JSON.stringify({ count: waitingSearch.length }))
@@ -157,7 +200,20 @@ http.createServer(async (request, response) => {
   request.setEncoding('utf8')
   for await (const chunk of request) raw += chunk
   const body = JSON.parse(raw)
-  if (body.model.startsWith('fixture-steward-query-') || body.model.startsWith('fixture-steward-dispatch-') || body.model.startsWith('fixture-steward-control-')) return stewardQuery(body, response, responses)
+  if (body.model === 'fixture-steward-interaction-before-chat'
+    && body.tools?.some(tool => tool.function?.name === 'apply_frozen_interaction_answer')
+    && !body.messages?.some(message => message.role === 'tool')) {
+    await new Promise(resolve => {
+      waitingAnswers.push(resolve)
+      response.on('close', () => {
+        const index = waitingAnswers.indexOf(resolve)
+        if (index !== -1) waitingAnswers.splice(index, 1)
+        resolve()
+      })
+    })
+    if (response.destroyed) return
+  }
+  if (['query', 'dispatch', 'control', 'interaction', 'retry', 'summary'].some(kind => body.model.startsWith(`fixture-steward-${kind}-`))) return stewardQuery(body, response, responses)
   if (responses) {
     if (body.model === 'fixture-steward-responses') {
       calls.push({ model: body.model, protocol: 'responses', stream: body.stream, input: body.input })
