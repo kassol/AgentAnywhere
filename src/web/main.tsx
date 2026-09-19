@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { createRoot } from 'react-dom/client'
 import { ModelSettings } from './ModelSettings'
 import { Work } from './Work'
+import { Steward } from './Steward'
 import './style.css'
 
 function Login() {
@@ -50,6 +51,7 @@ function Login() {
 
 function Workbench() {
   const settings = location.pathname === '/settings'
+  const work = location.pathname === '/tasks' || location.pathname.startsWith('/tasks/')
   const [error, setError] = useState('')
 
   async function logout() {
@@ -63,12 +65,13 @@ function Workbench() {
       <aside className="sidebar" aria-label="主导航">
         <div className="brand">AgentAnywhere<span>个人委托工作台</span></div>
         <nav>
-          <a href="/" aria-current={!settings ? 'page' : undefined}>工作</a>
+          <a href="/" aria-current={!settings && !work ? 'page' : undefined}>管家</a>
+          <a href="/tasks" aria-current={work ? 'page' : undefined}>工作</a>
           <a href="/settings" aria-current={settings ? 'page' : undefined}>设置</a>
         </nav>
       </aside>
       <main className="content">
-        <header className="page-header"><h1>{settings ? '设置' : '工作'}</h1></header>
+        <header className="page-header"><h1>{settings ? '设置' : work ? '工作' : '管家'}</h1></header>
         {error && <p className="error" role="alert">{error}</p>}
         {settings ? (
           <><ModelSettings /><section className="settings-card account-card">
@@ -76,7 +79,7 @@ function Workbench() {
             <p className="muted">当前已登录。</p>
             <button type="button" className="secondary" onClick={logout}>退出登录</button>
           </section></>
-        ) : <Work />}
+        ) : work ? <Work /> : <Steward />}
       </main>
     </div>
   )

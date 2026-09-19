@@ -223,7 +223,7 @@ export function Work() {
   }
 
   if (detailId) return <>
-    <a href="/">返回工作列表</a>
+    <a href="/tasks">返回工作列表</a>
     {error && <p className="error" role="alert">{error}</p>}
     {!detail && !error && <p className="muted" role="status">正在加载工作…</p>}
     {detail && <section className="work-detail">

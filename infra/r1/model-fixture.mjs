@@ -57,6 +57,20 @@ http.createServer(async (request, response) => {
   for await (const chunk of request) raw += chunk
   const body = JSON.parse(raw)
   if (responses) {
+    if (body.model === 'fixture-steward-responses') {
+      calls.push({ model: body.model, protocol: 'responses', stream: body.stream, input: body.input })
+      response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' })
+      const responseId = `resp_${calls.length}`
+      const item = { id: 'msg_steward', type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: '管家响应已完成。', annotations: [] }] }
+      send(response, { type: 'response.output_item.added', output_index: 0, item: { ...item, content: [] } })
+      for (const delta of ['管家响应', '已完成。']) {
+        send(response, { type: 'response.output_text.delta', output_index: 0, content_index: 0, delta })
+        await new Promise(resolve => setTimeout(resolve, 80))
+      }
+      send(response, { type: 'response.output_item.done', output_index: 0, item })
+      send(response, { type: 'response.completed', response: { id: responseId, status: 'completed', output: [item], usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 } } })
+      return response.end()
+    }
     const observation = Array.isArray(body.input) ? body.input.filter(item => item.type === 'function_call_output').map(item => item.output) : []
     const echoed = observation.some(item => item.includes('fixture observation'))
     const submitted = observation.some(item => item.includes('报告已保存'))
@@ -103,6 +117,18 @@ http.createServer(async (request, response) => {
     return response.end()
   }
   const observation = body.messages.filter(message => message.role === 'tool').flatMap(message => typeof message.content === 'string' ? [message.content] : message.content?.filter?.(part => part.type === 'text').map(part => part.text) || [])
+  if (body.model === 'fixture-steward-chat' || body.model === 'fixture-steward-hold') {
+    calls.push({ model: body.model, protocol: 'chat-completions', stream: body.stream, messages: body.messages })
+    response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' })
+    const common = { id: `steward-${calls.length}`, object: 'chat.completion.chunk', created: 1, model: body.model }
+    send(response, { ...common, choices: [{ index: 0, delta: { role: 'assistant', content: '管家响应' }, finish_reason: null }] })
+    if (body.model === 'fixture-steward-hold') return hold(response, { ...common, choices: [{ index: 0, delta: { content: '仍在处理' }, finish_reason: null }] })
+    await new Promise(resolve => setTimeout(resolve, 80))
+    send(response, { ...common, choices: [{ index: 0, delta: { content: '已完成。' }, finish_reason: null }] })
+    send(response, { ...common, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })
+    send(response, { ...common, choices: [], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } })
+    return response.end('data: [DONE]\n\n')
+  }
   if (['fixture-research', 'fixture-url', 'fixture-rejected', 'fixture-control-ip'].includes(body.model)) {
     const searched = observation.some(item => item.includes('search_snippet'))
     const opened = body.messages.some(item => item.role === 'assistant' && item.tool_calls?.some(call => call.function?.name === 'open_public_page'))
@@ -230,4 +256,4 @@ http.createServer(async (request, response) => {
     send(response, metering)
   }
   response.end('data: [DONE]\n\n')
-}).listen(3002, '0.0.0.0')
+}).listen(Number(process.env.MODEL_FIXTURE_PORT ?? 3002), '0.0.0.0')

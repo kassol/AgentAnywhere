@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises'
 import type { ServerWebSocket } from 'bun'
 import { createModelConnectionStore } from './model-connection'
 import { createWorkStore, WorkConflictError, WorkInputError } from './work'
+import { createStewardService, StewardConflictError, StewardInputError } from './steward'
 
 function modelPath(protocol: 'chat-completions' | 'responses') {
   return protocol === 'chat-completions' ? 'chat/completions' : 'responses'
@@ -72,6 +73,7 @@ type Session = { expires: number; sockets: Set<ServerWebSocket<{ token: string }
 const cookieName = 'agentanywhere_session'
 const day = 86_400_000
 const assets = join(import.meta.dir, '../dist')
+const uuidValue = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 async function readLimited(request: Request | Response, limit = 1024): Promise<string | null> {
   const reader = request.body?.getReader()
@@ -94,6 +96,7 @@ export async function startServer(config: Config) {
   const modelConnection = createModelConnectionStore(config.dataDir ?? join(process.cwd(), 'data'), config.modelTimeoutMs, config.directoryUrl)
   await modelConnection.load()
   const work = config.databaseUrl ? await createWorkStore(config.databaseUrl) : null
+  const steward = config.databaseUrl ? await createStewardService(config.databaseUrl, modelConnection.resolveCredential, config.testNow) : null
   const artifactDir = config.artifactDir ?? join(config.dataDir ?? join(process.cwd(), 'data'), 'artifacts')
   const sessions = new Map<string, Session>()
   const attempts = new Map<string, { count: number; until: number }>()
@@ -131,7 +134,7 @@ export async function startServer(config: Config) {
   const json = (body: unknown, status = 200) => Response.json(body, { status, headers: common })
   const redirect = (path: '/' | '/login') => new Response(null, { status: 302, headers: { ...common, location: path } })
 
-  return Bun.serve<{ token: string }>({
+  const app = Bun.serve<{ token: string }>({
     hostname: config.host ?? '127.0.0.1',
     port: config.port ?? 3000,
     async fetch(request, server) {
@@ -229,6 +232,59 @@ export async function startServer(config: Config) {
         return redirect('/login')
       }
       if (path === '/api/session' && request.method === 'GET') return json({ authenticated: true })
+      if (path === '/api/steward/threads' && request.method === 'GET') return json(steward ? await steward.list() : [])
+      if (path === '/api/steward/threads' && request.method === 'POST') {
+        if (!sameOrigin(request)) return json({ error: 'Forbidden' }, 403)
+        if (!steward) return json({ error: '管家存储未配置' }, 503)
+        const body = await readLimited(request, 1024)
+        if (body === null) return json({ error: '请求内容过大' }, 413)
+        try {
+          const result = await steward.create(JSON.parse(body))
+          return json(result.thread, result.created ? 201 : 200)
+        } catch (error) {
+          if (error instanceof SyntaxError) return json({ error: 'JSON 格式无效' }, 400)
+          if (error instanceof StewardInputError) return json({ error: error.message }, 400)
+          if (error instanceof StewardConflictError) return json({ error: error.message }, 409)
+          return json({ error: '创建对话失败' }, 500)
+        }
+      }
+      const stewardDetailMatch = /^\/api\/steward\/threads\/([0-9a-f-]{36})$/i.exec(path)
+      if (stewardDetailMatch && request.method === 'GET') {
+        if (!uuidValue.test(stewardDetailMatch[1])) return json({ error: 'Not found' }, 404)
+        const thread = await steward?.detail(stewardDetailMatch[1])
+        return thread ? json(thread) : json({ error: 'Not found' }, 404)
+      }
+      const stewardEventsMatch = /^\/api\/steward\/threads\/([0-9a-f-]{36})\/events$/i.exec(path)
+      if (stewardEventsMatch && request.method === 'GET') {
+        if (!uuidValue.test(stewardEventsMatch[1])) return json({ error: 'Not found' }, 404)
+        const after = Number(url.searchParams.get('after') ?? 0)
+        if (!Number.isSafeInteger(after) || after < 0) return json({ error: 'after 无效' }, 400)
+        return json(steward ? await steward.events(stewardEventsMatch[1], after) : [])
+      }
+      const stewardTurnMatch = /^\/api\/steward\/threads\/([0-9a-f-]{36})\/turns$/i.exec(path)
+      if (stewardTurnMatch && request.method === 'POST') {
+        if (!uuidValue.test(stewardTurnMatch[1])) return json({ error: 'Not found' }, 404)
+        if (!sameOrigin(request)) return json({ error: 'Forbidden' }, 403)
+        if (!steward) return json({ error: '管家存储未配置' }, 503)
+        const body = await readLimited(request, 20 * 1024)
+        if (body === null) return json({ error: '请求内容过大' }, 413)
+        try {
+          const result = await steward.submit(stewardTurnMatch[1], JSON.parse(body), modelConnection.forRun())
+          return result ? json(result.turn, result.created ? 202 : 200) : json({ error: 'Not found' }, 404)
+        } catch (error) {
+          if (error instanceof SyntaxError) return json({ error: 'JSON 格式无效' }, 400)
+          if (error instanceof StewardInputError) return json({ error: error.message }, 400)
+          if (error instanceof StewardConflictError) return json({ error: error.message }, 409)
+          return json({ error: '发送消息失败' }, 500)
+        }
+      }
+      const stewardStopMatch = /^\/api\/steward\/turns\/([0-9a-f-]{36})\/stop$/i.exec(path)
+      if (stewardStopMatch && request.method === 'POST') {
+        if (!uuidValue.test(stewardStopMatch[1])) return json({ error: 'Not found' }, 404)
+        if (!sameOrigin(request)) return json({ error: 'Forbidden' }, 403)
+        const result = await steward?.stop(stewardStopMatch[1])
+        return result ? json(result, result.accepted ? 202 : 200) : json({ error: 'Not found' }, 404)
+      }
       const artifactMatch = /^\/api\/artifacts\/([0-9a-f-]{36})\/(content|download)$/i.exec(path)
       if (artifactMatch && request.method === 'GET') {
         const artifact = await work?.artifactVersion(artifactMatch[1])
@@ -415,7 +471,7 @@ export async function startServer(config: Config) {
         if (token && server.upgrade(request, { data: { token } })) return undefined
         return json({ error: 'WebSocket upgrade required' }, 426)
       }
-      if ((path === '/' || path === '/settings' || /^\/tasks\/[0-9a-f-]{36}$/i.test(path)) && request.method === 'GET') return html()
+      if ((path === '/' || path === '/tasks' || path === '/settings' || /^\/tasks\/[0-9a-f-]{36}$/i.test(path) || /^\/steward\/[0-9a-f-]{36}$/i.test(path)) && request.method === 'GET') return html()
       return json({ error: 'Not found' }, 404)
     },
     websocket: {
@@ -429,6 +485,10 @@ export async function startServer(config: Config) {
       close(socket) { sessions.get(socket.data.token)?.sockets.delete(socket) },
     },
   })
+  const stop = app.stop.bind(app)
+  app.stop = async force => { stop(force); await steward?.close() }
+  steward?.start()
+  return app
 }
 
 async function html() {
