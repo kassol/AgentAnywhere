@@ -2,7 +2,11 @@ import { expect, test } from 'bun:test'
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { SQL } from 'bun'
 import { startServer } from './server'
+
+const databaseUrl = process.env.AGENTANYWHERE_TEST_DATABASE_URL
+if (!databaseUrl) throw new Error('AGENTANYWHERE_TEST_DATABASE_URL is required for the model settings public API regression')
 
 test('connection test sends the selected model and protocol to the configured gateway', async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'agentanywhere-connection-test-'))
@@ -223,6 +227,78 @@ test('owner sees field sources, can revoke overrides and explicit alias mapping,
     app.stop(true)
     gateway.stop(true)
     directory.stop(true)
+    await rm(dataDir, { recursive: true, force: true })
+  }
+})
+
+test('owner persists a steward model and an explicit eligible research pool without exposing credentials', async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'agentanywhere-steward-models-'))
+  const schema = `model_settings_test_${crypto.randomUUID().replaceAll('-', '')}`
+  const admin = new SQL(databaseUrl)
+  await admin.unsafe(`CREATE SCHEMA ${schema}`)
+  const isolatedUrl = new URL(databaseUrl)
+  isolatedUrl.searchParams.set('options', `-csearch_path=${schema}`)
+  const password = 'test-password-12345'
+  let app = await startServer({ password, port: 0, dataDir, databaseUrl: isolatedUrl.toString() })
+  let base = app.url.origin
+  async function login() {
+    const response = await fetch(`${base}/api/auth`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password }) })
+    return response.headers.get('set-cookie')!
+  }
+  let cookie = await login()
+  const request = (path: string, method = 'GET', body?: unknown) => fetch(`${base}${path}`, {
+    method, headers: { cookie, 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body),
+  })
+  const valid = (id: string, tools = true) => ({ id, protocol: 'responses', overrides: { contextWindow: 128000, maxTokens: 8192, input: ['text'], reasoning: true, tools } })
+  try {
+    expect((await request('/api/model-connection', 'PUT', { endpoint: 'https://models.example/v1', apiKey: 'private-secret' })).status).toBe(200)
+    const saved = await request('/api/model-connection/models', 'PUT', {
+      defaultModel: 'research-model',
+      models: [valid('steward-model'), valid('research-model')],
+      stewardModel: { modelId: 'steward-model', protocol: 'chat-completions' },
+      researchModelPool: ['research-model'],
+    })
+    expect(saved.status).toBe(200)
+    const visible = await saved.json() as Record<string, any>
+    expect(visible.stewardModel).toEqual({ modelId: 'steward-model', protocol: 'chat-completions' })
+    expect(visible.researchModelPool).toEqual(['research-model'])
+    expect(visible.researchPoolStatus).toEqual({ status: 'ready', eligibleModels: 1 })
+    expect(visible.models.find((model: any) => model.id === 'research-model').researchReadiness).toMatchObject({ status: 'ready-to-try', verification: 'unknown' })
+    expect(JSON.stringify(visible)).not.toContain('private-secret')
+
+    for (const body of [
+      { models: [valid('steward-model')], defaultModel: null, stewardModel: null, researchModelPool: ['missing-model'] },
+      { models: [valid('no-tools', false)], defaultModel: null, stewardModel: null, researchModelPool: ['no-tools'] },
+      { models: [{ id: 'incomplete', protocol: 'responses', overrides: { tools: true } }], defaultModel: null, stewardModel: { modelId: 'incomplete', protocol: 'responses' }, researchModelPool: [] },
+      { models: [{ id: 'image-only', protocol: 'responses', overrides: { contextWindow: 128000, maxTokens: 8192, input: ['image'], reasoning: true, tools: true } }], defaultModel: null, stewardModel: null, researchModelPool: ['image-only'] },
+    ]) {
+      const rejected = await request('/api/model-connection/models', 'PUT', body)
+      expect(rejected.status).toBe(400)
+      expect((await rejected.json()).error).toMatch(/调研模型池|工具能力|运行参数/)
+    }
+
+    app.stop(true)
+    app = await startServer({ password, port: 0, dataDir, databaseUrl: isolatedUrl.toString() })
+    base = app.url.origin
+    cookie = await login()
+    const reopened = await (await request('/api/model-connection')).json() as Record<string, any>
+    expect(reopened.stewardModel).toEqual({ modelId: 'steward-model', protocol: 'chat-completions' })
+    expect(reopened.researchModelPool).toEqual(['research-model'])
+    expect(JSON.stringify(reopened)).not.toContain('private-secret')
+
+    expect((await request('/api/model-connection/models', 'PUT', {
+      defaultModel: 'research-model', models: [valid('steward-model'), valid('research-model')],
+    })).status).toBe(200)
+    const r1Compatible = await (await request('/api/model-connection')).json() as Record<string, any>
+    expect(r1Compatible.stewardModel.modelId).toBe('steward-model')
+    expect(r1Compatible.researchModelPool).toEqual(['research-model'])
+    const created = await request('/api/tasks', 'POST', { requestId: crypto.randomUUID(), goal: 'R1 直接创建保持可用', modelId: 'research-model' })
+    expect(created.status).toBe(201)
+    expect(await created.json()).toMatchObject({ goal: 'R1 直接创建保持可用', run: { model: { id: 'research-model', protocol: 'responses' } } })
+  } finally {
+    app.stop(true)
+    await admin.unsafe(`DROP SCHEMA ${schema} CASCADE`)
+    await admin.close()
     await rm(dataDir, { recursive: true, force: true })
   }
 })

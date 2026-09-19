@@ -26,7 +26,7 @@ React/TypeScript、Bun、PostgreSQL、Node.js 24.21、pg-boss 12.26.3、Pi 0.85.
 - `PYTHONDONTWRITEBYTECODE=1 python3 infra/w0/sandbox/check.py`：检查 W0 runtime 配置合并与补丁保护。
 
 - `bun install --frozen-lockfile`：安装固定依赖。
-- `bun run build && bun run typecheck && bun test`：构建、类型检查与应用回归。
+- `bun run build && bun run typecheck && bun test`：构建、类型检查与应用回归；运行回归前须设置独立测试库的 `AGENTANYWHERE_TEST_DATABASE_URL`，缺失时明确失败。
 - `AGENTANYWHERE_TEST_DATABASE_URL='独立测试库连接串' bun test src/work.test.ts`：工作创建、追加要求和完成后继续工作的公开 API 与真实 PostgreSQL 回归。
 - `AGENTANYWHERE_PASSWORD='本机专用的至少十二位密码' DATABASE_URL='PostgreSQL 连接串' bun run start`：本地启动；模型配置目录通过 `AGENTANYWHERE_DATA_DIR` 指定，默认 `./data`。R1 部署与隔离回归见 `infra/r1/README.md`。
 
@@ -69,3 +69,4 @@ React/TypeScript、Bun、PostgreSQL、Node.js 24.21、pg-boss 12.26.3、Pi 0.85.
 - 2026-09-18：加入 R1-12 失败检查点、手动重试与执行上限，通过隔离验收。
 
 - 2026-09-19：首版发布至 cc-la 公网，完成统一回归、真实网关、浏览器与 W0 归档回收；证据见 `docs/evidence/r1-14.md`。
+- 2026-09-19：加入 R2-01 管家模型与人工调研模型池配置，实际调研验证状态留待后续工作记录接入。

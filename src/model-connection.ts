@@ -6,11 +6,13 @@ type Input = 'text' | 'image'
 type Field = 'contextWindow' | 'maxTokens' | 'input' | 'reasoning' | 'tools' | 'inputPrice' | 'outputPrice'
 type Metadata = { contextWindow?: number; maxTokens?: number; input?: Input[]; inputModalities?: string[]; reasoning?: boolean; tools?: boolean; inputPrice?: number; outputPrice?: number; priceNote?: string }
 export type ModelSelection = Metadata & { id: string; protocol: Protocol; catalogId?: string; catalogMatch?: string; overrides?: Partial<Metadata>; sources?: Partial<Record<Field, { source: 'manual' | 'gateway' | 'models.dev'; updatedAt: string }>> }
+type StewardModel = { modelId: string; protocol: Protocol }
+type ResearchReadiness = { status: 'ready-to-try' | 'connection-missing' | 'missing-parameters' | 'tools-unsupported'; reasons: string[]; verification: 'unknown' }
 type CatalogModel = { id: string; name: string; ownedBy?: string; type?: string; created?: number; metadata?: Metadata }
 type Discovery = { status: 'never' | 'ok' | 'stale' | 'unauthorized' | 'timeout' | 'empty' | 'error'; updatedAt?: string; successAt?: string }
 type Directory = { status: 'never' | 'ok' | 'stale' | 'timeout' | 'error'; updatedAt?: string; successAt?: string; models: Record<string, Metadata> }
 type StoredModel = { id: string; protocol: Protocol; catalogId?: string; overrides: Partial<Metadata>; overrideUpdatedAt?: Partial<Record<Field, string>>; updatedAt?: string }
-type Stored = { endpoint: string; apiKey: string; credentialVersion?: string; credentialVersions?: Record<string, { endpoint: string; apiKey: string }>; catalog: CatalogModel[]; catalogSourceEndpoint: string | null; catalogCurrent?: boolean; models: StoredModel[]; defaultModel: string | null; discovery: Discovery; directory?: Directory }
+type Stored = { endpoint: string; apiKey: string; credentialVersion?: string; credentialVersions?: Record<string, { endpoint: string; apiKey: string }>; catalog: CatalogModel[]; catalogSourceEndpoint: string | null; catalogCurrent?: boolean; models: StoredModel[]; defaultModel: string | null; stewardModel?: StewardModel | null; researchModelPool?: string[]; discovery: Discovery; directory?: Directory }
 
 const fields: Field[] = ['contextWindow', 'maxTokens', 'input', 'reasoning', 'tools', 'inputPrice', 'outputPrice']
 const initial: Stored = { endpoint: '', apiKey: '', catalog: [], catalogSourceEndpoint: null, models: [], defaultModel: null, discovery: { status: 'never' }, directory: { status: 'never', models: {} } }
@@ -66,16 +68,16 @@ export function createModelConnectionStore(dataDir: string, timeoutMs = 10_000, 
     })
   }
 
-  function visible() {
-    const { apiKey, credentialVersion, credentialVersions, models, directory, catalogCurrent, ...rest } = state
-    const selected: ModelSelection[] = models.map(model => {
-      const gateway = catalogCurrent && state.catalogSourceEndpoint === state.endpoint ? state.catalog.find(entry => entry.id === model.id) : undefined
+  function selectedModels(current: Stored) {
+    const { models, directory, catalogCurrent } = current
+    return models.map(model => {
+      const gateway = catalogCurrent && current.catalogSourceEndpoint === current.endpoint ? current.catalog.find(entry => entry.id === model.id) : undefined
       const catalogId = model.catalogId ?? (gateway?.ownedBy && directory?.models[`${gateway.ownedBy}/${model.id}`] ? `${gateway.ownedBy}/${model.id}` : undefined)
       const source = catalogId ? directory?.models[catalogId] : undefined
-      const result: ModelSelection = { id: model.id, protocol: model.protocol, ...(model.catalogId ? { catalogId: model.catalogId } : {}), ...(source ? { catalogMatch: catalogId } : {}), overrides: model.overrides, sources: {} }
+      const result: ModelSelection & { researchReadiness?: ResearchReadiness } = { id: model.id, protocol: model.protocol, ...(model.catalogId ? { catalogId: model.catalogId } : {}), ...(source ? { catalogMatch: catalogId } : {}), overrides: model.overrides, sources: {} }
       for (const field of fields) {
         const candidate = model.overrides[field] !== undefined ? [model.overrides[field], 'manual', model.overrideUpdatedAt?.[field]] as const
-          : gateway?.metadata?.[field] !== undefined ? [gateway.metadata[field], 'gateway', state.discovery.successAt] as const
+          : gateway?.metadata?.[field] !== undefined ? [gateway.metadata[field], 'gateway', current.discovery.successAt] as const
           : source?.[field] !== undefined ? [source[field], 'models.dev', directory?.successAt] as const : undefined
         if (candidate) {
           Object.assign(result, { [field]: candidate[0] })
@@ -84,9 +86,29 @@ export function createModelConnectionStore(dataDir: string, timeoutMs = 10_000, 
       }
       if (model.overrides.input === undefined && source?.inputModalities) result.inputModalities = source.inputModalities
       if (source?.priceNote && (result.sources?.inputPrice?.source === 'models.dev' || result.sources?.outputPrice?.source === 'models.dev')) result.priceNote = source.priceNote
+      const missing = [!result.contextWindow && '上下文长度', !result.maxTokens && '输出上限', !result.input?.includes('text') && '文本输入', result.reasoning === undefined && '推理能力'].filter((value): value is string => typeof value === 'string')
+      const reasons = !current.endpoint || !current.apiKey ? ['模型连接未配置']
+        : missing.length ? [`缺少运行参数：${missing.join('、')}`]
+        : result.tools !== true ? [result.tools === false ? '资料明确不支持工具调用' : '缺少工具能力支持依据'] : []
+      const status: ResearchReadiness['status'] = !current.endpoint || !current.apiKey ? 'connection-missing'
+        : missing.length ? 'missing-parameters' : result.tools !== true ? 'tools-unsupported' : 'ready-to-try'
+      result.researchReadiness = { status, reasons, verification: 'unknown' }
       return result
     })
-    return { ...rest, models: selected, directory: { status: directory!.status, updatedAt: directory!.updatedAt, successAt: directory!.successAt, cachedModels: Object.keys(directory!.models).length }, hasCredential: apiKey.length > 0 }
+  }
+
+  function visible() {
+    const { apiKey, credentialVersion, credentialVersions, models, directory, catalogCurrent, stewardModel, researchModelPool, ...rest } = state
+    const selected = selectedModels(state)
+    const pool = researchModelPool ?? []
+    const eligibleModels = pool.filter(id => selected.find(model => model.id === id)?.researchReadiness?.status === 'ready-to-try').length
+    const poolStatus = pool.length === 0 ? 'empty' : eligibleModels === 0 ? 'no-eligible-models' : eligibleModels === pool.length ? 'ready' : 'partial'
+    return {
+      ...rest, models: selected, stewardModel: stewardModel ?? null, researchModelPool: pool,
+      researchPoolStatus: { status: poolStatus, eligibleModels },
+      directory: { status: directory!.status, updatedAt: directory!.updatedAt, successAt: directory!.successAt, cachedModels: Object.keys(directory!.models).length },
+      hasCredential: apiKey.length > 0,
+    }
   }
 
   function forRun() {
@@ -169,7 +191,7 @@ export function createModelConnectionStore(dataDir: string, timeoutMs = 10_000, 
     if (defaultModel !== null && (typeof defaultModel !== 'string' || !models.some(model => model.id === defaultModel))) throw new Error('默认模型必须已选择')
     return update(current => {
       const now = new Date().toISOString()
-      return { ...current, models: models.map(model => {
+      const nextModels = models.map(model => {
         const previous = current.models.find(item => item.id === model.id)
         const overrideUpdatedAt = Object.fromEntries(fields.flatMap(field => {
           const value = model.overrides[field]
@@ -179,7 +201,34 @@ export function createModelConnectionStore(dataDir: string, timeoutMs = 10_000, 
           return timestamp ? [[field, timestamp]] : []
         })) as Partial<Record<Field, string>>
         return { ...model, overrideUpdatedAt }
-      }), defaultModel: defaultModel as string | null }
+      })
+      let stewardModel = current.stewardModel ?? null
+      if (value.stewardModel !== undefined) {
+        if (value.stewardModel === null) stewardModel = null
+        else {
+          if (!value.stewardModel || typeof value.stewardModel !== 'object' || Array.isArray(value.stewardModel)) throw new Error('管家模型配置无效')
+          const configured = value.stewardModel as Record<string, unknown>
+          if (typeof configured.modelId !== 'string' || !configured.modelId || !['chat-completions', 'responses'].includes(String(configured.protocol))) throw new Error('管家模型配置无效')
+          stewardModel = { modelId: configured.modelId, protocol: configured.protocol as Protocol }
+        }
+      }
+      let researchModelPool = current.researchModelPool ?? []
+      if (value.researchModelPool !== undefined) {
+        if (!Array.isArray(value.researchModelPool) || value.researchModelPool.length > 200 || !value.researchModelPool.every(id => typeof id === 'string' && id.length > 0 && id.length <= 200)) throw new Error('调研模型池无效')
+        researchModelPool = [...new Set(value.researchModelPool as string[])]
+        if (researchModelPool.length !== value.researchModelPool.length) throw new Error('调研模型池包含重复模型')
+      }
+      const next = { ...current, models: nextModels, defaultModel: defaultModel as string | null, stewardModel, researchModelPool }
+      const described = selectedModels(next)
+      function requireReady(modelId: string, role: string) {
+        const model = described.find(item => item.id === modelId)
+        if (!model) throw new Error(`${role}必须使用已选择模型`)
+        const readiness = model.researchReadiness!
+        if (readiness.status !== 'ready-to-try') throw new Error(`${role}${readiness.reasons[0] ?? '配置无效'}`)
+      }
+      if (stewardModel) requireReady(stewardModel.modelId, '管家模型')
+      for (const modelId of researchModelPool) requireReady(modelId, `调研模型池中的 ${modelId}：`)
+      return next
     })
   }
 

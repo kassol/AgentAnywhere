@@ -9,8 +9,9 @@ import { createWorkStore } from './work'
 import { createModelConnectionStore } from './model-connection'
 
 const databaseUrl = process.env.AGENTANYWHERE_TEST_DATABASE_URL
+if (!databaseUrl) throw new Error('AGENTANYWHERE_TEST_DATABASE_URL is required for the public work API regression')
 
-test.skipIf(!databaseUrl)('owner creates one persisted queued work request through the public API', async () => {
+test('owner creates one persisted queued work request through the public API', async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'agentanywhere-work-'))
   const schema = `work_test_${crypto.randomUUID().replaceAll('-', '')}`
   const admin = new SQL(databaseUrl!)

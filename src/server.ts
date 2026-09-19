@@ -397,7 +397,7 @@ export async function startServer(config: Config) {
           return json(modelConnection.visible())
         } catch (error) {
           if (error instanceof SyntaxError) return json({ error: 'JSON 格式无效' }, 400)
-          if (error instanceof Error && /^(请|更换|端点|无效|模型|默认|输入|contextWindow|maxTokens|inputPrice|outputPrice|reasoning|tools|人工|目录)/.test(error.message)) return json({ error: error.message }, 400)
+          if (error instanceof Error && /^(请|更换|端点|无效|模型|默认|输入|contextWindow|maxTokens|inputPrice|outputPrice|reasoning|tools|人工|目录|管家|调研)/.test(error.message)) return json({ error: error.message }, 400)
           return json({ error: '设置保存失败' }, 500)
         }
       }

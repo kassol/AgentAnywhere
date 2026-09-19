@@ -60,6 +60,11 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .mapping-label { margin-top: 12px; }
 .metadata-list { padding-left: 20px; color: #625c6b; line-height: 1.7; }
 .default-model { margin: 20px 0 14px; }
+.research-pool { display: grid; gap: 8px; margin: 12px 0 18px; }
+.research-pool label { display: flex; align-items: flex-start; gap: 10px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; }
+.research-pool input { width: auto; margin-top: 3px; }
+.research-pool span, .research-pool small { display: block; }
+.research-pool small { margin-top: 3px; color: #716b77; font-weight: 400; }
 .account-card { max-width: 720px; }
 .task-list { padding: 0; list-style: none; max-width: 720px; }
 .task-list li { display: flex; justify-content: space-between; padding: 16px; border-bottom: 1px solid var(--border); }

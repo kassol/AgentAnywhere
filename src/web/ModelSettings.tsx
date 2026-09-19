@@ -2,8 +2,9 @@ import { useEffect, useState, type FormEvent } from 'react'
 
 type Field = 'contextWindow' | 'maxTokens' | 'input' | 'reasoning' | 'tools' | 'inputPrice' | 'outputPrice'
 type Values = { contextWindow?: number; maxTokens?: number; input?: ('text' | 'image')[]; reasoning?: boolean; tools?: boolean; inputPrice?: number; outputPrice?: number }
-type Model = Values & { id: string; protocol: 'chat-completions' | 'responses'; catalogId?: string; catalogMatch?: string; overrides?: Values; inputModalities?: string[]; priceNote?: string; sources?: Partial<Record<Field, { source: 'manual' | 'gateway' | 'models.dev'; updatedAt: string }>> }
-type State = { endpoint: string; hasCredential: boolean; catalog: { id: string; name: string; ownedBy?: string }[]; catalogSourceEndpoint: string | null; models: Model[]; defaultModel: string | null; discovery: { status: string; updatedAt?: string }; directory: { status: string; updatedAt?: string; successAt?: string; cachedModels: number } }
+type Protocol = 'chat-completions' | 'responses'
+type Model = Values & { id: string; protocol: Protocol; catalogId?: string; catalogMatch?: string; overrides?: Values; inputModalities?: string[]; priceNote?: string; sources?: Partial<Record<Field, { source: 'manual' | 'gateway' | 'models.dev'; updatedAt: string }>>; researchReadiness: { status: 'ready-to-try' | 'connection-missing' | 'missing-parameters' | 'tools-unsupported'; reasons: string[]; verification: 'unknown' } }
+type State = { endpoint: string; hasCredential: boolean; catalog: { id: string; name: string; ownedBy?: string }[]; catalogSourceEndpoint: string | null; models: Model[]; defaultModel: string | null; stewardModel: { modelId: string; protocol: Protocol } | null; researchModelPool: string[]; researchPoolStatus: { status: 'empty' | 'ready' | 'partial' | 'no-eligible-models'; eligibleModels: number }; discovery: { status: string; updatedAt?: string }; directory: { status: string; updatedAt?: string; successAt?: string; cachedModels: number } }
 const failure: Record<string, string> = { stale: '连接已更改，旧目录需要刷新。', unauthorized: '网关拒绝凭证（401）。请检查密钥。', timeout: '请求超时，请检查网络。', empty: '网关返回空模型列表。已有选择已保留。', error: '加载失败，请检查服务。' }
 const labels: Record<Field, string> = { contextWindow: '上下文长度', maxTokens: '输出上限', input: '输入模态', reasoning: '推理能力', tools: '工具能力', inputPrice: '输入参考价（美元/百万 token）', outputPrice: '输出参考价（美元/百万 token）' }
 const sources = { manual: '人工', gateway: '网关', 'models.dev': 'models.dev' }
@@ -32,7 +33,7 @@ export function ModelSettings() {
     const response = await fetch(path, { method, headers: { 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) })
     if (response.status === 401) { location.assign('/login'); throw new Error('登录已失效') }
     const result = await response.json() as State & { error?: string }
-    if (result.endpoint !== undefined) setState(current => dirtyModels && current && path !== '/api/model-connection/models' ? { ...result, models: current.models, defaultModel: current.defaultModel } : result)
+    if (result.endpoint !== undefined) setState(current => dirtyModels && current && path !== '/api/model-connection/models' ? { ...result, models: current.models, defaultModel: current.defaultModel, stewardModel: current.stewardModel, researchModelPool: current.researchModelPool } : result)
     if (!response.ok) throw new Error(result.error || (path.endsWith('/directory') ? `参考目录${failure[result.directory.status] ?? '刷新失败。'}` : failure[result.discovery?.status]) || '操作失败')
     return result
   }
@@ -61,7 +62,7 @@ export function ModelSettings() {
     const trimmed = id.trim()
     if (!trimmed || !state || state.models.some(model => model.id === trimmed)) return
     setDirtyModels(true)
-    setState({ ...state, models: [...state.models, { id: trimmed, protocol: 'chat-completions', overrides: {} }] })
+    setState({ ...state, models: [...state.models, { id: trimmed, protocol: 'chat-completions', overrides: {}, researchReadiness: { status: state.hasCredential ? 'missing-parameters' : 'connection-missing', reasons: [state.hasCredential ? '缺少运行参数：上下文长度、输出上限、文本输入、推理能力' : '模型连接未配置'], verification: 'unknown' } }] })
     setManualId('')
   }
 
@@ -79,7 +80,10 @@ export function ModelSettings() {
     if (!state) return
     setBusy(true); setMessage('')
     try {
-      await send('/api/model-connection/models', 'PUT', { models: state.models.map(({ id, protocol, catalogId, overrides }) => ({ id, protocol, catalogId, overrides: overrides ?? {} })), defaultModel: state.defaultModel })
+      await send('/api/model-connection/models', 'PUT', {
+        models: state.models.map(({ id, protocol, catalogId, overrides }) => ({ id, protocol, catalogId, overrides: overrides ?? {} })),
+        defaultModel: state.defaultModel, stewardModel: state.stewardModel, researchModelPool: state.researchModelPool,
+      })
       setDirtyModels(false)
       setMessage('模型配置已保存。来源与有效值已更新。')
     } catch (error) { setMessage((error as Error).message) } finally { setBusy(false) }
@@ -115,7 +119,7 @@ export function ModelSettings() {
         <form className="manual-add" onSubmit={event => { event.preventDefault(); addModel(manualId) }}><label>手填模型 ID（备用）<input value={manualId} onChange={event => setManualId(event.target.value)} /></label><button type="submit" className="secondary">添加</button></form>
         <h3>已选模型</h3>
         {state.models.map(model => <div className="selected-model" key={model.id}>
-          <div className="model-heading"><strong>{model.id}</strong><button type="button" className="secondary" onClick={() => { setDirtyModels(true); setState({ ...state, models: state.models.filter(item => item.id !== model.id), defaultModel: state.defaultModel === model.id ? null : state.defaultModel }) }}>移除</button></div>
+          <div className="model-heading"><strong>{model.id}</strong><button type="button" className="secondary" onClick={() => { setDirtyModels(true); setState({ ...state, models: state.models.filter(item => item.id !== model.id), defaultModel: state.defaultModel === model.id ? null : state.defaultModel, stewardModel: state.stewardModel?.modelId === model.id ? null : state.stewardModel, researchModelPool: state.researchModelPool.filter(id => id !== model.id) }) }}>移除</button></div>
           <label>默认协议（人工）<select value={model.protocol} onChange={event => changeModel(model.id, { protocol: event.target.value as Model['protocol'] })}><option value="chat-completions">Chat Completions</option><option value="responses">Responses</option></select></label>
           <button type="button" className="secondary" onClick={() => testModel(model)} disabled={busy || dirtyModels || !state.hasCredential || endpoint !== state.endpoint || apiKey.length > 0}>测试已保存连接与协议</button>
           <label className="mapping-label">目录显式映射（供应商/模型 ID；留空则仅按网关供应商与完整 ID 匹配）<input value={model.catalogId ?? ''} placeholder="openai/gpt-6-astra" onChange={event => changeModel(model.id, { catalogId: event.target.value || undefined })} /></label>
@@ -129,9 +133,24 @@ export function ModelSettings() {
           {model.inputModalities && <p className="muted">目录输入模态：{model.inputModalities.join('、')}。上传能力尚未验证。</p>}
           {model.priceNote && <p className="muted">{model.priceNote}。</p>}
           {(!model.contextWindow || !model.maxTokens || !model.input || model.reasoning === undefined) && <p className="error">缺少运行所需参数，请补充上下文、输出上限、输入模态与推理能力。</p>}
+          {model.researchReadiness.status === 'ready-to-try' ? <p className="muted">调研候选：允许尝试。实际调研验证尚未核验；连接测试不验证工具调用或调研结果。</p> : <p className="error">调研候选不可用：{model.researchReadiness.reasons.join('；')}。</p>}
           <p className="muted">协议为人工选择；目录价格仅供参考。实际费用与估算需由运行用量单独计算，价格或用量缺失时费用未知。</p>
         </div>)}
         <label className="default-model">默认模型<select value={state.defaultModel ?? ''} onChange={event => { setDirtyModels(true); setState({ ...state, defaultModel: event.target.value || null }) }}><option value="">未设置</option>{state.models.map(model => <option key={model.id} value={model.id}>{model.id}</option>)}</select></label>
+        <h3>管家模型</h3>
+        <p className="muted">新管家轮次使用这里保存的模型与协议。缺少配置时，管家入口将引导回来设置。</p>
+        <div className="model-fields">
+          <label>模型<select value={state.stewardModel?.modelId ?? ''} onChange={event => { setDirtyModels(true); setState({ ...state, stewardModel: event.target.value ? { modelId: event.target.value, protocol: state.stewardModel?.protocol ?? 'chat-completions' } : null }) }}><option value="">未设置</option>{state.models.map(model => <option key={model.id} value={model.id}>{model.id}</option>)}</select></label>
+          <label>协议<select value={state.stewardModel?.protocol ?? 'chat-completions'} disabled={!state.stewardModel} onChange={event => { setDirtyModels(true); setState({ ...state, stewardModel: state.stewardModel && { ...state.stewardModel, protocol: event.target.value as Protocol } }) }}><option value="chat-completions">Chat Completions</option><option value="responses">Responses</option></select></label>
+        </div>
+        <h3>人工调研模型池</h3>
+        <p className="muted">只有勾选并保存的模型可供管家选择。网关发现列表不会自动入池。</p>
+        {state.models.length ? <div className="research-pool">{state.models.map(model => {
+          const selected = state.researchModelPool.includes(model.id)
+          return <label key={model.id}><input type="checkbox" checked={selected} onChange={event => { setDirtyModels(true); setState({ ...state, researchModelPool: event.target.checked ? [...state.researchModelPool, model.id] : state.researchModelPool.filter(id => id !== model.id) }) }} /><span><strong>{model.id}</strong><small>{model.researchReadiness.status === 'ready-to-try' ? '运行参数与工具支持依据完整；实际调研尚未核验' : model.researchReadiness.reasons.join('；')}</small></span></label>
+        })}</div> : <p className="error">尚无已选模型，请先添加并补全运行参数。</p>}
+        {state.researchModelPool.length === 0 && <p className="error">调研模型池为空。管家不能派发调研工作。</p>}
+        {state.researchPoolStatus.status === 'no-eligible-models' && <p className="error">池内没有有效候选，请补全参数、工具支持依据或连接配置。</p>}
         <button type="button" onClick={saveModels} disabled={busy}>保存模型配置</button>
       </>}
     </fieldset>
