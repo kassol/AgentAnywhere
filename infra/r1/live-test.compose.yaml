@@ -1,7 +1,7 @@
 name: agentanywhere-r1-live-test
 services:
   web:
-    image: agentanywhere-r1-web:r1-05
+    image: agentanywhere-r1-web:${TEST_RELEASE:?set the 40-character test commit SHA}
     ports: ["127.0.0.1:19114:3000"]
     env_file: ./live-test.env
     healthcheck:
@@ -13,23 +13,27 @@ services:
       AGENTANYWHERE_HOST: 0.0.0.0
       AGENTANYWHERE_PORT: 3000
       AGENTANYWHERE_DATA_DIR: /data
-    volumes:
-      - ./data/model-connection.json:/data/model-connection.json:ro
+      AGENTANYWHERE_ARTIFACT_DIR: /artifacts
+    volumes: ["./live-data:/data", "./live-artifacts:/artifacts:ro"]
     networks:
       app: {}
       sandbox:
         aliases: [live-test-web]
   queue:
-    image: agentanywhere-r1-queue:r1-05
+    image: agentanywhere-r1-queue:${TEST_RELEASE:?set the 40-character test commit SHA}
     env_file: ./live-test.env
     depends_on:
       web:
         condition: service_healthy
     environment:
-      AGENT_IMAGE: ${TEST_AGENT_IMAGE:-agentanywhere-r1-agent:r1-05}
+      AGENT_IMAGE: agentanywhere-r1-agent:${TEST_RELEASE:?set the 40-character test commit SHA}
       OPEN_SANDBOX_DOMAIN: opensandbox:8080
       MODEL_PROXY_ORIGIN: http://live-test-web:3000
-    networks: [app, sandbox]
+      TOOL_GATEWAY_ORIGIN: http://agentanywhere-r1-live-test-queue-1:3003
+      AGENTANYWHERE_ARTIFACT_DIR: /artifacts
+      AGENTANYWHERE_PUBLIC_ORIGIN: ${TEST_CONTROL_PLANE_ORIGIN:-http://live-test-web:3000}
+    volumes: ["./live-artifacts:/artifacts"]
+    networks: [app, sandbox, search]
 networks:
   app:
     external: true
@@ -37,3 +41,6 @@ networks:
   sandbox:
     external: true
     name: agentanywhere-r1-sandbox
+  search:
+    external: true
+    name: agentanywhere-r1-search
