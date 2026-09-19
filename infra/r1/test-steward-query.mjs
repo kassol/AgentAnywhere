@@ -43,6 +43,10 @@ for (const label of ['A', 'B']) {
   assert.match((await api(`/api/artifacts/${report.versionId}/content`)).markdown, /R2_REPORT_INJECTION/)
   tasks.push(detail)
 }
+const revised = await api(`/api/tasks/${tasks[0].id}/runs`, 'POST', { requestId: crypto.randomUUID(), modelId: models[0].id, content: '补充第二版报告，保留来源。' })
+tasks[0] = await until(() => api(`/api/tasks/${tasks[0].id}`), item => item.run.id === revised.run.id && ['succeeded', 'failed', 'lost', 'save_failed'].includes(item.run.status) && item.run.cleanupState === 'cleaned', 'second report version')
+assert.equal(tasks[0].run.status, 'succeeded')
+assert.equal(tasks[0].artifacts.filter(item => item.kind === 'report').length, 2)
 const taskCount = (await api('/api/tasks')).length
 const initialCalls = (await (await fetch(`${fixture}/calls`)).json()).length
 async function conversation(content, existing) {
@@ -65,6 +69,10 @@ assert.deepEqual(second.detail.relatedTasks.map(item => item.id), [tasks[0].id])
 const compared = await conversation(`R2_QUERY_COMPARE：比较 R2_QUERY_REPORT 工作 ${tasks[0].id} 与 ${tasks[1].id} 的最新报告。`)
 assert.equal(compared.turn.status, 'completed')
 assert.deepEqual(compared.detail.relatedTasks.map(item => item.id).sort(), tasks.map(item => item.id).sort())
+const versions = await conversation(`R2_QUERY_COMPARE_VERSIONS：比较工作 ${tasks[0].id} 的两个报告版本。`)
+assert.equal(versions.turn.status, 'completed')
+assert.deepEqual(versions.detail.relatedTasks.map(item => item.id), [tasks[0].id])
+assert.match(versions.detail.messages.at(-1).content, /已解读所选报告/)
 const ambiguous = await conversation('R2_QUERY_AMBIGUOUS：解读那个 R2_QUERY_REPORT 历史报告。')
 assert.equal(ambiguous.turn.status, 'completed')
 assert.deepEqual(ambiguous.detail.relatedTasks, [])
@@ -75,7 +83,7 @@ assert.equal(limited.turn.modelCalls, 8)
 assert.equal((await api('/api/tasks')).length, taskCount)
 for (const previous of tasks) {
   const current = await api(`/api/tasks/${previous.id}`)
-  assert.equal(current.runs.length, 1)
+  assert.equal(current.runs.length, previous.runs.length)
   assert.equal(current.run.id, previous.run.id)
   assert.equal(current.run.status, 'succeeded')
   assert.deepEqual(current.artifacts.map(item => item.versionId), previous.artifacts.map(item => item.versionId))

@@ -30,13 +30,15 @@ function stewardQuery(body, response, responses) {
   if (planner) {
     if (user.includes('R2_QUERY_') && (!outputs.length || user.includes('R2_QUERY_LIMIT'))) {
       name = 'find_work_candidates'
-      args = { purpose, query: purpose === 'read' && ids.length ? ids[0] : 'R2_QUERY_REPORT', cursor: 0 }
+      args = { purpose, query: purpose !== 'browse' && ids.length ? ids[0] : 'R2_QUERY_REPORT', cursor: 0 }
     } else if (outputs.some(output => { try { return Boolean(JSON.parse(output).operationId) } catch { return false } })) answer = '读取目标已冻结。'
     else if (purpose !== 'browse' && ids.length) {
       const data = outputs.flatMap(output => { try { const value = JSON.parse(output); return value.items ?? value.candidates?.items ?? value.candidates ?? [] } catch { return [] } })
       const selected = data.filter(item => ids.includes(item.id))
-      name = 'freeze_work_selection'
-      args = { purpose, taskIds: ids, versionIds: selected.flatMap(item => item.reports?.slice(0, 1).map(report => report.versionId) ?? []) }
+      const missingId = ids.find(id => !selected.some(item => item.id === id))
+      name = missingId ? 'find_work_candidates' : 'freeze_work_selection'
+      args = missingId ? { purpose, query: missingId, cursor: 0 }
+        : { purpose, taskIds: ids, versionIds: selected.flatMap(item => item.reports?.slice(0, user.includes('R2_QUERY_COMPARE_VERSIONS') ? 2 : 1).map(report => report.versionId) ?? []) }
     } else answer = '请明确要读取哪项工作。'
   } else {
     const reader = tools.find(item => item.name === 'read_frozen_work')

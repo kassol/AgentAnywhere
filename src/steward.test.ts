@@ -324,6 +324,8 @@ test('candidate browsing stays unlinked and an explicit work reference links wit
   const isolatedUrl = new URL(databaseUrl)
   isolatedUrl.searchParams.set('options', `-csearch_path=${schema}`)
   let taskId = ''
+  let pagedTaskId = ''
+  let recentTaskId = ''
   const toolResponse = (model: string, name: string, args: unknown) => {
     const common = { id: crypto.randomUUID(), object: 'chat.completion.chunk', created: 1, model }
     return new Response([
@@ -347,11 +349,24 @@ test('candidate browsing stays unlinked and an explicit work reference links wit
     const results = body.messages.filter((message: any) => message.role === 'tool')
     const user = JSON.stringify(body.messages.filter((message: any) => message.role === 'user').at(-1)?.content ?? '')
     if (names.includes('find_work_candidates')) {
-      if (!results.length) return toolResponse(body.model, 'find_work_candidates', { purpose: user.includes('浏览') ? 'browse' : 'read', query: '', cursor: 0 })
-      if (user.includes('浏览')) return textResponse(body.model, '候选已确认。')
+      const purpose = user.includes('比较') ? 'compare' : user.includes('浏览') ? 'browse' : 'read'
+      if (user.includes('旧候选')) return results.length
+        ? textResponse(body.model, '旧候选不能直接授权。')
+        : toolResponse(body.model, 'freeze_work_selection', { purpose: 'read', taskIds: [recentTaskId], versionIds: [] })
+      if (user.includes('分页歧义')) {
+        if (!results.length) return toolResponse(body.model, 'find_work_candidates', { purpose: 'read', query: '分页歧义', cursor: 25 })
+        return results.length === 1
+          ? toolResponse(body.model, 'freeze_work_selection', { purpose: 'read', taskIds: [pagedTaskId], versionIds: [] })
+          : textResponse(body.model, '分页候选不唯一。')
+      }
+      if (!results.length) return toolResponse(body.model, 'find_work_candidates', { purpose, query: purpose === 'browse' ? '' : taskId, cursor: 0 })
+      if (user.includes('浏览后越权') && results.length === 1) return toolResponse(body.model, 'freeze_work_selection', { purpose: 'read', taskIds: [taskId], versionIds: [] })
+      if (purpose === 'compare' && results.length === 1) return toolResponse(body.model, 'freeze_work_selection', { purpose: 'compare', taskIds: [taskId], versionIds: [] })
+      if (purpose === 'browse' || purpose === 'compare') return textResponse(body.model, '候选需要用户澄清。')
       return toolResponse(body.model, 'freeze_work_selection', { purpose: 'read', taskIds: [taskId], versionIds: [] })
     }
     if (names.includes('read_frozen_work')) {
+      if (user.includes('跳过读取')) return textResponse(body.model, '未读取就直接回答。')
       if (!results.length) return toolResponse(body.model, 'read_frozen_work', { operationId: body.tools[0].function.parameters.properties.operationId.const })
       return textResponse(body.model, `已读取[原工作](/tasks/${taskId})的真实状态。`)
     }
@@ -374,8 +389,13 @@ test('candidate browsing stays unlinked and an explicit work reference links wit
     expect(created.status).toBe(201)
     const task = await created.json()
     taskId = task.id
+    for (let index = 0; index < 26; index++) {
+      const paged = await (await send('/api/tasks', 'POST', { requestId: crypto.randomUUID(), goal: `分页歧义样本 ${index}`, modelId: 'steward-query' })).json()
+      if (index === 0) pagedTaskId = paged.id
+      recentTaskId = paged.id
+    }
     const before = await (await send(`/api/tasks/${taskId}`)).json()
-    const ask = async (content: string) => {
+    const ask = async (content: string, expectedStatus = 'completed') => {
       const thread = await (await send('/api/steward/threads', 'POST', { requestId: crypto.randomUUID() })).json()
       await send(`/api/steward/threads/${thread.id}/turns`, 'POST', { requestId: crypto.randomUUID(), content })
       let detail: any
@@ -384,16 +404,38 @@ test('candidate browsing stays unlinked and an explicit work reference links wit
         if (['completed', 'failed', 'limited'].includes(detail.turns[0]?.status)) break
         await Bun.sleep(20)
       }
-      expect(detail.turns[0]?.status).toBe('completed')
+      expect(detail.turns[0]?.status).toBe(expectedStatus)
       return detail
     }
     const browsed = await ask('浏览最近的历史工作')
     expect(browsed.relatedTasks).toEqual([])
     expect(browsed.messages.at(-1).content).toContain(`/tasks/${taskId}`)
+    const unauthorized = await ask('浏览后越权读取最近的历史工作')
+    expect(unauthorized.relatedTasks).toEqual([])
+    const incompleteCompare = await ask(`比较工作 ${taskId} 的报告版本`)
+    expect(incompleteCompare.relatedTasks).toEqual([])
+    const pagedAmbiguity = await ask('读取分页歧义工作')
+    expect(pagedAmbiguity.relatedTasks).toEqual([])
+    const skipped = await ask(`跳过读取直接解读工作 ${taskId}`, 'failed')
+    expect(skipped.turns[0].failure).toBe('管家未读取已冻结的工作回执')
     const first = await ask(`解读工作 ${taskId} 的当前状态`)
     const second = await ask(`再读取工作 ${taskId} 的当前状态`)
     expect(first.relatedTasks).toMatchObject([{ id: taskId, status: 'queued', href: `/tasks/${taskId}` }])
     expect(second.relatedTasks).toMatchObject([{ id: taskId, status: 'queued', href: `/tasks/${taskId}` }])
+    const oldCandidateThread = await (await send('/api/steward/threads', 'POST', { requestId: crypto.randomUUID() })).json()
+    const submitExisting = async (content: string) => {
+      await send(`/api/steward/threads/${oldCandidateThread.id}/turns`, 'POST', { requestId: crypto.randomUUID(), content })
+      let detail: any
+      for (let index = 0; index < 150; index++) {
+        detail = await (await send(`/api/steward/threads/${oldCandidateThread.id}`)).json()
+        if (!['queued', 'running'].includes(detail.turns.at(-1)?.status)) break
+        await Bun.sleep(20)
+      }
+      return detail
+    }
+    await submitExisting('浏览最近的历史工作')
+    const oldCandidate = await submitExisting('直接读取上一轮旧候选')
+    expect(oldCandidate.relatedTasks).toEqual([])
     const after = await (await send(`/api/tasks/${taskId}`)).json()
     expect(after.runs.map((run: any) => run.id)).toEqual(before.runs.map((run: any) => run.id))
     expect(after.artifacts).toEqual(before.artifacts)

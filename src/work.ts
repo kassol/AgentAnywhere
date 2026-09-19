@@ -143,9 +143,10 @@ export async function createWorkStore(databaseUrl: string) {
     return row ?? null
   }
 
-  async function readArtifact(versionId: string, artifactDir: string) {
+  async function readArtifact(versionId: string, artifactDir: string, expectedKind?: 'report' | 'attachment') {
     const artifact = await artifactVersion(versionId)
-    if (!artifact || !/^[0-9a-f-]{36}\/(?:epoch-\d+\/|checkpoint-\d+\/generation-[0-9a-f-]{36}\/)?(report\.md|attachment-[0-4]\.(txt|csv|json|md))$/i.test(artifact.storageKey)
+    if (!artifact || (expectedKind && artifact.kind !== expectedKind)
+      || !/^[0-9a-f-]{36}\/(?:epoch-\d+\/|checkpoint-\d+\/generation-[0-9a-f-]{36}\/)?(report\.md|attachment-[0-4]\.(txt|csv|json|md))$/i.test(artifact.storageKey)
       || !Number.isSafeInteger(Number(artifact.sizeBytes)) || Number(artifact.sizeBytes) < (artifact.kind === 'report' ? 1 : 0) || Number(artifact.sizeBytes) > 10_000_000
       || !['text/markdown', 'text/plain'].includes(artifact.mimeType)) throw new WorkArtifactError('not-found')
     let bytes: Buffer
@@ -198,7 +199,7 @@ export async function createWorkStore(databaseUrl: string) {
     if (versionIds.some(id => !byVersion.has(id))) throw new WorkArtifactError('not-found')
     const contents = await Promise.all(versionIds.map(async versionId => {
       const report: any = byVersion.get(versionId)
-      const { artifact, bytes } = await readArtifact(versionId, artifactDir)
+      const { artifact, bytes } = await readArtifact(versionId, artifactDir, 'report')
       let markdown: string
       try { markdown = new TextDecoder('utf-8', { fatal: true }).decode(bytes) } catch { throw new WorkArtifactError('invalid') }
       return { ...report, markdown, name: artifact.name }

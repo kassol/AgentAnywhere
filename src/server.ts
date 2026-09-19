@@ -289,8 +289,7 @@ export async function startServer(config: Config) {
       if (artifactMatch && request.method === 'GET') {
         try {
           if (!work) return json({ error: 'Not found' }, 404)
-          const { artifact, bytes } = await work.readArtifact(artifactMatch[1], artifactDir)
-          if (artifactMatch[2] === 'content' && artifact.kind !== 'report') return json({ error: 'Not found' }, 404)
+          const { artifact, bytes } = await work.readArtifact(artifactMatch[1], artifactDir, artifactMatch[2] === 'content' ? 'report' : undefined)
           if (artifactMatch[2] === 'content') return json({ markdown: new TextDecoder('utf-8', { fatal: true }).decode(bytes) })
           const name = artifact.kind === 'report' ? 'report.md' : artifact.name
           return new Response(new Uint8Array(bytes), { headers: { ...common, 'content-type': 'application/octet-stream', 'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(name)}`, 'content-security-policy': "default-src 'none'; sandbox" } })
@@ -486,7 +485,7 @@ export async function startServer(config: Config) {
     },
   })
   const stop = app.stop.bind(app)
-  app.stop = async force => { stop(force); await steward?.close(); await work?.close() }
+  app.stop = async force => { await stop(force); await steward?.close(); await work?.close() }
   steward?.start()
   return app
 }
