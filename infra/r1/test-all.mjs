@@ -4,15 +4,16 @@ import { fileURLToPath } from 'node:url'
 import { readFile } from 'node:fs/promises'
 
 const mode = process.argv[2] || 'isolated'
-const checks = ['run', 'report-contract', 'research', 'steering', 'interaction', 'cancel', 'continuation', 'recovery', 'steward-query', 'steward-dispatch', 'steward-control', 'steward-status', 'steward-interaction', 'steward-summary', 'steward-retry', 'steward-revision']
+const checks = mode === 'live' ? ['live-run', 'live-research', 'live-steward'] : mode === 'public' ? ['public'] : ['run', 'report-contract', 'research', 'steering', 'interaction', 'cancel', 'continuation', 'recovery', 'steward-query', 'steward-dispatch', 'steward-control', 'steward-status', 'steward-interaction', 'steward-summary', 'steward-retry', 'steward-revision']
 const resumeFrom = process.argv[3]
-assert.ok(!resumeFrom || mode === 'isolated' && checks.includes(resumeFrom), 'Resume requires an isolated check name')
+assert.ok(!resumeFrom || checks.includes(resumeFrom), 'Resume requires a check name for this mode')
 assert.ok(['isolated', 'live', 'public'].includes(mode), 'Mode must be isolated, live or public')
 if (mode !== 'isolated') {
-  for (const name of mode === 'live' ? ['live-run', 'live-research', 'live-steward'] : ['public']) {
+  if (resumeFrom) console.log(`Resuming ${mode} acceptance from ${resumeFrom}; earlier checks retain their recorded results`)
+  for (const name of checks.slice(resumeFrom ? checks.indexOf(resumeFrom) : 0)) {
     execFileSync(process.execPath, [fileURLToPath(new URL(`test-${name}.mjs`, import.meta.url))], { stdio: 'inherit' })
   }
-  console.log(`All ${mode} acceptance checks passed`)
+  console.log(resumeFrom ? `Remaining ${mode} checks passed from ${resumeFrom}` : `All ${mode} acceptance checks passed`)
   process.exit(0)
 }
 
