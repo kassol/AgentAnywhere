@@ -117,7 +117,11 @@ assert.equal(failingOperation.modelId, 'fixture-retry')
 const failed = await until(() => api(`/api/tasks/${baseTask.id}`), item => item.run.id === failingOperation.runId
   && ['failed', 'lost', 'save_failed'].includes(item.run.status) && item.run.cleanupState === 'cleaned', 'failed revised run')
 assert.equal(failed.runs.length, 3)
-assert.deepEqual(failed.artifacts.map(item => item.versionId).sort(), [source.versionId, latest.versionId].sort())
+const retainedReports = failed.artifacts.filter(item => item.kind === 'report')
+assert.deepEqual(retainedReports.map(item => item.versionId).sort(), [source.versionId, latest.versionId].sort())
+assert.deepEqual(retainedReports.map(item => [item.versionId, item.runId, item.runStatus]).sort(), [
+  [source.versionId, baseTask.run.id, 'succeeded'], [latest.versionId, operation.runId, 'succeeded'],
+].sort())
 assert.deepEqual(await download(source.versionId), original)
 assert.deepEqual(await download(latest.versionId), latestBytes)
 
