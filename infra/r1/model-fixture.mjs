@@ -27,7 +27,31 @@ function stewardQuery(body, response, responses) {
   const ids = [...user.matchAll(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi)].map(match => match[0])
   const purpose = user.includes('R2_QUERY_COMPARE') ? 'compare' : user.includes('R2_QUERY_READ') || user.includes('R2_QUERY_AMBIGUOUS') ? 'read' : 'browse'
   let name, args, answer = '候选已列出；请明确需要读取的工作。'
-  if (planner) {
+  const dispatch = body.model.startsWith('fixture-steward-dispatch-')
+  let holdDispatch = false
+  if (dispatch) {
+    if (planner && user.includes('R2_DISPATCH') && !outputs.length) {
+      name = 'freeze_research_dispatch'
+      const count = user.includes('R2_DISPATCH_FOUR') ? 4 : 2
+      args = { items: Array.from({ length: count }, (_, index) => ({
+        goal: `R2_DISPATCH_REPORT ${index + 1}: 调用 echo_observation 后提交独立报告。`, sourceUrl: null,
+        modelId: user.includes('R2_DISPATCH_OUTSIDE') ? 'fixture-outside-pool' : index % 2 ? 'fixture-responses' : 'fixture-split',
+        reason: '人工池允许，文本输入与工具能力资料完整；按既有协议执行。',
+      })) }
+    } else if (planner) answer = '委托范围已冻结。'
+    else {
+      const creator = tools.find(item => item.name === 'create_frozen_research')
+      const property = creator?.parameters?.properties?.operationId
+      const operations = property?.enum ?? (property?.const ? [property.const] : [])
+      holdDispatch = user.includes('R2_DISPATCH_STOP') && outputs.length === 1
+      const repeat = user.includes('R2_DISPATCH_REPEAT')
+      const index = repeat ? Math.max(0, outputs.length - 1) : outputs.length
+      if (creator && index < operations.length && !holdDispatch) {
+        name = creator.name
+        args = { operationId: operations[index] }
+      } else answer = creator ? '工作接收情况请查看真实操作回执。' : '当前没有可执行的调研操作，请补充目标或模型池配置。'
+    }
+  } else if (planner) {
     if (user.includes('R2_QUERY_') && (!outputs.length || user.includes('R2_QUERY_LIMIT'))) {
       name = 'find_work_candidates'
       args = { purpose, query: purpose !== 'browse' && ids.length ? ids[0] : 'R2_QUERY_REPORT', cursor: 0 }
@@ -52,6 +76,7 @@ function stewardQuery(body, response, responses) {
   }
   calls.push({ model: body.model, protocol: responses ? 'responses' : 'chat-completions', planner, user, system, outputs, name: name ?? null, args: args ?? null })
   response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' })
+  if (holdDispatch) return hold(response, { id: `hold_${calls.length}`, object: 'chat.completion.chunk', created: 1, model: body.model, choices: [{ index: 0, delta: { role: 'assistant', content: '第一项已接收，后续派发等待中。' }, finish_reason: null }] })
   if (responses) {
     const item = name ? { id: `fc_${calls.length}`, type: 'function_call', call_id: `call_${calls.length}`, name, arguments: JSON.stringify(args), status: 'completed' }
       : { id: `msg_${calls.length}`, type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: answer, annotations: [] }] }
@@ -108,7 +133,7 @@ http.createServer(async (request, response) => {
   request.setEncoding('utf8')
   for await (const chunk of request) raw += chunk
   const body = JSON.parse(raw)
-  if (body.model === 'fixture-steward-query-chat' || body.model === 'fixture-steward-query-responses') return stewardQuery(body, response, responses)
+  if (body.model.startsWith('fixture-steward-query-') || body.model.startsWith('fixture-steward-dispatch-')) return stewardQuery(body, response, responses)
   if (responses) {
     if (body.model === 'fixture-steward-responses') {
       calls.push({ model: body.model, protocol: 'responses', stream: body.stream, input: body.input })

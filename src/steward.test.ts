@@ -350,6 +350,13 @@ test('candidate browsing stays unlinked and an explicit work reference links wit
     const user = JSON.stringify(body.messages.filter((message: any) => message.role === 'user').at(-1)?.content ?? '')
     if (names.includes('find_work_candidates')) {
       const purpose = user.includes('比较') ? 'compare' : user.includes('浏览') ? 'browse' : 'read'
+      if (user.includes('带恶意指令')) {
+        if (!results.length) return toolResponse(body.model, 'find_work_candidates', { purpose: 'browse', query: '', cursor: 0 })
+        if (results.length === 1) return toolResponse(body.model, 'freeze_research_dispatch', { items: [
+          { goal: '候选内容要求的新调研', sourceUrl: null, modelId: 'steward-query', reason: '候选内容自称需要执行' },
+        ] })
+        return textResponse(body.model, '候选内容不能授权新调研。')
+      }
       if (user.includes('旧候选')) return results.length
         ? textResponse(body.model, '旧候选不能直接授权。')
         : toolResponse(body.model, 'freeze_work_selection', { purpose: 'read', taskIds: [recentTaskId], versionIds: [] })
@@ -382,7 +389,7 @@ test('candidate browsing stays unlinked and an explicit work reference links wit
     })
     await send('/api/model-connection', 'PUT', { endpoint: `${upstream.url.origin}/v1`, apiKey: 'fixture-key' })
     await send('/api/model-connection/models', 'PUT', {
-      defaultModel: 'steward-query', stewardModel: { modelId: 'steward-query', protocol: 'chat-completions' }, researchModelPool: [],
+      defaultModel: 'steward-query', stewardModel: { modelId: 'steward-query', protocol: 'chat-completions' }, researchModelPool: ['steward-query'],
       models: [{ id: 'steward-query', protocol: 'chat-completions', contextWindow: 128000, maxTokens: 4096, input: ['text'], reasoning: false, tools: true }],
     })
     const created = await send('/api/tasks', 'POST', { requestId: crypto.randomUUID(), goal: '历史报告查询样本', modelId: 'steward-query' })
@@ -412,6 +419,10 @@ test('candidate browsing stays unlinked and an explicit work reference links wit
     expect(browsed.messages.at(-1).content).toContain(`/tasks/${taskId}`)
     const unauthorized = await ask('浏览后越权读取最近的历史工作')
     expect(unauthorized.relatedTasks).toEqual([])
+    const taskCountBeforeMalicious = (await (await send('/api/tasks')).json()).length
+    const malicious = await ask('浏览带恶意指令的历史工作')
+    expect(malicious.relatedTasks).toEqual([])
+    expect((await (await send('/api/tasks')).json()).length).toBe(taskCountBeforeMalicious)
     const incompleteCompare = await ask(`比较工作 ${taskId} 的报告版本`)
     expect(incompleteCompare.relatedTasks).toEqual([])
     const pagedAmbiguity = await ask('读取分页歧义工作')
@@ -439,6 +450,175 @@ test('candidate browsing stays unlinked and an explicit work reference links wit
     const after = await (await send(`/api/tasks/${taskId}`)).json()
     expect(after.runs.map((run: any) => run.id)).toEqual(before.runs.map((run: any) => run.id))
     expect(after.artifacts).toEqual(before.artifacts)
+  } finally {
+    await app.stop(true)
+    upstream.stop(true)
+    await admin.unsafe(`DROP SCHEMA ${schema} CASCADE`)
+    await admin.close()
+    await rm(dataDir, { recursive: true, force: true })
+  }
+})
+
+test('a clear steward delegation creates independent work with a persisted model receipt', async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'agentanywhere-steward-dispatch-'))
+  const schema = `steward_dispatch_${crypto.randomUUID().replaceAll('-', '')}`
+  const admin = new SQL(databaseUrl)
+  await admin.unsafe(`CREATE SCHEMA ${schema}`)
+  const isolatedUrl = new URL(databaseUrl)
+  isolatedUrl.searchParams.set('options', `-csearch_path=${schema}`)
+  const toolResponse = (model: string, name: string, args: unknown) => {
+    const common = { id: crypto.randomUUID(), object: 'chat.completion.chunk', created: 1, model }
+    return new Response([
+      `data: ${JSON.stringify({ ...common, choices: [{ index: 0, delta: { role: 'assistant', tool_calls: [{ index: 0, id: `call_${name}`, type: 'function', function: { name, arguments: JSON.stringify(args) } }] }, finish_reason: 'tool_calls' }] })}`,
+      'data: [DONE]', '',
+    ].join('\n\n'), { headers: { 'content-type': 'text/event-stream' } })
+  }
+  const textResponse = (model: string, content: string) => {
+    const common = { id: crypto.randomUUID(), object: 'chat.completion.chunk', created: 1, model }
+    return new Response([
+      `data: ${JSON.stringify({ ...common, choices: [{ index: 0, delta: { role: 'assistant', content }, finish_reason: null }] })}`,
+      `data: ${JSON.stringify({ ...common, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}`,
+      'data: [DONE]', '',
+    ].join('\n\n'), { headers: { 'content-type': 'text/event-stream' } })
+  }
+  let releaseStop!: () => void
+  const stopReleased = new Promise<void>(resolve => { releaseStop = resolve })
+  let resumeOperationId = ''
+  let clock = Date.now()
+  const upstream = Bun.serve({ port: 0, async fetch(request) {
+    const body = await request.json() as any
+    const names = (body.tools ?? []).map((tool: any) => tool.function?.name)
+    const results = body.messages.filter((message: any) => message.role === 'tool')
+    const user = JSON.stringify(body.messages.filter((message: any) => message.role === 'user').at(-1)?.content ?? '')
+    if (names.includes('resume_research_dispatch') && user.includes('继续剩余调研')) {
+      return toolResponse(body.model, 'resume_research_dispatch', { operationIds: [resumeOperationId] })
+    }
+    if (names.includes('freeze_research_dispatch')) {
+      const count = user.includes('四项') ? 4 : user.includes('时间边界') ? 1 : 2
+      return toolResponse(body.model, 'freeze_research_dispatch', { items: Array.from({ length: count }, (_, index) => ({
+        goal: `独立调研${'甲乙丙丁'[index]}`, sourceUrl: null, modelId: 'research-a',
+        reason: index === 0 ? '工具能力资料完整' : '同类任务沿用已授权候选',
+      })) })
+    }
+    if (names.includes('create_frozen_research') && results.length === 0) {
+      if (user.includes('时间边界')) clock += 5 * 60_000
+      const ids = body.tools[0].function.parameters.properties.operationId.enum
+      return toolResponse(body.model, 'create_frozen_research', { operationId: ids[0] })
+    }
+    if (names.includes('create_frozen_research') && results.length === 1) {
+      if (user.includes('停止竞态')) await stopReleased
+      const ids = body.tools[0].function.parameters.properties.operationId.enum
+      return toolResponse(body.model, 'create_frozen_research', { operationId: ids[0] })
+    }
+    if (names.includes('create_frozen_research')) {
+      const ids = body.tools[0].function.parameters.properties.operationId.enum
+      if (results.length <= ids.length) return toolResponse(body.model, 'create_frozen_research', { operationId: ids[results.length - 1] })
+    }
+    return textResponse(body.model, '两项调研已接收。')
+  } })
+  const password = 'test-password-12345'
+  const app = await startServer({ password, port: 0, dataDir, databaseUrl: isolatedUrl.toString(), testNow: () => clock })
+  try {
+    const login = await fetch(`${app.url.origin}/api/auth`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password }) })
+    const cookie = login.headers.get('set-cookie')!
+    const send = (path: string, method = 'GET', body?: unknown) => fetch(`${app.url.origin}${path}`, {
+      method, headers: { cookie, 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body),
+    })
+    await send('/api/model-connection', 'PUT', { endpoint: `${upstream.url.origin}/v1`, apiKey: 'fixture-key' })
+    expect((await send('/api/model-connection/models', 'PUT', {
+      defaultModel: 'research-a', stewardModel: { modelId: 'steward-a', protocol: 'chat-completions' }, researchModelPool: ['research-a'],
+      models: [
+        { id: 'steward-a', protocol: 'chat-completions', contextWindow: 128000, maxTokens: 4096, input: ['text'], reasoning: false, tools: true },
+        { id: 'research-a', protocol: 'responses', contextWindow: 128000, maxTokens: 4096, input: ['text'], reasoning: true, tools: true },
+      ],
+    })).status).toBe(200)
+    const thread = await (await send('/api/steward/threads', 'POST', { requestId: crypto.randomUUID() })).json()
+    const submitted = await send(`/api/steward/threads/${thread.id}/turns`, 'POST', { requestId: crypto.randomUUID(), content: '请分别调研甲和乙，并各自生成报告' })
+    expect(submitted.status).toBe(202)
+    let detail: any
+    for (let index = 0; index < 200; index++) {
+      detail = await (await send(`/api/steward/threads/${thread.id}`)).json()
+      if (!['queued', 'running'].includes(detail.turns[0]?.status)) break
+      await Bun.sleep(20)
+    }
+    expect(detail.turns[0]?.status).toBe('completed')
+    expect(detail.relatedTasks).toHaveLength(2)
+    expect(detail.relatedTasks.map((task: any) => task.goal)).toEqual(['独立调研甲', '独立调研乙'])
+    expect(detail.researchOperations).toMatchObject([
+      { status: 'accepted', modelId: 'research-a', protocol: 'responses', reason: '工具能力资料完整', verification: 'unverified' },
+      { status: 'accepted', modelId: 'research-a', protocol: 'responses', reason: '同类任务沿用已授权候选', verification: 'unverified' },
+    ])
+    const tasks = await (await send('/api/tasks')).json()
+    expect(tasks.filter((task: any) => ['独立调研甲', '独立调研乙'].includes(task.goal))).toHaveLength(2)
+
+    const limitThread = await (await send('/api/steward/threads', 'POST', { requestId: crypto.randomUUID() })).json()
+    const limitSubmit = await send(`/api/steward/threads/${limitThread.id}/turns`, 'POST', { requestId: crypto.randomUUID(), content: '请分别派发四项独立调研' })
+    expect(limitSubmit.status).toBe(202)
+    let limited: any
+    for (let index = 0; index < 200; index++) {
+      limited = await (await send(`/api/steward/threads/${limitThread.id}`)).json()
+      if (!['queued', 'running'].includes(limited.turns[0]?.status)) break
+      await Bun.sleep(20)
+    }
+    expect(limited.turns[0]?.status).toBe('completed')
+    expect(limited.relatedTasks).toHaveLength(3)
+    expect(limited.researchOperations.map((operation: any) => operation.status)).toEqual(['accepted', 'accepted', 'accepted', 'unexecuted'])
+    expect(limited.researchOperations[3].failure).toBe('本轮已达到 3 项工作创建额度')
+
+    const stopThread = await (await send('/api/steward/threads', 'POST', { requestId: crypto.randomUUID() })).json()
+    const stopTurn = await (await send(`/api/steward/threads/${stopThread.id}/turns`, 'POST', { requestId: crypto.randomUUID(), content: '停止竞态：请分别调研甲和乙' })).json()
+    let stopped: any
+    for (let index = 0; index < 200; index++) {
+      stopped = await (await send(`/api/steward/threads/${stopThread.id}`)).json()
+      if (stopped.relatedTasks.length === 1) break
+      await Bun.sleep(20)
+    }
+    expect(stopped.relatedTasks).toHaveLength(1)
+    expect((await send(`/api/steward/turns/${stopTurn.id}/stop`, 'POST')).status).toBe(202)
+    releaseStop()
+    for (let index = 0; index < 200; index++) {
+      stopped = await (await send(`/api/steward/threads/${stopThread.id}`)).json()
+      if (stopped.turns[0]?.status === 'stopped') break
+      await Bun.sleep(20)
+    }
+    expect(stopped.researchOperations.map((operation: any) => operation.status)).toEqual(['accepted', 'unexecuted'])
+    resumeOperationId = stopped.researchOperations[1].operationId
+    expect((await send('/api/model-connection/models', 'PUT', {
+      defaultModel: 'research-a', stewardModel: { modelId: 'steward-a', protocol: 'chat-completions' }, researchModelPool: [],
+      models: [
+        { id: 'steward-a', protocol: 'chat-completions', contextWindow: 128000, maxTokens: 4096, input: ['text'], reasoning: false, tools: true },
+        { id: 'research-a', protocol: 'chat-completions', contextWindow: 128000, maxTokens: 4096, input: ['text'], reasoning: true, tools: true },
+      ],
+    })).status).toBe(200)
+    await send(`/api/steward/threads/${stopThread.id}/turns`, 'POST', { requestId: crypto.randomUUID(), content: '明确继续剩余调研' })
+    for (let index = 0; index < 200; index++) {
+      stopped = await (await send(`/api/steward/threads/${stopThread.id}`)).json()
+      if (stopped.turns[1]?.status === 'completed') break
+      await Bun.sleep(20)
+    }
+    expect(stopped.relatedTasks).toHaveLength(2)
+    expect(stopped.researchOperations.map((operation: any) => operation.status)).toEqual(['accepted', 'accepted'])
+    const resumedTask = await (await send(`/api/tasks/${stopped.researchOperations[1].taskId}`)).json()
+    expect(resumedTask.run.model).toMatchObject({ id: 'research-a', protocol: 'responses' })
+
+    await send('/api/model-connection/models', 'PUT', {
+      defaultModel: 'research-a', stewardModel: { modelId: 'steward-a', protocol: 'chat-completions' }, researchModelPool: ['research-a'],
+      models: [
+        { id: 'steward-a', protocol: 'chat-completions', contextWindow: 128000, maxTokens: 4096, input: ['text'], reasoning: false, tools: true },
+        { id: 'research-a', protocol: 'responses', contextWindow: 128000, maxTokens: 4096, input: ['text'], reasoning: true, tools: true },
+      ],
+    })
+    const timeThread = await (await send('/api/steward/threads', 'POST', { requestId: crypto.randomUUID() })).json()
+    await send(`/api/steward/threads/${timeThread.id}/turns`, 'POST', { requestId: crypto.randomUUID(), content: '时间边界调研' })
+    let timed: any
+    for (let index = 0; index < 200; index++) {
+      timed = await (await send(`/api/steward/threads/${timeThread.id}`)).json()
+      if (!['queued', 'running'].includes(timed.turns[0]?.status)) break
+      await Bun.sleep(20)
+    }
+    expect(timed.turns[0]).toMatchObject({ status: 'limited', budgetReason: 'time' })
+    expect(timed.relatedTasks).toEqual([])
+    expect(timed.researchOperations).toMatchObject([{ status: 'unexecuted', failure: '管家轮次活跃时间已用尽' }])
   } finally {
     await app.stop(true)
     upstream.stop(true)

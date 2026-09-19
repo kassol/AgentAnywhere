@@ -6,6 +6,7 @@ import type { ModelSelection, Protocol } from './model-connection'
 
 type RunConnection = { endpoint: string; hasCredential: boolean; credentialRef: string | null; models: ModelSelection[] }
 type CreateRequest = { requestId: string; goal: string; sourceUrl: string | null; modelId: string; protocol: Protocol | null }
+type FrozenResearchModel = ModelSelection & { endpoint: string }
 
 export class WorkInputError extends Error {}
 export class WorkConflictError extends Error {}
@@ -108,6 +109,22 @@ export async function createWorkStore(databaseUrl: string) {
     created_at timestamptz NOT NULL DEFAULT now(), UNIQUE (artifact_id, run_id)
   )`
 
+  async function createWorkInTransaction(sql: SQL, input: CreateRequest, requestHash: string, snapshot: FrozenResearchModel, credentialRef: string, taskId: string) {
+    const rows = await sql`INSERT INTO work_tasks (id, owner_id, request_id, request_hash, goal, source_url, status)
+      VALUES (${taskId}, 'owner', ${input.requestId}, ${requestHash}, ${input.goal}, ${input.sourceUrl}, 'queued')
+      ON CONFLICT (request_id) DO NOTHING RETURNING id`
+    if (!rows.length) return null
+    const threadId = crypto.randomUUID()
+    await sql`INSERT INTO work_threads (id, task_id) VALUES (${threadId}, ${taskId})`
+    const runId = crypto.randomUUID()
+    await sql`INSERT INTO work_runs (id, task_id, status, model_snapshot, credential_ref)
+      VALUES (${runId}, ${taskId}, 'queued', ${JSON.stringify(snapshot)}::text::jsonb, ${credentialRef})`
+    await sql`INSERT INTO work_outbox (run_id) VALUES (${runId})`
+    await sql`INSERT INTO work_messages (id, thread_id, role, content)
+      VALUES (${crypto.randomUUID()}, ${threadId}, 'user', ${input.goal || input.sourceUrl!})`
+    return { taskId, runId }
+  }
+
   async function detail(id: string) {
     const [row] = await db`SELECT t.id, t.goal, t.source_url AS "sourceUrl", t.status, t.created_at AS "createdAt",
       r.id AS "runId", r.status AS "runStatus", r.model_snapshot AS "model", r.epoch,
@@ -209,6 +226,73 @@ export async function createWorkStore(databaseUrl: string) {
     })) }))
   }
 
+  async function stewardModelStats(models: { id: string; protocol: Protocol; endpoint: string }[]) {
+    if (!models.length) return []
+    return db`WITH candidates AS (
+        SELECT * FROM jsonb_to_recordset(${JSON.stringify(models)}::text::jsonb) AS item(id text, protocol text, endpoint text)
+      )
+      SELECT item.id, item.protocol, item.endpoint,
+        COUNT(DISTINCT r.id) FILTER (WHERE r.id IS NOT NULL)::integer AS "successCount",
+        MAX(r.finished_at) AS "lastSucceededAt"
+      FROM candidates item LEFT JOIN work_runs r
+        ON (CASE WHEN jsonb_typeof(r.model_snapshot)='string' THEN (r.model_snapshot#>>'{}')::jsonb ELSE r.model_snapshot END)->>'id'=item.id
+        AND (CASE WHEN jsonb_typeof(r.model_snapshot)='string' THEN (r.model_snapshot#>>'{}')::jsonb ELSE r.model_snapshot END)->>'protocol'=item.protocol
+        AND (CASE WHEN jsonb_typeof(r.model_snapshot)='string' THEN (r.model_snapshot#>>'{}')::jsonb ELSE r.model_snapshot END)->>'endpoint'=item.endpoint AND r.status='succeeded'
+        AND EXISTS (SELECT 1 FROM work_artifact_versions v JOIN work_artifacts a ON a.id=v.artifact_id
+          WHERE v.run_id=r.id AND a.kind='report')
+      GROUP BY item.id, item.protocol, item.endpoint`
+  }
+
+  async function createFromSteward(currentTurnId: string, operationId: string, currentTime: () => number) {
+    const result = await db.begin(async sql => {
+      const [turn] = await sql`SELECT id, thread_id AS "threadId", status, active, active_ms AS "activeMs",
+        active_limit_ms AS "activeLimitMs", active_since AS "activeSince"
+        FROM steward_turns WHERE id=${currentTurnId} FOR UPDATE`
+      const [operation] = await sql`SELECT turn_id AS "turnId", request_id AS "requestId", request_hash AS "requestHash",
+        goal, source_url AS "sourceUrl", model_snapshot AS "modelSnapshot", credential_ref AS "credentialRef",
+        status, task_id AS "taskId", run_id AS "runId"
+        FROM steward_research_operations WHERE operation_id=${operationId} FOR UPDATE`
+      const [resume] = operation ? await sql`SELECT 1 FROM steward_research_resumes WHERE turn_id=${currentTurnId} AND operation_id=${operationId}` : []
+      if (!turn || !operation || operation.turnId !== currentTurnId && !resume) throw new WorkInputError('调研操作回执无效')
+      if (operation.status === 'accepted') return { taskId: operation.taskId, runId: operation.runId, created: false, status: 'accepted' as const }
+      if (operation.status !== 'planned') return { created: false, status: operation.status as string, failure: '调研操作已结束' }
+      if (!turn.active || turn.status !== 'running') {
+        await sql`UPDATE steward_research_operations SET status='unexecuted', failure='管家轮次已停止', finished_at=now() WHERE operation_id=${operationId}`
+        return { created: false, status: 'unexecuted' as const, failure: '管家轮次已停止' }
+      }
+      const elapsed = Number(turn.activeMs) + (turn.activeSince ? Math.max(0, currentTime() - new Date(turn.activeSince).getTime()) : 0)
+      if (elapsed >= Number(turn.activeLimitMs)) {
+        await sql`UPDATE steward_turns SET budget_reason='time' WHERE id=${currentTurnId}`
+        await sql`UPDATE steward_research_operations SET status='unexecuted', failure='管家轮次活跃时间已用尽', finished_at=now() WHERE operation_id=${operationId}`
+        return { created: false, status: 'unexecuted' as const, failure: '管家轮次活跃时间已用尽' }
+      }
+      const [usage] = await sql`SELECT COUNT(*)::integer AS count FROM steward_research_operations WHERE accepted_turn_id=${currentTurnId} AND status='accepted'`
+      if (Number(usage.count) >= 3) {
+        await sql`UPDATE steward_research_operations SET status='unexecuted', failure='本轮已达到 3 项工作创建额度', finished_at=now() WHERE operation_id=${operationId}`
+        return { created: false, status: 'unexecuted' as const, failure: '本轮已达到 3 项工作创建额度' }
+      }
+      const snapshot = typeof operation.modelSnapshot === 'string' ? JSON.parse(operation.modelSnapshot) : operation.modelSnapshot
+      const input: CreateRequest = { requestId: operation.requestId, goal: operation.goal, sourceUrl: operation.sourceUrl, modelId: snapshot.id, protocol: snapshot.protocol }
+      const taskId = crypto.randomUUID()
+      const created = await createWorkInTransaction(sql, input, operation.requestHash, snapshot, operation.credentialRef, taskId)
+      if (!created) {
+        const [existing] = await sql`SELECT id, request_hash AS "requestHash" FROM work_tasks WHERE request_id=${operation.requestId}`
+        if (!existing || existing.requestHash !== operation.requestHash) throw new WorkConflictError('调研请求 ID 已用于其他工作')
+        await sql`UPDATE steward_research_operations SET status='accepted', task_id=${existing.id}, accepted_turn_id=${currentTurnId}, finished_at=now()
+          WHERE operation_id=${operationId}`
+        await sql`INSERT INTO steward_thread_tasks (thread_id, task_id) VALUES (${turn.threadId}, ${existing.id}) ON CONFLICT DO NOTHING`
+        return { taskId: existing.id, created: false, status: 'accepted' as const }
+      }
+      await sql`UPDATE steward_research_operations SET status='accepted', task_id=${created.taskId}, run_id=${created.runId},
+        accepted_turn_id=${currentTurnId}, finished_at=now() WHERE operation_id=${operationId}`
+      await sql`INSERT INTO steward_thread_tasks (thread_id, task_id) VALUES (${turn.threadId}, ${created.taskId}) ON CONFLICT DO NOTHING`
+      await sql`INSERT INTO steward_events (turn_id, event_id, type, payload) VALUES (${currentTurnId}, ${crypto.randomUUID()}, 'work.accepted',
+        ${JSON.stringify({ operationId, taskId: created.taskId, runId: created.runId })}::jsonb)`
+      return { ...created, created: true, status: 'accepted' as const }
+    })
+    return result.taskId ? { ...result, task: await detail(result.taskId) } : result
+  }
+
   async function requestCleanupRetry(taskId: string) {
     const rows = await db`UPDATE work_runs SET cleanup_state='retry_requested'
       WHERE id = (SELECT r.id FROM work_runs r JOIN work_tasks t ON t.id = r.task_id
@@ -302,21 +386,7 @@ export async function createWorkStore(databaseUrl: string) {
     if (!model.contextWindow || !model.maxTokens || !model.input?.includes('text') || typeof model.reasoning !== 'boolean') throw new WorkInputError('请补充模型的上下文、输出上限、文本输入和推理配置')
     const snapshot = { ...model, protocol: input.protocol ?? model.protocol, endpoint: connection.endpoint }
     const taskId = crypto.randomUUID()
-    const inserted = await db.begin(async sql => {
-      const rows = await sql`INSERT INTO work_tasks (id, owner_id, request_id, request_hash, goal, source_url, status)
-        VALUES (${taskId}, 'owner', ${input.requestId}, ${requestHash}, ${input.goal}, ${input.sourceUrl}, 'queued')
-        ON CONFLICT (request_id) DO NOTHING RETURNING id`
-      if (!rows.length) return false
-      const threadId = crypto.randomUUID()
-      await sql`INSERT INTO work_threads (id, task_id) VALUES (${threadId}, ${taskId})`
-      const runId = crypto.randomUUID()
-      await sql`INSERT INTO work_runs (id, task_id, status, model_snapshot, credential_ref)
-        VALUES (${runId}, ${taskId}, 'queued', ${JSON.stringify(snapshot)}::jsonb, ${connection.credentialRef})`
-      await sql`INSERT INTO work_outbox (run_id) VALUES (${runId})`
-      await sql`INSERT INTO work_messages (id, thread_id, role, content)
-        VALUES (${crypto.randomUUID()}, ${threadId}, 'user', ${input.goal || input.sourceUrl!})`
-      return true
-    })
+    const inserted = await db.begin(sql => createWorkInTransaction(sql, input, requestHash, snapshot, connection.credentialRef!, taskId))
     if (inserted) return { task: await detail(taskId), created: true }
     const [winner] = await db`SELECT id, request_hash FROM work_tasks WHERE request_id = ${input.requestId} AND owner_id = 'owner'`
     if (!winner || winner.request_hash !== requestHash) throw new WorkConflictError('请求 ID 已用于其他工作')
@@ -557,5 +627,5 @@ export async function createWorkStore(databaseUrl: string) {
 
   async function close() { await db.close() }
 
-  return { list, detail, events, create, continueTask, retryTask, appendRunMessage, resolveInteraction, pendingRunMessages, acknowledgeRunMessage, cancel, isRunStopped, artifactVersion, readArtifact, stewardCatalog, stewardMetadata, stewardRead, requestCleanupRetry, resolveRunModelConnection, authorizeModelProxy, reserveModelAttempt, recordModelUsage, close }
+  return { list, detail, events, create, continueTask, retryTask, appendRunMessage, resolveInteraction, pendingRunMessages, acknowledgeRunMessage, cancel, isRunStopped, artifactVersion, readArtifact, stewardCatalog, stewardMetadata, stewardRead, stewardModelStats, createFromSteward, requestCleanupRetry, resolveRunModelConnection, authorizeModelProxy, reserveModelAttempt, recordModelUsage, close }
 }
