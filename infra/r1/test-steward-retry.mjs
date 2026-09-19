@@ -137,6 +137,7 @@ await until(async () => { try { return (await fetch(`${base}/login`)).ok } catch
 cookie = await login()
 replayThread = await api(`/api/steward/threads/${replay.thread.id}`)
 assert.equal(replayThread.retryOperations[0].status, 'accepted')
+await configure()
 await api(`/api/steward/threads/${replay.thread.id}/turns`, 'POST', { requestId: crypto.randomUUID(), content: `继续重试回执 ${accepted.operationId}` })
 replayThread = await until(() => api(`/api/steward/threads/${replay.thread.id}`), terminal, 'accepted retry receipt replay')
 assert.equal(replayThread.retryOperations.length, 1)
