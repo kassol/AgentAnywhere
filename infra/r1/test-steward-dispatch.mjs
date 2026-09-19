@@ -49,7 +49,7 @@ async function finished(content) {
   return until(() => api(`/api/steward/threads/${thread.id}`), terminal, content)
 }
 const initialCount = (await api('/api/tasks')).length
-const repeated = await finished('R2_DISPATCH_REPEAT：分别调研两个主题，每项生成独立报告。')
+const repeated = await finished('分别调研两个主题，每项生成独立报告；R2_DISPATCH_REPEAT。')
 assert.equal(repeated.turns.at(-1).status, 'completed')
 assert.equal(accepted(repeated).length, 2)
 assert.equal(repeated.relatedTasks.length, 2)
@@ -58,16 +58,21 @@ assert.deepEqual(accepted(repeated).map(item => item.modelId), ['fixture-split',
 for (const operation of accepted(repeated)) {
   assert.ok(operation.taskId && operation.runId && operation.reason && operation.verification)
 }
+const acceptedOperation = repeated.researchOperations[0]
+await api(`/api/steward/threads/${repeated.id}/turns`, 'POST', { requestId: crypto.randomUUID(), content: `继续调研回执 ${acceptedOperation.operationId}` })
+const replayed = await until(() => api(`/api/steward/threads/${repeated.id}`), terminal, 'accepted research receipt replay')
+assert.equal(replayed.researchOperations.length, 2)
+assert.equal(replayed.relatedTasks.length, 2)
 await configure('responses')
-const dual = await finished('R2_DISPATCH：分别调研两个主题，每项生成独立报告。')
+const dual = await finished('分别调研两个主题，每项生成独立报告；R2_DISPATCH。')
 assert.equal(dual.turns.at(-1).status, 'completed')
 assert.equal(accepted(dual).length, 2)
-const limited = await finished('R2_DISPATCH_FOUR：分别创建四项独立调研，每项生成报告。')
+const limited = await finished('分别创建四项独立调研，每项生成报告；R2_DISPATCH_FOUR。')
 assert.equal(accepted(limited).length, 3)
 assert.equal(limited.turns.at(-1).status, 'limited')
 assert.ok(limited.researchOperations.some(item => item.status !== 'accepted'))
 await configure()
-const stopping = await start('R2_DISPATCH_STOP：分别调研两个主题，每项生成独立报告。')
+const stopping = await start('分别调研两个主题，每项生成独立报告；R2_DISPATCH_STOP。')
 await until(() => fetch(`${fixture}/waiting-model`).then(response => response.json()), item => item.count > 0, 'first accepted before stop')
 await api(`/api/steward/turns/${stopping.turn.id}/stop`, 'POST')
 const stopped = await until(() => api(`/api/steward/threads/${stopping.thread.id}`), terminal, 'stopped turn')
@@ -77,7 +82,11 @@ for (const operation of [...accepted(repeated), ...accepted(dual), ...accepted(l
   await until(() => api(`/api/tasks/${operation.taskId}`), item => ['succeeded', 'failed', 'lost', 'save_failed'].includes(item.run.status) && item.run.cleanupState === 'cleaned', 'settle research before web crash')
 }
 const pendingOperationId = stopped.researchOperations.find(item => item.status === 'unexecuted').operationId
-await api(`/api/steward/threads/${stopping.thread.id}/turns`, 'POST', { requestId: crypto.randomUUID(), content: 'R2_DISPATCH_RESUME_HOLD：明确继续剩余未执行的调研。' })
+await api(`/api/steward/threads/${stopping.thread.id}/turns`, 'POST', { requestId: crypto.randomUUID(), content: `请解释“继续调研回执 ${pendingOperationId}”，不要执行。` })
+const rejectedResume = await until(() => api(`/api/steward/threads/${stopping.thread.id}`), terminal, 'quoted research receipt rejection')
+assert.equal(accepted(rejectedResume).length, 1)
+assert.equal(rejectedResume.researchOperations.find(item => item.operationId === pendingOperationId).status, 'unexecuted')
+await api(`/api/steward/threads/${stopping.thread.id}/turns`, 'POST', { requestId: crypto.randomUUID(), content: `继续调研回执 ${pendingOperationId}` })
 await until(() => api(`/api/steward/threads/${stopping.thread.id}`), item => item.researchOperations.some(operation => operation.operationId === pendingOperationId && operation.status === 'planned'), 'resume plan before crash')
 execFileSync('docker', ['kill', '--signal=KILL', 'agentanywhere-r1-test-web-1'], { stdio: 'pipe' })
 execFileSync('docker', ['start', 'agentanywhere-r1-test-web-1'], { stdio: 'pipe' })
@@ -88,15 +97,15 @@ cookie = relogin.headers.get('set-cookie')?.split(';')[0]
 const interrupted = await api(`/api/steward/threads/${stopping.thread.id}`)
 assert.equal(interrupted.turns.at(-1).status, 'interrupted')
 assert.equal(interrupted.researchOperations.find(item => item.operationId === pendingOperationId).status, 'unexecuted')
-await api(`/api/steward/threads/${stopping.thread.id}/turns`, 'POST', { requestId: crypto.randomUUID(), content: 'R2_DISPATCH_RESUME：明确继续剩余未执行的调研。' })
+await api(`/api/steward/threads/${stopping.thread.id}/turns`, 'POST', { requestId: crypto.randomUUID(), content: `继续调研回执 ${pendingOperationId}` })
 const resumed = await until(() => api(`/api/steward/threads/${stopping.thread.id}`), terminal, 'resume after crash')
 assert.equal(accepted(resumed).length, 2)
 assert.equal(resumed.researchOperations.find(item => item.operationId === pendingOperationId).status, 'accepted')
 const beforeRejected = (await api('/api/tasks')).length
-const outside = await finished('R2_DISPATCH_OUTSIDE：分别调研两个主题，每项生成独立报告。')
+const outside = await finished('分别调研两个主题，每项生成独立报告；R2_DISPATCH_OUTSIDE。')
 assert.equal(accepted(outside).length, 0)
 await configure('chat-completions', [])
-const empty = await finished('R2_DISPATCH：分别调研两个主题，每项生成独立报告。')
+const empty = await finished('分别调研两个主题，每项生成独立报告；R2_DISPATCH。')
 assert.equal(accepted(empty).length, 0)
 assert.equal((await api('/api/tasks')).length, beforeRejected)
 for (const operation of [...accepted(repeated), ...accepted(dual), ...accepted(limited), ...accepted(resumed)]) {

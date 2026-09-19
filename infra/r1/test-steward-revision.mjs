@@ -86,6 +86,10 @@ assert.deepEqual({ taskId: operation.taskId, sourceVersionId: operation.sourceVe
 assert.ok(operation.runId && operation.reason)
 await api(`/api/steward/turns/${revision.turn.id}/stop`, 'POST')
 await until(() => api(`/api/steward/threads/${revision.thread.id}`), item => !['queued', 'running', 'stopping'].includes(item.turns.at(-1).status), 'stop after accepted revision')
+execFileSync('docker', ['kill', '--signal=KILL', 'agentanywhere-r1-test-web-1'], { stdio: 'pipe' })
+execFileSync('docker', ['start', 'agentanywhere-r1-test-web-1'], { stdio: 'pipe' })
+await until(async () => { try { return (await fetch(`${base}/login`)).ok } catch { return false } }, Boolean, 'accepted revision restart')
+await login()
 
 await configure('fixture-steward-revision-chat')
 await conversation(`继续改稿回执 ${operation.operationId}`, revision.thread)

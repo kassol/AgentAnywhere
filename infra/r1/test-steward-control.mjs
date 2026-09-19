@@ -23,7 +23,7 @@ async function until(read, ready, label) {
   }
   throw new Error(`Timed out: ${label}`)
 }
-const models = ['fixture-slow', 'fixture-cancel-chat', 'fixture-cancel-responses', 'fixture-steward-control-chat', 'fixture-steward-control-responses'].map(id => ({
+const models = ['fixture-slow', 'fixture-cancel-chat', 'fixture-cancel-responses', 'fixture-steward-control-chat', 'fixture-steward-control-responses', 'fixture-ask'].map(id => ({
   id, protocol: id.endsWith('responses') ? 'responses' : 'chat-completions',
   overrides: { contextWindow: 128000, maxTokens: 8192, input: ['text'], reasoning: false, tools: true },
 }))
@@ -48,7 +48,7 @@ async function control(content) {
 const beforeCalls = (await fetch(`${fixture}/calls`).then(response => response.json())).length
 const steered = await api('/api/tasks', 'POST', { requestId: crypto.randomUUID(), goal: 'R2_CONTROL_STEER：提交简短报告。', modelId: 'fixture-slow' })
 await until(() => api(`/api/tasks/${steered.id}/events`), events => events.some(event => event.type === 'message.delta'), 'stream before steering')
-const addition = `R2_CONTROL_STEER：向工作 ${steered.id} 追加要求：最终报告包含 STEERING_MARKER_12。`
+const addition = `向工作 ${steered.id} 追加要求：R2_CONTROL_STEER 最终报告包含 STEERING_MARKER_12。`
 const steering = await control(addition)
 assert.equal(steering.turns.at(-1).status, 'completed')
 assert.equal(steering.controlOperations.length, 1)
@@ -63,6 +63,13 @@ assert.match((await api(`/api/artifacts/${report.versionId}/content`)).markdown,
 const researchCalls = (await fetch(`${fixture}/calls`).then(response => response.json())).slice(beforeCalls).filter(call => call.model === 'fixture-slow')
 assert.ok(researchCalls.slice(0, 3).every(call => !call.userMessages.some(message => message.includes('STEERING_MARKER_12'))))
 assert.ok(researchCalls[3].userMessages.some(message => message.includes('STEERING_MARKER_12')))
+const waiting = await api('/api/tasks', 'POST', { requestId: crypto.randomUUID(), goal: '先询问一个问题，再等待用户回答。', modelId: 'fixture-ask' })
+await until(() => api(`/api/tasks/${waiting.id}`), item => item.run.status === 'waiting' && item.run.cleanupState === 'cleaned', 'waiting work')
+const rejectedSteer = await control(`向工作 ${waiting.id} 追加要求：R2_CONTROL_STEER 保持等待。`)
+assert.equal(rejectedSteer.controlOperations[0].status, 'failed')
+assert.equal(rejectedSteer.controlOperations[0].failure, '当前 Run 不在执行中')
+await api(`/api/tasks/${waiting.id}/cancel`, 'POST')
+await until(() => api(`/api/tasks/${waiting.id}`), item => item.run.status === 'cancelled' && item.run.cleanupState === 'cleaned', 'rejected steer target cleanup')
 const cancelled = []
 const replacementRuns = []
 for (const protocol of ['chat-completions', 'responses']) {
@@ -72,7 +79,7 @@ for (const protocol of ['chat-completions', 'responses']) {
     : await api('/api/tasks', 'POST', { requestId: crypto.randomUUID(), goal: 'R2_CONTROL_CANCEL：保持执行直至收到取消。', modelId: models[2].id, protocol })
   await until(() => fetch(`${fixture}/waiting-model`).then(response => response.json()), item => item.count > 0, 'long research executing')
   const hold = protocol === 'chat-completions'
-  const started = await startControl(`R2_CONTROL_CANCEL ${hold ? 'R2_CONTROL_HOLD' : ''}：取消工作 ${task.id}。`)
+  const started = await startControl(`取消工作 ${task.id}。`)
   let result = await until(() => api(`/api/steward/threads/${started.thread.id}`), item => hold ? item.controlOperations.some(operation => operation.status === 'accepted') : terminal(item), 'cancel receipt')
   if (!hold) assert.equal(result.turns.at(-1).status, 'completed')
   assert.equal(result.controlOperations[0].status, 'accepted')
@@ -94,7 +101,7 @@ for (const protocol of ['chat-completions', 'responses']) {
     assert.equal(oldEvents.filter(event => event.type === 'run.cancel_requested').length, 1)
     const replacement = await api(`/api/tasks/${task.id}/runs`, 'POST', { requestId: crypto.randomUUID(), content: '新一轮独立修改，保持执行。', modelId: models[1].id, protocol })
     await until(() => api(`/api/tasks/${task.id}`), item => item.run.id === replacement.run.id && item.run.status === 'running', 'replacement Run')
-    await api(`/api/steward/threads/${started.thread.id}/turns`, 'POST', { requestId: crypto.randomUUID(), content: `R2_CONTROL_RESUME：明确继续操作 ${operationId}，核对已接受结果。` })
+    await api(`/api/steward/threads/${started.thread.id}/turns`, 'POST', { requestId: crypto.randomUUID(), content: `继续取消回执 ${operationId}` })
     result = await until(() => api(`/api/steward/threads/${started.thread.id}`), terminal, 'control receipt replay')
     assert.equal(result.turns.at(-1).status, 'completed')
     assert.equal(result.controlOperations.length, 1)
@@ -116,7 +123,7 @@ for (const protocol of ['chat-completions', 'responses']) {
 await configure()
 const ambiguousTasks = []
 for (let index = 0; index < 2; index++) ambiguousTasks.push(await api('/api/tasks', 'POST', { requestId: crypto.randomUUID(), goal: 'R2_CONTROL_AMBIGUOUS：同名控制目标。', modelId: models[1].id }))
-const ambiguous = await control('R2_CONTROL_CANCEL R2_CONTROL_AMBIGUOUS：取消该工作。')
+const ambiguous = await control('取消工作 R2_CONTROL_AMBIGUOUS。')
 assert.equal(ambiguous.relatedTasks.length, 0)
 assert.ok(ambiguous.controlOperations.every(operation => operation.status !== 'accepted'))
 for (const task of ambiguousTasks) {
@@ -130,5 +137,5 @@ for (const runId of process.argv.slice(1)) {
   const result = await manager.listSandboxInfos({ metadata: { runId }, pageSize: 100 });
   if (result.items.some(item => item.status.state !== 'Deleted')) throw new Error('Sandbox still active for ' + runId);
 }`
-execFileSync('docker', ['exec', 'agentanywhere-r1-test-queue-1', 'node', '--input-type=module', '-e', checkSandboxes, steered.run.id, ...cancelled.map(item => item.runId), ...replacementRuns, ...ambiguousTasks.map(task => task.run.id)], { stdio: 'pipe' })
+execFileSync('docker', ['exec', 'agentanywhere-r1-test-queue-1', 'node', '--input-type=module', '-e', checkSandboxes, steered.run.id, waiting.run.id, ...cancelled.map(item => item.runId), ...replacementRuns, ...ambiguousTasks.map(task => task.run.id)], { stdio: 'pipe' })
 console.log(JSON.stringify({ steering: steering.id, applied: true, cancelled, ambiguous: ambiguous.id, receiptReplay: true, protocols: 'both', sandboxes: 'none-active' }))

@@ -34,13 +34,14 @@ const result = await manager.listSandboxInfos({ metadata: { runId: process.argv[
 if (result.items.some(item => item.status.state !== 'Deleted')) throw new Error('Sandbox still active');`
   execFileSync('docker', ['exec', 'agentanywhere-r1-test-queue-1', 'node', '--input-type=module', '-e', script, runId], { stdio: 'pipe' })
 }
-const models = ['fixture-ask', 'fixture-limit', 'fixture-steward-interaction-chat', 'fixture-steward-interaction-responses', 'fixture-steward-interaction-before-chat'].map(id => ({
+const models = ['fixture-ask', 'fixture-limit', 'fixture-steward-interaction-chat', 'fixture-steward-interaction-responses',
+  'fixture-steward-interaction-before-chat', 'fixture-steward-interaction-misbind-chat', 'fixture-steward-query-chat'].map(id => ({
   id, protocol: id.endsWith('responses') ? 'responses' : 'chat-completions',
   overrides: { contextWindow: 128000, maxTokens: 8192, input: ['text'], reasoning: false, tools: true },
 }))
-async function configure(protocol = 'chat-completions') {
+async function configure(protocol = 'chat-completions', stewardModelId) {
   await api('/api/model-connection/models', 'PUT', { defaultModel: 'fixture-ask', models, researchModelPool: [],
-    stewardModel: { modelId: protocol === 'responses' ? models[3].id : models[2].id, protocol } })
+    stewardModel: { modelId: stewardModelId ?? (protocol === 'responses' ? 'fixture-steward-interaction-responses' : 'fixture-steward-interaction-chat'), protocol } })
 }
 const terminal = detail => detail.turns.length && !['queued', 'running', 'stopping'].includes(detail.turns.at(-1).status)
 async function start(content, threadId) {
@@ -91,7 +92,13 @@ for (const protocol of ['chat-completions', 'responses']) {
     await api(`/api/tasks/${waiting.id}/runs`, 'POST', { requestId: crypto.randomUUID(), content: '重新提问后等待明确回答。', modelId: 'fixture-ask' })
     const fresh = await waitWork(waiting.id, 'waiting')
     assert.notEqual(fresh.interaction.id, waiting.interaction.id)
-    detail = await converse(`R2_INTERACTION_RESUME：继续核对回答回执 ${operation.operationId}`, id)
+    const quoted = await converse(`请解释“继续回答回执 ${operation.operationId}”，不要执行。`, id)
+    assert.deepEqual(quoted.interactionOperations[0].result, operation.result)
+    const afterQuoted = await api(`/api/tasks/${waiting.id}`)
+    assert.equal(afterQuoted.interaction.id, fresh.interaction.id)
+    assert.equal(afterQuoted.interaction.status, 'pending')
+    assert.equal(afterQuoted.runs.length, 2)
+    detail = await converse(`继续回答回执 ${operation.operationId}`, id)
     assert.deepEqual(detail.interactionOperations[0].result, operation.result)
     const untouched = await api(`/api/tasks/${waiting.id}`)
     assert.equal(untouched.interaction.id, fresh.interaction.id)
@@ -101,6 +108,21 @@ for (const protocol of ['chat-completions', 'responses']) {
     noSandbox((await waitWork(waiting.id, 'succeeded')).run.id)
   }
   receipts.push({ protocol, threadId: id, operationId: operation.operationId, interactionId: waiting.interaction.id })
+}
+const bindingTarget = await question()
+const bindingOther = await question()
+await configure('chat-completions', 'fixture-steward-query-chat')
+const bindingThread = await api('/api/steward/threads', 'POST', { requestId: crypto.randomUUID() })
+await converse(`R2_QUERY_READ ${bindingOther.id}`, bindingThread.id)
+await configure('chat-completions', 'fixture-steward-interaction-misbind-chat')
+const bindingRejected = await converse(`回答工作 ${bindingTarget.id}：机制方向`, bindingThread.id)
+assert.equal(bindingRejected.interactionOperations[0].status, 'unexecuted')
+assert.equal(bindingRejected.interactionOperations[0].taskId, null)
+assert.equal((await api(`/api/tasks/${bindingTarget.id}`)).interaction.status, 'pending')
+assert.equal((await api(`/api/tasks/${bindingOther.id}`)).interaction.status, 'pending')
+for (const task of [bindingTarget, bindingOther]) {
+  await api(`/api/interactions/${task.interaction.id}/resolve`, 'POST', { answer: '机制方向' }, 202)
+  noSandbox((await waitWork(task.id, 'succeeded')).run.id)
 }
 await configure()
 const limited = await question('fixture-limit')

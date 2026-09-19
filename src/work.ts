@@ -606,7 +606,7 @@ export async function createWorkStore(databaseUrl: string, artifactDir = join(pr
           WHERE operation_id=${operationId}`
         return { operationId, taskId, sourceRunId: run.id, status: 'failed' as const, failure }
       }
-      await sql`UPDATE steward_retry_operations SET task_id=${taskId}, source_run_id=${run.id}, model_snapshot=${JSON.stringify(snapshot)}::jsonb,
+      await sql`UPDATE steward_retry_operations SET task_id=${taskId}, source_run_id=${run.id}, model_snapshot=${JSON.stringify(snapshot)}::text::jsonb,
         credential_ref=${credentialRef}, status='planned', failure=NULL WHERE operation_id=${operationId}`
       return { operationId, taskId, sourceRunId: run.id, status: 'planned' as const }
     })
@@ -689,7 +689,7 @@ export async function createWorkStore(databaseUrl: string, artifactDir = join(pr
       await sql`UPDATE work_tasks SET status='queued' WHERE id=${operation.taskId}`
       const receipt = { kind: 'retry', mode: operation.mode, taskId: operation.taskId, sourceRunId: source.id, runId,
         modelId: snapshot.id, protocol: snapshot.protocol }
-      await sql`UPDATE steward_retry_operations SET status='accepted', run_id=${runId}, result_json=${JSON.stringify(receipt)}::jsonb,
+      await sql`UPDATE steward_retry_operations SET status='accepted', run_id=${runId}, result_json=${JSON.stringify(receipt)}::text::jsonb,
         failure=NULL, finished_at=now() WHERE operation_id=${operationId}`
       await sql`INSERT INTO steward_thread_tasks (thread_id, task_id) VALUES (${turn.threadId}, ${operation.taskId}) ON CONFLICT DO NOTHING`
       await sql`INSERT INTO steward_events (turn_id, event_id, type, payload) VALUES (${currentTurnId}, ${crypto.randomUUID()}, 'work.retried',

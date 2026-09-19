@@ -60,20 +60,29 @@ function stewardQuery(body, response, responses) {
   } else if (interaction || retry) {
     const results = outputs.map(output => { try { return JSON.parse(output) } catch { return {} } })
     const prefix = interaction ? 'R2_INTERACTION' : 'R2_RETRY'
-    if (planner && (user.includes(`${prefix}_RESUME`) || retry && user.startsWith('继续重试回执 ')) && !outputs.length) {
+    if (planner && (interaction && user.includes('继续回答回执 ') || retry && user.startsWith('继续重试回执 ')) && !outputs.length) {
       name = interaction ? 'resume_interaction_answer' : 'resume_work_retry'
       args = { operationId: ids[0] }
     } else if (planner && !outputs.length) {
       if (interaction) {
         name = 'freeze_interaction_answer'
-        const decision = /^(继续|结束)(工作 [0-9a-f-]{36})?$/.exec(user)?.[1]
-        args = { query: ids[0] ?? '', answer: decision ? null : user.match(/^回答(?:工作 [0-9a-f-]{36})?[：:]([\s\S]+)$/)?.[1]?.trim() ?? user, decision: decision === '继续' ? 'continue' : decision === '结束' ? 'finish' : null }
+        args = {}
       } else {
         name = 'freeze_work_retry'
         args = { mode: user.includes('改用模型') || user.includes('R2_RETRY_REPLACE') ? 'replacement' : 'same', query: ids[0] ?? '', modelId: user.includes('改用模型') || user.includes('R2_RETRY_REPLACE') ? user.match(/模型[：: ]+([\w-]+)/)?.[1] ?? 'fixture-split' : null }
       }
     } else if (planner && outputs.length === 1) {
-      name = interaction ? 'find_interaction_candidates' : 'find_retry_candidates'; args = { cursor: 0 }
+      if (interaction && body.model === 'fixture-steward-interaction-misbind-chat') {
+        const trusted = JSON.parse(system.split('可信结构化回执：').at(-1))
+        const alternate = trusted.associatedTasks?.find(item => item.id !== ids[0] && item.interaction?.status === 'pending')
+        name = 'freeze_interaction_target'; args = { operationId: results[0].operationId, taskId: alternate?.id, interactionId: alternate?.interaction?.id }
+      } else if (retry && body.model === 'fixture-steward-retry-misbind-chat') {
+        const trusted = JSON.parse(system.split('可信结构化回执：').at(-1))
+        const alternate = trusted.associatedTasks?.find(item => item.id !== ids[0])
+        name = 'freeze_retry_target'; args = { operationId: results[0].operationId, taskId: alternate?.id }
+      } else {
+        name = interaction ? 'find_interaction_candidates' : 'find_retry_candidates'; args = { cursor: 0 }
+      }
     } else if (planner && outputs.length === 2) {
       const candidate = results[1].items?.find(item => !ids.length || item.id === ids[0])
       if (candidate) {
@@ -88,11 +97,13 @@ function stewardQuery(body, response, responses) {
     }
   } else if (control) {
     const results = outputs.map(output => { try { return JSON.parse(output) } catch { return {} } })
-    if (planner && user.includes('R2_CONTROL_RESUME') && !outputs.length) {
+    if (planner && (user.includes('继续追加回执 ') || user.includes('继续取消回执 ')) && !outputs.length) {
       name = 'resume_work_control'; args = { operationId: ids[0] }
     } else if (planner && !outputs.length) {
+      const cancelling = user.startsWith('取消工作 ')
+      const steerContent = /追加要求[：:]\s*([\s\S]+)$/.exec(user)?.[1]?.trim() ?? user
       name = 'freeze_work_control'
-      args = { kind: user.includes('R2_CONTROL_CANCEL') ? 'cancel' : 'steer', query: ids[0] ?? 'R2_CONTROL_AMBIGUOUS', content: user.includes('R2_CONTROL_CANCEL') ? null : user }
+      args = { kind: cancelling ? 'cancel' : 'steer', query: ids[0] ?? 'R2_CONTROL_AMBIGUOUS', content: cancelling ? null : steerContent }
     } else if (planner && outputs.length === 1) {
       name = 'find_control_candidates'; args = { cursor: 0 }
     } else if (planner && outputs.length === 2 && ids.length) {
@@ -100,16 +111,15 @@ function stewardQuery(body, response, responses) {
     } else if (planner) answer = '控制目标已确定；目标不唯一时需澄清。'
     else {
       const apply = tools.find(item => item.name === 'apply_frozen_control')
-      holdDispatch = user.includes('R2_CONTROL_HOLD') && outputs.length === 1
+      holdDispatch = body.model === 'fixture-steward-control-chat' && user.startsWith('取消工作 ') && outputs.length === 1
       if (apply && !outputs.length) {
         name = apply.name; args = { operationId: apply.parameters.properties.operationId.const }
       } else answer = apply ? '操作结果请查看持久回执。' : '请明确要操作哪项工作。'
     }
   } else if (dispatch) {
-    if (planner && user.includes('R2_DISPATCH_RESUME') && !outputs.length) {
+    if (planner && user.includes('继续调研回执 ') && !outputs.length) {
       name = 'resume_research_dispatch'
-      const receipt = JSON.parse(system.split('可信结构化回执：').at(-1))
-      args = { operationIds: receipt.resumableResearch.map(item => item.operationId) }
+      args = { operationIds: [ids[0]] }
     } else if (planner && user.includes('R2_DISPATCH') && !outputs.length) {
       name = 'freeze_research_dispatch'
       const count = user.includes('R2_DISPATCH_FOUR') ? 4 : 2
@@ -123,7 +133,10 @@ function stewardQuery(body, response, responses) {
       const creator = tools.find(item => item.name === 'create_frozen_research')
       const property = creator?.parameters?.properties?.operationId
       const operations = property?.enum ?? (property?.const ? [property.const] : [])
-      holdDispatch = user.includes('R2_DISPATCH_STOP') && outputs.length === 1 || user.includes('R2_DISPATCH_RESUME_HOLD') && outputs.length === 0
+      const resumeKey = `dispatch:${user}`
+      const holdResume = user.startsWith('继续调研回执 ') && system.includes('"status":"planned"') && outputs.length === 0 && !interrupted.has(resumeKey)
+      if (holdResume) interrupted.add(resumeKey)
+      holdDispatch = user.includes('R2_DISPATCH_STOP') && outputs.length === 1 || holdResume
       const repeat = user.includes('R2_DISPATCH_REPEAT')
       const index = repeat ? Math.max(0, outputs.length - 1) : outputs.length
       if (creator && index < operations.length && !holdDispatch) {
@@ -222,8 +235,11 @@ http.createServer(async (request, response) => {
   request.setEncoding('utf8')
   for await (const chunk of request) raw += chunk
   const body = JSON.parse(raw)
-  if (body.model === 'fixture-steward-interaction-before-chat'
-    && body.tools?.some(tool => tool.function?.name === 'apply_frozen_interaction_answer')
+  const beforeFrozenApply = body.model === 'fixture-steward-interaction-before-chat'
+    ? 'apply_frozen_interaction_answer'
+    : body.model === 'fixture-steward-retry-before-chat' ? 'apply_frozen_retry' : null
+  if (beforeFrozenApply
+    && body.tools?.some(tool => tool.function?.name === beforeFrozenApply)
     && !body.messages?.some(message => message.role === 'tool')) {
     await new Promise(resolve => {
       waitingAnswers.push(resolve)

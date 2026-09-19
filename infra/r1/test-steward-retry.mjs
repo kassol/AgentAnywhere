@@ -35,6 +35,8 @@ const models = [
   ['fixture-steward-query-chat', 'chat-completions', 128000],
   ['fixture-steward-retry-chat', 'chat-completions', 128000],
   ['fixture-steward-retry-hold-chat', 'chat-completions', 128000],
+  ['fixture-steward-retry-before-chat', 'chat-completions', 128000],
+  ['fixture-steward-retry-misbind-chat', 'chat-completions', 128000],
   ['fixture-steward-retry-responses', 'responses', 128000],
 ].map(([id, protocol, contextWindow]) => ({ id, protocol, overrides: { contextWindow, maxTokens: 4096, input: ['text'], reasoning: false, tools: true } }))
 async function configure(stewardProtocol = 'chat-completions', pool = ['fixture-split'], stewardModelId) {
@@ -65,6 +67,8 @@ assert.equal(sameThread.retryOperations.length, 1)
 assert.match(JSON.stringify(sameThread.retryOperations[0]), /"status":"accepted"/)
 assert.equal(sameThread.retryOperations[0].result.sourceRunId, sameSource.run.id)
 assert.equal(sameThread.retryOperations[0].result.modelId, 'fixture-retry')
+assert.equal(sameThread.retryOperations[0].modelId, 'fixture-retry')
+assert.equal(sameThread.retryOperations[0].protocol, 'chat-completions')
 const sameCompleted = await until(() => api(`/api/tasks/${sameSource.id}`), item => item.run.status === 'succeeded' && item.run.cleanupState === 'cleaned', 'same-model retry completion')
 assert.equal(sameCompleted.runs.length, 2)
 assert.equal(sameCompleted.run.retryOfRunId, sameSource.run.id)
@@ -80,6 +84,36 @@ const replacementCompleted = await until(() => api(`/api/tasks/${replacementSour
 assert.equal(replacementCompleted.runs.length, 2)
 assert.equal(replacementCompleted.run.model.id, 'fixture-split')
 assert.equal((await api(`/api/tasks/${replacementSource.id}/events`)).filter(event => event.type === 'tool.started' && event.payload.name === 'echo_observation').length, 0)
+
+const poolSource = await failedTask()
+await configure('chat-completions', ['fixture-split'], 'fixture-steward-retry-before-chat')
+const poolRetry = await startRetry(`把工作 ${poolSource.id} 改用模型：fixture-split 重试。`)
+await until(() => fetch(`${fixture}/waiting-answer`).then(response => response.json()), item => item.count === 1, 'frozen replacement before apply')
+let poolThread = await until(() => api(`/api/steward/threads/${poolRetry.thread.id}`),
+  item => item.retryOperations[0]?.status === 'planned', 'planned replacement before stop')
+await api(`/api/steward/turns/${poolRetry.turn.id}/stop`, 'POST')
+poolThread = await until(() => api(`/api/steward/threads/${poolRetry.thread.id}`), terminal, 'stopped replacement retry')
+const poolOperation = poolThread.retryOperations[0]
+assert.equal(poolOperation.status, 'unexecuted')
+assert.equal((await api(`/api/tasks/${poolSource.id}`)).runs.length, 1)
+await configure('chat-completions', [], 'fixture-steward-retry-chat')
+await api(`/api/steward/threads/${poolRetry.thread.id}/turns`, 'POST', {
+  requestId: crypto.randomUUID(), content: `继续重试回执 ${poolOperation.operationId}`,
+})
+poolThread = await until(() => api(`/api/steward/threads/${poolRetry.thread.id}`), terminal, 'replacement recovery rejected after pool removal')
+assert.equal(poolThread.retryOperations[0].status, 'unexecuted')
+assert.match(poolThread.retryOperations[0].failure, /已不在当前有效调研模型池或运行参数已变化/)
+assert.equal((await api(`/api/tasks/${poolSource.id}`)).runs.length, 1)
+await configure()
+await api(`/api/steward/threads/${poolRetry.thread.id}/turns`, 'POST', {
+  requestId: crypto.randomUUID(), content: `继续重试回执 ${poolOperation.operationId}`,
+})
+poolThread = await until(() => api(`/api/steward/threads/${poolRetry.thread.id}`),
+  item => item.retryOperations[0]?.status === 'accepted' && terminal(item), 'replacement recovery after pool restore')
+const poolCompleted = await until(() => api(`/api/tasks/${poolSource.id}`),
+  item => item.run.status === 'succeeded' && item.run.cleanupState === 'cleaned', 'replacement recovery completion')
+assert.equal(poolCompleted.runs.length, 2)
+assert.equal(poolCompleted.run.model.id, 'fixture-split')
 
 await configure('chat-completions', ['fixture-responses'])
 const protocolSource = await failedTask()
@@ -110,6 +144,26 @@ const noConsentThread = await until(() => api(`/api/steward/threads/${noConsent.
 assert.equal(noConsentThread.retryOperations.length, 0)
 assert.equal((await api(`/api/tasks/${noConsentSource.id}`)).runs.length, 1)
 
+const bindingSource = await failedTask()
+const bindingOther = await failedTask()
+await configure('chat-completions', ['fixture-split'], 'fixture-steward-query-chat')
+const bindingThread = await api('/api/steward/threads', 'POST', { requestId: crypto.randomUUID() })
+for (const task of [bindingSource, bindingOther]) {
+  await api(`/api/steward/threads/${bindingThread.id}/turns`, 'POST', {
+    requestId: crypto.randomUUID(), content: `R2_QUERY_READ ${task.id}`,
+  })
+  await until(() => api(`/api/steward/threads/${bindingThread.id}`), terminal, 'associate retry target')
+}
+await configure('chat-completions', ['fixture-split'], 'fixture-steward-retry-misbind-chat')
+await api(`/api/steward/threads/${bindingThread.id}/turns`, 'POST', {
+  requestId: crypto.randomUUID(), content: `同模型重试工作 ${bindingSource.id}。`,
+})
+const bindingRejected = await until(() => api(`/api/steward/threads/${bindingThread.id}`), terminal, 'reject retry target rebinding')
+assert.equal(bindingRejected.retryOperations[0].status, 'unexecuted')
+assert.equal(bindingRejected.retryOperations[0].taskId, null)
+assert.equal((await api(`/api/tasks/${bindingSource.id}`)).runs.length, 1)
+assert.equal((await api(`/api/tasks/${bindingOther.id}`)).runs.length, 1)
+
 await configure('chat-completions', ['fixture-split'], 'fixture-steward-query-chat')
 const explanationText = `解释工作 ${noConsentSource.id} 的真实失败，并依据有效人工模型池和已验证成功记录建议替代模型。`
 const explanation = await startRetry(explanationText)
@@ -137,6 +191,8 @@ await until(async () => { try { return (await fetch(`${base}/login`)).ok } catch
 cookie = await login()
 replayThread = await api(`/api/steward/threads/${replay.thread.id}`)
 assert.equal(replayThread.retryOperations[0].status, 'accepted')
+assert.equal(replayThread.retryOperations[0].modelId, 'fixture-retry')
+assert.equal(replayThread.retryOperations[0].protocol, 'chat-completions')
 await configure()
 await api(`/api/steward/threads/${replay.thread.id}/turns`, 'POST', { requestId: crypto.randomUUID(), content: `继续重试回执 ${accepted.operationId}` })
 replayThread = await until(() => api(`/api/steward/threads/${replay.thread.id}`), terminal, 'accepted retry receipt replay')
@@ -146,7 +202,9 @@ const replayCompleted = await until(() => api(`/api/tasks/${replaySource.id}`), 
 assert.equal(replayCompleted.runs.length, 2)
 
 const runIds = [sameSource.run.id, sameCompleted.run.id, replacementSource.run.id, replacementCompleted.run.id,
-  protocolSource.run.id, protocolRecovered.run.id, contextSource.run.id, noConsentSource.run.id, replaySource.run.id, accepted.result.runId]
+  poolSource.run.id, poolCompleted.run.id,
+  protocolSource.run.id, protocolRecovered.run.id, contextSource.run.id, noConsentSource.run.id,
+  bindingSource.run.id, bindingOther.run.id, replaySource.run.id, accepted.result.runId]
 await until(async () => Promise.all(runIds.map(async runId => {
   const script = `import { SandboxManager } from '@alibaba-group/opensandbox';
 const manager = SandboxManager.create({ connectionConfig: { domain: process.env.OPEN_SANDBOX_DOMAIN, protocol: 'http', apiKey: process.env.OPEN_SANDBOX_API_KEY, useServerProxy: true, disableMetrics: true } });
@@ -162,5 +220,6 @@ for (const call of stewardCalls) callsByMessage.set(call.user, (callsByMessage.g
 for (const [message, count] of callsByMessage) assert.ok(count <= 8, `steward retry exceeded request limit for ${message}`)
 
 console.log(JSON.stringify({ sameModel: sameCompleted.run.id, replacement: replacementCompleted.run.id,
+  replacementPoolRecovery: poolCompleted.run.id,
   rejected: [protocolSource.id, contextSource.id], preservedAfterRejection: protocolRecovered.run.id,
   noConsent: noConsentSource.id, receiptReplay: accepted.operationId, protocols: 'both', requestLimit: 8 }))

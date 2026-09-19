@@ -113,6 +113,15 @@ export function Steward() {
     else if (routeId) await loadDetail(routeId)
   }
 
+  function resumeButton(operationId: string, status: string, action: '调研' | '追加' | '取消' | '回答' | '重试' | '改稿', recoverable = true) {
+    if (!recoverable || !['accepted', 'unexecuted'].includes(status)) return null
+    const command = `继续${action}回执 ${operationId}`
+    return <button type="button" className="secondary" aria-label={command} onClick={() => {
+      pending.current = null
+      setContent(command)
+    }}>填入继续命令</button>
+  }
+
   const current = detail?.turns.at(-1)
   const activeTurns = detail?.turns.filter(turn => ['queued', 'running', 'stopping'].includes(turn.status)) ?? []
   return (
@@ -145,6 +154,7 @@ export function Steward() {
               {' · '}{operation.verification === 'verified' ? '已有成功报告记录' : '尚未实测'}
               {sourceLabels.length > 0 && <> · 依据：{sourceLabels.join('、')}</>}
               <br /><small>选择理由：{operation.reason}{operation.runId ? ` · Run ${operation.runId.slice(0, 8)}` : ''}{operation.failure ? ` · ${operation.failure}` : ''}</small>
+              {' '}{resumeButton(operation.operationId, operation.status, '调研')}
             </li>
           })}</ul></section>}
           {!!detail?.controlOperations.length && <section aria-label="工作控制"><h3>工作控制</h3><ul>{detail.controlOperations.map(operation => <li key={operation.operationId}>
@@ -153,6 +163,7 @@ export function Steward() {
             {operation.runId ? ` · Run ${operation.runId.slice(0, 8)}` : ''}
             {operation.content ? <><br /><small>{operation.content}</small></> : null}
             {operation.failure ? <><br /><small>{operation.failure}</small></> : null}
+            {' '}{resumeButton(operation.operationId, operation.status, operation.kind === 'steer' ? '追加' : '取消', Boolean(operation.taskId && operation.runId))}
           </li>)}</ul></section>}
           {!!detail?.interactionOperations.length && <section aria-label="工作回答"><h3>工作回答</h3><ul>{detail.interactionOperations.map(operation => <li key={operation.operationId}>
             {operation.taskId ? <a href={`/tasks/${operation.taskId}`}>{operation.interactionKind === 'limit' ? '额度决定' : '回答问题'}</a>
@@ -161,6 +172,7 @@ export function Steward() {
             {operation.runId ? ` · Run ${operation.runId.slice(0, 8)}` : ''}{operation.epoch === undefined ? '' : ` · epoch ${operation.epoch}`}
             {operation.answer ? <><br /><small>{operation.answer}</small></> : operation.decision ? <><br /><small>{operation.decision === 'continue' ? '继续工作' : '结束工作'}</small></> : null}
             {operation.failure ? <><br /><small>{operation.failure}</small></> : null}
+            {' '}{resumeButton(operation.operationId, operation.status, '回答', Boolean(operation.taskId && operation.runId && operation.interactionId && operation.epoch !== null && operation.epoch !== undefined))}
           </li>)}</ul></section>}
           {!!detail?.retryOperations.length && <section aria-label="工作重试"><h3>工作重试</h3><ul>{detail.retryOperations.map(operation => <li key={operation.operationId}>
             {operation.taskId ? <a href={`/tasks/${operation.taskId}`}>{operation.mode === 'same' ? '同模型重试' : '替代模型重试'}</a>
@@ -170,6 +182,7 @@ export function Steward() {
             {operation.sourceRunId ? ` · 原 Run ${operation.sourceRunId.slice(0, 8)}` : ''}
             {operation.runId ? ` · 新 Run ${operation.runId.slice(0, 8)}` : ''}
             {operation.failure ? <><br /><small>{operation.failure}</small></> : null}
+            {' '}{resumeButton(operation.operationId, operation.status, '重试', Boolean(operation.taskId && operation.sourceRunId && operation.modelId))}
           </li>)}</ul></section>}
           {!!detail?.revisionOperations.length && <section aria-label="报告改稿"><h3>报告改稿</h3><ul>{detail.revisionOperations.map(operation => <li key={operation.operationId}>
             {operation.taskId ? <a href={`/tasks/${operation.taskId}`}>报告改稿</a> : <span>报告改稿</span>}
@@ -178,6 +191,7 @@ export function Steward() {
             {operation.sourceVersionId && operation.taskId ? <> · <a href={`/tasks/${operation.taskId}?version=${operation.sourceVersionId}`}>源成果 {operation.sourceVersionId.slice(0, 8)}</a></> : null}
             {operation.runId ? ` · 新 Run ${operation.runId.slice(0, 8)}` : ''}
             <br /><small>修改要求：{operation.content} · 选择理由：{operation.reason}{operation.failure ? ` · ${operation.failure}` : ''}</small>
+            {' '}{resumeButton(operation.operationId, operation.status, '改稿', Boolean(operation.taskId && operation.sourceVersionId && operation.modelId))}
           </li>)}</ul></section>}
           {!!detail?.relatedTasks.length && <section aria-label="关联工作"><h3>关联工作</h3><ul>{detail.relatedTasks.map(task => <li key={task.id}>
             <a href={task.href}>{task.goal}</a> <span>{statusLabel[task.status] ?? task.status}</span>

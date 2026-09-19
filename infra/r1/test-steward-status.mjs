@@ -119,7 +119,7 @@ assert.match(failedCard.failure, /fixture persistent failure/)
 noSandbox(failed.run.id)
 
 await configure('fixture-steward-dispatch-chat')
-const dispatched = await conversation('R2_DISPATCH：分别调研两个主题，每项生成独立报告。')
+const dispatched = await conversation('分别调研两个主题，每项生成独立报告；R2_DISPATCH。')
 const accepted = dispatched.researchOperations.filter(operation => operation.status === 'accepted')
 assert.equal(accepted.length, 2)
 assert.deepEqual(dispatched.relatedTasks.map(task => task.id).sort(), accepted.map(operation => operation.taskId).sort())
