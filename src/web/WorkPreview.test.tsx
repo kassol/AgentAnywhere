@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { parseTaskPreviewHref, pinPreviewVersion, reportScrollKey, resolveReportVersion, type PreviewArtifact } from './WorkPreview'
+import { confirmAnnotationReplacement, parseTaskPreviewHref, pinPreviewVersion, reportScrollKey, resolveReportVersion, type PreviewArtifact } from './WorkPreview'
 
 const taskId = '11111111-1111-4111-8111-111111111111'
 const oldVersion = '22222222-2222-4222-8222-222222222222'
@@ -30,4 +30,10 @@ test('the first resolved report is pinned before later refreshes can change the 
 test('reading position is isolated by task and immutable report version', () => {
   expect(reportScrollKey(taskId, oldVersion)).not.toBe(reportScrollKey(taskId, latestVersion))
   expect(reportScrollKey(taskId, oldVersion)).not.toBe(reportScrollKey('55555555-5555-4555-8555-555555555555', oldVersion))
+})
+
+test('a new selection cannot replace an unfinished note without confirmation', () => {
+  expect(confirmAnnotationReplacement('', () => false)).toBe(true)
+  expect(confirmAnnotationReplacement('未保存意见', () => false)).toBe(false)
+  expect(confirmAnnotationReplacement('未保存意见', () => true)).toBe(true)
 })

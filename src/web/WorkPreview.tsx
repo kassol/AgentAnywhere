@@ -66,6 +66,10 @@ export function reportScrollKey(taskId: string, versionId: string) {
   return `agentanywhere:report-scroll:${taskId}:${versionId}`
 }
 
+export function confirmAnnotationReplacement(note: string, ask: (message: string) => boolean = confirm) {
+  return !note.trim() || ask('当前选区已有未保存意见。替换选区后该意见将被覆盖，是否继续？')
+}
+
 export function pinPreviewVersion(selection: PreviewSelection, artifact: PreviewArtifact | null) {
   return !selection.versionId && artifact ? { taskId: selection.taskId, versionId: artifact.versionId } : null
 }
@@ -260,6 +264,7 @@ function WorkPreview({ selection, onSelect, onClose, onFillComposer }: { selecti
       setAnnotationError('单条引用最多 4000 个字符，请缩小选区。')
       return
     }
+    if (pendingSelection && !confirmAnnotationReplacement(note)) return
     setPendingSelection(selector)
     setNote('')
     const stored = artifact && writeReportAnnotationDraft(selection.taskId, artifact.versionId, { selector, note: '' })
@@ -364,9 +369,14 @@ function WorkPreview({ selection, onSelect, onClose, onFillComposer }: { selecti
           {reportError && <p className="error" role="alert">{reportError}</p>}
           {!reportError && report?.versionId !== artifact.versionId && <p className="muted" role="status">正在加载报告…</p>}
           {report?.versionId === artifact.versionId && <>
-            <p className="review-hint">选中报告文字后写批注。批注仅保存在当前浏览器，并固定到此报告版本。</p>
+            <p className="review-hint">鼠标选中文字后可直接批注；键盘在正文中用 Shift + 方向键扩选，按 Enter 写批注。批注仅保存在当前浏览器，并固定到此报告版本。</p>
             <article ref={reportRoot} className="work-preview-report" data-task-id={task.id} data-report-version={artifact.versionId}
-              tabIndex={0} aria-label="报告正文，可选择文字添加批注" onMouseUp={selectReportText} onKeyUp={selectReportText}>
+              tabIndex={0} aria-label="报告正文，可选择文字并按 Enter 添加批注" onMouseUp={selectReportText}
+              onKeyDown={event => {
+                if (event.key !== 'Enter' || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey || event.nativeEvent.isComposing) return
+                event.preventDefault()
+                selectReportText()
+              }}>
               <ReportMarkdown markdown={report.markdown} />
             </article>
             {pendingSelection && <form className="review-selection" onSubmit={addAnnotation}>
