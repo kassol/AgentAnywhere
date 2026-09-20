@@ -176,4 +176,6 @@ R1-08 的 queue 同时连接 `agentanywhere-r1-search` 专用网络，从固定 
 
 真实模型与搜索验收使用独立的应用及 pg-boss schema 和 `19114` 端口。Web 将独立 `live-data/` 目录可写挂载到 `/data`，其中的模型连接是正式配置的私有副本；queue 连接 `agentanywhere-r1-search`。运行上述 `test-all.mjs live` 覆盖双协议真实 Run、取消、模型错误和搜索；脚本从公开 API 核查工具结果、报告引用及沙箱回收。证据见 [R1-08](../../docs/evidence/r1-08.md) 与 [R1-14](../../docs/evidence/r1-14.md)。
 
-2026-09-19 R2 已发布，应用 SHA 为 `6787b70a47a96c8ab9b20056d1d67e3fb0efbbed`；配对备份迁移后位于 `/opt/agentanywhere/backups/20260919-r2-release`。前一健康版本 `ac7f88d8ed0ce6dbf12f704026c68cb25aa48e26` 的构建及正式镜像保留，可按上文流程回退。R2 三阶段验收、旧数据兼容、浏览器和清理结果见 [R2-12](../../docs/evidence/r2-12.md)。
+2026-09-19 R2 已发布，应用 SHA 为 `6787b70a47a96c8ab9b20056d1d67e3fb0efbbed`；配对备份迁移后位于 `/opt/agentanywhere/backups/20260919-r2-release`。该次发布保留的 R1 回退材料已在 R3 验收后退役，当前保留版本见下文。R2 三阶段验收、旧数据兼容、浏览器和清理结果见 [R2-12](../../docs/evidence/r2-12.md)。
+
+2026-09-20 R3 已发布，正式应用 SHA 为 `1d4d8a286fccdd2c9f4a63608e9eb191a931f255`。仅保留此版本与 R2 `6787b70a47a96c8ab9b20056d1d67e3fb0efbbed` 的 release 和正式镜像；配对备份位于 `/opt/agentanywhere/backups/20260920-r3-release`，最终 UI 更新前的配对备份位于其 `final-ui/`。项目文件统一到 `/opt/agentanywhere/{runtime,releases,backups,checks}`，验收临时资源完成后定向清理；系统 gVisor 路径保持。证据见 [R3-08](../../docs/evidence/r3-08.md)。

@@ -2,7 +2,7 @@
 
 ## 项目概述
 
-自托管的个人委托工作台。已实现独立 Web 登录、模型连接、工作创建、两种协议的隔离执行与持久事件、报告成果保存和阅读、执行中追加要求、受控搜索、取消、提问与回答恢复、完成后继续工作、失败后手动重试和执行上限；管家已支持独立持久对话、双协议流式轮次、受限查询和解读历史工作、从人工模型池派发多项独立调研，关联工作关键状态卡和全局 Interaction 待办、工作控制与回答、明确重试与改稿、按回执恢复和长对话摘要。R1/R2 已通过隔离、真实双协议和 ego-browser 验收，并发布至正式公网。产品要求见 [PRD](docs/PRD.md)，实施范围见 [MVP](docs/MVP.md)。
+自托管的个人委托工作台。已实现独立 Web 登录、模型连接、工作创建、两种协议的隔离执行与持久事件、报告成果保存和阅读、执行中追加要求、受控搜索、取消、提问与回答恢复、完成后继续工作、失败后手动重试和执行上限；管家已支持独立持久对话、双协议流式轮次、受限查询和解读历史工作、从人工模型池派发多项独立调研，关联工作关键状态卡和全局 Interaction 待办、工作控制与回答、明确重试与改稿、按回执恢复和长对话摘要。R1/R2/R3 已通过隔离、真实双协议和 ego-browser 验收，并发布至正式公网。R3 加入 A 工作台、明暗主题、可靠输入与本机草稿、活动阅读保持、工作/报告预览、精确快捷操作、版本批注改稿和分层设置。产品要求见 [PRD](docs/PRD.md)，实施范围见 [MVP](docs/MVP.md)。
 
 ## 技术栈
 
@@ -15,7 +15,7 @@ React/TypeScript、Bun、PostgreSQL、Node.js 24.21、pg-boss 12.26.3、Pi 0.85.
 - `infra/w0/`：独立基线验证脚本与运行配置；执行证据位于 `docs/evidence/w0/`。
 - `infra/r1/`：R1 镜像、队列与沙箱运行配置。
 - `infra/r1/search/`：cc-la 独立私有 SearXNG 的配置与复现步骤。
-- `src/server.ts`：Web/API 服务与登录鉴权；`src/model-connection.ts`：单套模型连接配置与发现；`src/work.ts`：工作、事件和成果版本持久化；`src/queue-worker.mjs`：Node 队列、资料工具入口、成果复制与沙箱生命周期；`src/research-tools.mjs`：受控搜索与公开网页读取；`src/agent-worker.mjs`：沙箱内 Pi；`src/web/`：精简 Web；`docs/evidence/`：实施验证。
+- `src/server.ts`：Web/API 服务与登录鉴权；`src/model-connection.ts`：单套模型连接配置与发现；`src/work.ts`：工作、事件和成果版本持久化；`src/queue-worker.mjs`：Node 队列、资料工具入口、成果复制与沙箱生命周期；`src/research-tools.mjs`：受控搜索与公开网页读取；`src/agent-worker.mjs`：沙箱内 Pi；`src/web/`：管家工作台、报告审阅与模型设置；`docs/evidence/`：实施验证。
 - `CONTEXT.md`：领域定义。
 
 ## 常用命令
@@ -79,3 +79,4 @@ React/TypeScript、Bun、PostgreSQL、Node.js 24.21、pg-boss 12.26.3、Pi 0.85.
 - 2026-09-19：加入 R2-09 明确报告改稿、来源版本冻结、原工作新 Run 与稳定回执，失败保留旧报告。
 - 2026-09-19：加入 R2-10 各类回执的明确继续命令、原结果核对、当前授权重验及真实业务拒绝原因留存。
 - 2026-09-19：R2 发布至 cc-la；统一 isolated/live/public、旧数据兼容及临时资源清理通过，证据见 `docs/evidence/r2-12.md`。
+- 2026-09-20：R3 工作台与报告审阅发布至 cc-la；兼容、备份、浏览器和目录归并证据见 `docs/evidence/r3-08.md`。
