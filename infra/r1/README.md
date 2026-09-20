@@ -118,21 +118,29 @@ sh /opt/agentanywhere/runtime/deploy.sh /opt/agentanywhere/runtime "$previous_re
 
 待正式入口稳定、W0 最终私有归档和 SHA-256 校验完成后，执行 `docker compose -f /opt/agentanywhere-w0/compose.yaml down --volumes` 回收 W0 Craft 容器、`agentanywhere-w0_craft-data` 卷和 W0 Compose 网络，执行 `! docker volume inspect agentanywhere-w0_craft-data >/dev/null 2>&1` 核对卷已删除。可随后清理 W0 专用镜像 `agentanywhere-w0-craft:e896385-pi1` 与 `/opt/agentanywhere-w0/` 工作目录；保留站点 TLS 证书、gVisor runtime、OpenSandbox 和正式 R1 资源。记录回收证据后关闭 W0 Issue #1。
 
-测试资源单独清理。先用 `docker inspect -f '{{index .Config.Labels "com.docker.compose.project.config_files"}}' agentanywhere-r1-test-web-1` 确认清理时的隔离 Compose 路径及项目名；停用该 Compose 时不加 `-v`。核对测试 schema 的实际所有者和 `test.env` 引用，再只删除对应 schema、`checks/<release>/`、fixture 容器与无引用的测试镜像；其中 `test_compose` 必须先设为刚核对的路径。`19114` 真实模型隔离栈按自身 Compose 路径另行核对。正式 PostgreSQL 卷 `agentanywhere-r1-postgres-data`、`runtime/data/`、`runtime/artifacts/`、搜索服务和 Sandbox 网络始终保留。
+测试资源单独清理。分别用 `docker inspect -f '{{index .Config.Labels "com.docker.compose.project.config_files"}}' agentanywhere-r1-test-web-1` 和同一命令检查 `agentanywhere-r1-live-test-web-1`，确认两套隔离 Compose 的路径及项目名；停用时都不加 `-v`。按下文同一命名重新计算四个 schema 变量，核对所有者及 `test.env`、`live-test.env` 引用后，只删除这四个 schema、`checks/<release>/`、fixture 容器与无引用的测试镜像。正式 PostgreSQL 卷 `agentanywhere-r1-postgres-data`、`runtime/data/`、`runtime/artifacts/`、搜索服务和 Sandbox 网络始终保留。
 
-隔离回归使用 `test.compose.yaml`、独立 schema/数据目录、可由 queue 用户写入的 `test-artifacts/` 和 `model-fixture.mjs`。上文已按同一 SHA 构建 Web、queue、agent、fixture 四镜像；`TEST_RELEASE` 必须设为该完整 SHA。先在真实 PostgreSQL 的 `agentanywhere` 库为本次发布建立独立应用 schema 和 pg-boss schema，授权 `agentanywhere_app`。例如在 cc-la 的部署目录执行以下命令；已有同名 schema 时先核对归属，不能复用别的测试数据：
+隔离回归使用 `test.compose.yaml`、独立 schema/数据目录、可由 queue 用户写入的 `test-artifacts/` 和 `model-fixture.mjs`。上文已按同一 SHA 构建 Web、queue、agent、fixture 四镜像；`TEST_RELEASE` 必须设为该完整 SHA。先在真实 PostgreSQL 的 `agentanywhere` 库分别为可控模型栈和真实模型栈建立应用 schema 与 pg-boss schema，四者均授权 `agentanywhere_app`。例如在 cc-la 的部署目录执行以下命令；已有同名 schema 时先核对归属和数据用途，不能复用别的测试数据：
 
 ```sh
 test_schema="r1test_$(printf '%.12s' "$release")"
-boss_schema="${test_schema}_boss"
+test_boss_schema="${test_schema}_boss"
+live_schema="r1live_$(printf '%.12s' "$release")"
+live_boss_schema="${live_schema}_boss"
 docker exec agentanywhere-r1-postgres psql -U agentanywhere_admin -d agentanywhere -v ON_ERROR_STOP=1 \
   -c "CREATE SCHEMA \"$test_schema\" AUTHORIZATION agentanywhere_app" \
-  -c "CREATE SCHEMA \"$boss_schema\" AUTHORIZATION agentanywhere_app"
+  -c "CREATE SCHEMA \"$test_boss_schema\" AUTHORIZATION agentanywhere_app" \
+  -c "CREATE SCHEMA \"$live_schema\" AUTHORIZATION agentanywhere_app" \
+  -c "CREATE SCHEMA \"$live_boss_schema\" AUTHORIZATION agentanywhere_app"
+
+owned_schema_count="$(docker exec agentanywhere-r1-postgres psql -U agentanywhere_admin -d agentanywhere -At \
+  -c "SELECT count(*) FROM pg_namespace WHERE nspname IN ('$test_schema','$test_boss_schema','$live_schema','$live_boss_schema') AND pg_get_userbyid(nspowner)='agentanywhere_app'")"
+test "$owned_schema_count" = 4
 ```
 
-将 `test.compose.yaml`、`live-test.compose.yaml`、`test.env`、`live-test.env`、`test-password`、测试数据和成果集中放在 `/opt/agentanywhere/checks/$release`。两份 env 和密码文件保持 0600；`test.env` 的 `DATABASE_URL` 使用 `-csearch_path=<test_schema>`，`QUEUE_SCHEMA` 使用 `<boss_schema>`。不要把正式 `runtime/data/` 或正式 schema 挂给测试栈。测试脚本仍支持 `TEST_PASSWORD_FILE` 和 `TEST_ISOLATED_MODEL_CONFIG_FILE` 覆盖；服务器验收必须显式传入本次 `checks/<release>` 路径。
+将 `test.compose.yaml`、`live-test.compose.yaml`、`test.env`、`live-test.env`、`test-password`、测试数据和成果集中放在 `/opt/agentanywhere/checks/$release`。两份 env 和密码文件保持 0600；`test.env` 的 `DATABASE_URL` 使用 `options=-csearch_path=<test_schema>`，`QUEUE_SCHEMA` 使用 `<test_boss_schema>`；`live-test.env` 分别使用 `<live_schema>` 和 `<live_boss_schema>`。不要把正式 `runtime/data/` 或正式 schema 挂给测试栈。测试脚本仍支持 `TEST_PASSWORD_FILE` 和 `TEST_ISOLATED_MODEL_CONFIG_FILE` 覆盖；服务器验收必须显式传入本次 `checks/<release>` 路径。
 
-在 cc-la 发布目录确认四个 SHA 标签、两个 schema、`test.env` 与 `test-password` 均已就绪，再执行：
+在 cc-la 发布目录确认四个 SHA 标签、四个 schema、两份 env 与 `test-password` 均已就绪，再执行：
 
 ```sh
 check_root="/opt/agentanywhere/checks/$release"
@@ -151,7 +159,14 @@ node "/opt/agentanywhere/releases/$release/infra/r1/test-all.mjs" isolated
 
 首次启动与验收使用相同的 `TEST_CONTROL_PLANE_ORIGIN=https://agent.riverflows.in`，以验证公网控制面 IP 拒绝。isolated 与 live 共享 OpenSandbox 的宿主端口分配，须串行执行，避免并发创建沙箱时端口冲突。失败后可用 `test-all.mjs <模式> <检查名>` 从该项继续，输出会注明前项沿用已有结果；不得将续跑单独描述为全量通过。
 
-该栈固定为 Web `127.0.0.1:19112`、fixture `127.0.0.1:19113`；`checks/$release/test-data/` 和 `test-artifacts/` 与正式数据分离。统一入口 `node infra/r1/test-all.mjs [isolated|live|public]` 默认 isolated；该模式重启隔离 fixture，先在 Web 镜像内使用真实数据库运行完整 Bun 测试，再顺序调用 R1 执行链路及 R2 管家查询、派发、控制、状态、回答、摘要、重试、改稿的 Web/API 测试。模型 HTTP fixture 是唯一可控响应边界；数据库、pg-boss、Pi 与 OpenSandbox 均使用真实服务。测试期间脚本会重启隔离 queue/Web 并临时修改隔离成果目录权限，勿与其他 19112/19113 验收并发。live 模式要求单独 19114 栈、`$check_root/live-data/model-connection.json` 私有模型连接副本和真实 SearXNG；执行 `TEST_ISOLATED_MODEL_CONFIG_FILE="$check_root/live-data/model-connection.json" TEST_PASSWORD_FILE="$check_root/test-password" node "/opt/agentanywhere/releases/$release/infra/r1/test-all.mjs" live`。public 模式在公网切换后执行 `TEST_PASSWORD_FILE=/opt/agentanywhere/backups/20260918-r1-release/w0/webui-password node "/opt/agentanywhere/releases/$release/infra/r1/test-all.mjs" public`，密码从原 W0 安全文件读取，不输出内容。测试完按上文精确清理隔离 Compose、schema、数据和无引用的测试镜像。
+该栈固定为 Web `127.0.0.1:19112`、fixture `127.0.0.1:19113`；`checks/$release/test-data/` 和 `test-artifacts/` 与正式数据分离。统一入口 `node infra/r1/test-all.mjs [isolated|live|public]` 默认 isolated；该模式重启隔离 fixture，先在 Web 镜像内使用真实数据库运行完整 Bun 测试，再顺序调用 R1 执行链路及 R2 管家查询、派发、控制、状态、回答、摘要、重试、改稿的 Web/API 测试。模型 HTTP fixture 是唯一可控响应边界；数据库、pg-boss、Pi 与 OpenSandbox 均使用真实服务。测试期间脚本会重启隔离 queue/Web 并临时修改隔离成果目录权限，勿与其他 19112/19113 验收并发。live 模式要求单独 19114 栈、`$check_root/live-data/model-connection.json` 私有模型连接副本和真实 SearXNG；执行 `TEST_ISOLATED_MODEL_CONFIG_FILE="$check_root/live-data/model-connection.json" TEST_PASSWORD_FILE="$check_root/test-password" node "/opt/agentanywhere/releases/$release/infra/r1/test-all.mjs" live`。public 模式在公网切换后执行 `TEST_PASSWORD_FILE=/opt/agentanywhere/backups/20260918-r1-release/w0/webui-password node "/opt/agentanywhere/releases/$release/infra/r1/test-all.mjs" public`，密码从原 W0 安全文件读取，不输出内容。测试完成后先停用两套 Compose，再复用上面的所有者核对，并确认两份 env 的 `DATABASE_URL` 与 `QUEUE_SCHEMA` 仍分别指向四个待删 schema；随后以管理员只删除已核对的四个 schema：
+
+```sh
+docker exec agentanywhere-r1-postgres psql -U agentanywhere_admin -d agentanywhere -v ON_ERROR_STOP=1 \
+  -c "DROP SCHEMA \"$test_schema\", \"$test_boss_schema\", \"$live_schema\", \"$live_boss_schema\" CASCADE"
+```
+
+最后清理隔离数据和无引用的测试镜像。
 
 真实 sub2api 的双协议连接测试和 Pi 工具往返分别见 [R1-05](../../docs/evidence/r1-05.md) 与 [R1-06](../../docs/evidence/r1-06.md)。`submit_report` 在沙箱内写报告与文本附件；同一 Run 的修订报告先写新 generation，再原子更新 manifest 指针，queue 按该指针校验并提交 Artifact/Version。执行中追加要求通过 `POST /api/runs/:id/messages` 保存，并由当前 epoch 的 Pi 在下一模型步骤接收；隔离流式回归运行 `node infra/r1/test-steering.mjs`，结果见 [R1-09](../../docs/evidence/r1-09.md)。取消隔离回归使用 `node infra/r1/test-cancel.mjs`，结果见 [R1-11](../../docs/evidence/r1-11.md)。
 
@@ -159,6 +174,6 @@ R1-08 的 queue 同时连接 `agentanywhere-r1-search` 专用网络，从固定 
 故障恢复与执行上限的隔离回归使用 `node infra/r1/test-recovery.mjs`，覆盖模型短暂故障、持续失败后的检查点与手动新 Run、queue 中断清理、40 次模型调用后明确继续。脚本使用独立测试环境的 19112/19113 端口，会重启测试 queue 容器。45 分钟边界在 `src/work.test.ts` 中通过服务端注入的测试时钟和真实 PostgreSQL 检查；生产 API 不接受限额或时钟覆盖。每次继续增加 45 分钟与 40 次模型调用额度，决定及前后额度保存在 Run 事件中。
 完成后继续工作通过 `POST /api/tasks/:id/runs` 在原 Task/Thread 创建新 Run；新执行读取并校验前次已交付报告，保留旧版本。隔离回归脚本为 `node infra/r1/test-continuation.mjs`，覆盖新旧报告、失败保留、Web 重启和沙箱回收；执行结果记录在 [R1-13](../../docs/evidence/r1-13.md)。
 
-真实模型与搜索验收使用另一个隔离 schema 和 `19114` 端口。Web 将独立 `live-data/` 目录可写挂载到 `/data`，其中的模型连接是正式配置的私有副本；queue 连接 `agentanywhere-r1-search`。运行上述 `test-all.mjs live` 覆盖双协议真实 Run、取消、模型错误和搜索；脚本从公开 API 核查工具结果、报告引用及沙箱回收。证据见 [R1-08](../../docs/evidence/r1-08.md) 与 [R1-14](../../docs/evidence/r1-14.md)。
+真实模型与搜索验收使用独立的应用及 pg-boss schema 和 `19114` 端口。Web 将独立 `live-data/` 目录可写挂载到 `/data`，其中的模型连接是正式配置的私有副本；queue 连接 `agentanywhere-r1-search`。运行上述 `test-all.mjs live` 覆盖双协议真实 Run、取消、模型错误和搜索；脚本从公开 API 核查工具结果、报告引用及沙箱回收。证据见 [R1-08](../../docs/evidence/r1-08.md) 与 [R1-14](../../docs/evidence/r1-14.md)。
 
 2026-09-19 R2 已发布，应用 SHA 为 `6787b70a47a96c8ab9b20056d1d67e3fb0efbbed`；配对备份迁移后位于 `/opt/agentanywhere/backups/20260919-r2-release`。前一健康版本 `ac7f88d8ed0ce6dbf12f704026c68cb25aa48e26` 的构建及正式镜像保留，可按上文流程回退。R2 三阶段验收、旧数据兼容、浏览器和清理结果见 [R2-12](../../docs/evidence/r2-12.md)。
