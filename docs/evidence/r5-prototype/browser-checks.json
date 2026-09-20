@@ -1,0 +1,23 @@
+[
+  {
+    "variant": "A",
+    "width": 390,
+    "bodyWidth": 390,
+    "font": "Inter, \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+    "apiRequests": 0
+  },
+  {
+    "variant": "B",
+    "width": 390,
+    "bodyWidth": 390,
+    "font": "Inter, \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+    "apiRequests": 0
+  },
+  {
+    "variant": "C",
+    "width": 390,
+    "bodyWidth": 390,
+    "font": "Inter, \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif",
+    "apiRequests": 0
+  }
+]

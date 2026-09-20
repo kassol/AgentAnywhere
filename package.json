@@ -7,7 +7,8 @@
     "build": "vite build",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
-    "start": "bun src/server.ts"
+    "start": "bun src/server.ts",
+    "prototype:r5": "vite --mode r5-prototype --host 127.0.0.1 --port 5175 --strictPort"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "0.85.1",
