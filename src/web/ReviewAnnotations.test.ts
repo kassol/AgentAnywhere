@@ -1,14 +1,17 @@
 import { describe, expect, test } from 'bun:test'
 import {
   annotationStorageKey,
+  annotationDraftStorageKey,
   buildReviewCommand,
   clearAcceptedAnnotations,
   createTextSelector,
   filterReviewContextForContent,
   latestSucceededReportVersion,
   readReportAnnotations,
+  readReportAnnotationDraft,
   selectorStatus,
   writeReportAnnotations,
+  writeReportAnnotationDraft,
   type ReportAnnotation,
 } from './ReviewAnnotations'
 
@@ -39,6 +42,28 @@ describe('report annotation drafts', () => {
     expect(readReportAnnotations(taskId, versionId, storage)).toHaveLength(1)
     expect(selectorStatus('甲重复原文乙，另有重复原文', createTextSelector('甲重复原文乙，另有重复原文', 1, 5))).toBe('exact')
     expect(selectorStatus('重复原文，另有重复原文', createTextSelector('甲重复原文乙，另有重复原文', 1, 5))).toBe('stale')
+  })
+
+  test('restores an unfinished selection and note only for its report version', () => {
+    const storage = memoryStorage()
+    const selector = createTextSelector('甲重复原文乙', 1, 5)
+    writeReportAnnotationDraft(taskId, versionId, { selector, note: '尚未保存的意见' }, storage)
+    expect(annotationDraftStorageKey(taskId, versionId)).not.toBe(annotationDraftStorageKey(taskId, otherVersion))
+    expect(readReportAnnotationDraft(taskId, versionId, storage)).toEqual({ selector, note: '尚未保存的意见' })
+    expect(readReportAnnotationDraft(taskId, otherVersion, storage)).toBeNull()
+    writeReportAnnotationDraft(taskId, versionId, null, storage)
+    expect(readReportAnnotationDraft(taskId, versionId, storage)).toBeNull()
+  })
+
+  test('reports unavailable storage so the editor can retain unsaved input', () => {
+    const unavailable = {
+      getItem: () => null,
+      setItem: () => { throw new Error('unavailable') },
+      removeItem: () => { throw new Error('unavailable') },
+    }
+    const selector = createTextSelector('甲重复原文乙', 1, 5)
+    expect(writeReportAnnotationDraft(taskId, versionId, { selector, note: '保留我' }, unavailable)).toBe(false)
+    expect(writeReportAnnotations(taskId, versionId, [annotation('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', '保留我')], unavailable)).toBe(false)
   })
 
   test('keeps review identity through editing and filters annotations removed from actual content', () => {

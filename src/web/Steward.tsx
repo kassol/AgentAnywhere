@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Composer, acceptComposerSubmission, attachComposerThread, changeComposerDraft, prepareComposerSubmission, readComposerState, rejectComposerSubmission, writeComposerState, type ComposerState, type ComposerSubmission } from './Composer'
+import { Composer, acceptComposerSubmission, attachComposerThread, changeComposerDraft, confirmComposerReplacement, prepareComposerSubmission, readComposerState, rejectComposerSubmission, startComposerSubmission, writeComposerState, type ComposerState, type ComposerSubmission } from './Composer'
 import { buildToolActivities, readActivityPages, StableScroll, ToolActivityList, type ActivityEvent } from './ActivityFeed'
 import { ReportMarkdown } from './Work'
 import { QuickActions, type QuickAction } from './QuickActions'
@@ -93,9 +93,11 @@ export function Steward({ fillRequest, onFillRequestHandled }: { fillRequest?: {
   }, [fillRequest?.id])
 
   useEffect(() => reviewBridge?.register(payload => {
+    if (!confirmComposerReplacement(composerRef.current, payload.content)) return false
     storeComposer(changeComposerDraft(composerRef.current, payload.content, payload.review))
     setReviewConflict(null)
     requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('#steward-message')?.focus())
+    return true
   }), [reviewBridge, routeId])
 
   async function loadDetail(id: string) {
@@ -192,7 +194,9 @@ export function Steward({ fillRequest, onFillRequestHandled }: { fillRequest?: {
       }
     }
     setReviewConflict(null)
-    storeComposer(prepared)
+    const started = startComposerSubmission(composerRef.current, request)
+    storeComposer(started)
+    request = started.pending!
     let outcomeUnknown = true
     try {
       let id = routeId ?? request.threadId ?? null
@@ -244,6 +248,7 @@ export function Steward({ fillRequest, onFillRequestHandled }: { fillRequest?: {
   }
 
   function fillCommand(command: string) {
+    if (!confirmComposerReplacement(composerRef.current, command)) return
     storeComposer(fillQuickCommand(composerRef.current, command))
     setReviewConflict(null)
     requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('#steward-message')?.focus())
@@ -252,7 +257,9 @@ export function Steward({ fillRequest, onFillRequestHandled }: { fillRequest?: {
   const activeTurns = detail?.turns.filter(turn => ['queued', 'running', 'stopping'].includes(turn.status)) ?? []
   const toolActivities = buildToolActivities(events)
   const messageContentLength = detail?.messages.reduce((length, message) => length + message.content.length, 0) ?? 0
-  const scrollRevision = `${detail?.messages.length ?? 0}:${messageContentLength}:${events.at(-1)?.serverSeq ?? 0}:${detail?.turns.at(-1)?.status ?? ''}`
+  const projectedContentRevision = detail ? JSON.stringify([detail.researchOperations, detail.controlOperations, detail.interactionOperations,
+    detail.retryOperations, detail.revisionOperations, detail.relatedTasks, detail.statusCards]) : ''
+  const scrollRevision = `${detail?.messages.length ?? 0}:${messageContentLength}:${events.at(-1)?.serverSeq ?? 0}:${detail?.turns.at(-1)?.status ?? ''}:${projectedContentRevision}`
   return (
     <div className="steward-layout">
       <section className="conversation" aria-label="管家对话">

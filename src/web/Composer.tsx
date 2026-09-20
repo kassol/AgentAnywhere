@@ -55,6 +55,10 @@ export function changeComposerDraft(state: ComposerState, content: string, revie
   return { ...state, draft: { content, revision: state.draft.revision + 1, ...(review ? { review } : {}) } }
 }
 
+export function confirmComposerReplacement(state: ComposerState, content: string, ask: (message: string) => boolean = confirm) {
+  return !state.draft.content.trim() || state.draft.content === content || ask('当前聊天框已有草稿。替换后原草稿将被覆盖，是否继续？')
+}
+
 export function prepareComposerSubmission(state: ComposerState): ComposerState | null {
   if (state.pending) return state
   const content = state.draft.content.trim()
@@ -64,6 +68,10 @@ export function prepareComposerSubmission(state: ComposerState): ComposerState |
     threadRequestId: crypto.randomUUID(), turnRequestId: crypto.randomUUID(),
     ...(state.threadId ? { threadId: state.threadId } : {}),
     ...(review ? { review } : {}) } }
+}
+
+export function startComposerSubmission(state: ComposerState, submission: ComposerSubmission): ComposerState {
+  return state.pending ? state : { ...state, pending: submission }
 }
 
 export function attachComposerThread(state: ComposerState, submission: ComposerSubmission, threadId: string): ComposerState {

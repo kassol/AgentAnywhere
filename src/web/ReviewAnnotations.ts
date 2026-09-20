@@ -20,12 +20,17 @@ export type ReportAnnotation = {
 
 export type ReviewAnnotationSnapshot = { id: string; updatedAt: number; quote: string }
 export type ReviewContext = { taskId: string; versionId: string; annotations?: ReviewAnnotationSnapshot[]; annotationIds?: string[] }
+export type ReportAnnotationDraft = { selector: TextQuoteSelector; note: string }
 type StorageLike = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 export function annotationStorageKey(taskId: string, versionId: string) {
   return `agentanywhere:report-annotations:${taskId}:${versionId}`
+}
+
+export function annotationDraftStorageKey(taskId: string, versionId: string) {
+  return `agentanywhere:report-annotation-draft:${taskId}:${versionId}`
 }
 
 function validSelector(value: unknown): value is TextQuoteSelector {
@@ -74,7 +79,26 @@ export function writeReportAnnotations(taskId: string, versionId: string, annota
     const key = annotationStorageKey(taskId, versionId)
     if (annotations.length) storage.setItem(key, JSON.stringify(annotations))
     else storage.removeItem(key)
-  } catch { /* keep the current in-memory review usable when storage is unavailable */ }
+    return true
+  } catch { return false }
+}
+
+export function readReportAnnotationDraft(taskId: string, versionId: string, storage: StorageLike = localStorage): ReportAnnotationDraft | null {
+  try {
+    const value = JSON.parse(storage.getItem(annotationDraftStorageKey(taskId, versionId)) ?? 'null') as Record<string, unknown> | null
+    return value && validSelector(value.selector) && typeof value.note === 'string' && value.note.length <= 2000
+      && value.selector.exact.trim().length > 0 && value.selector.exact.length <= 4000
+      ? { selector: value.selector, note: value.note } : null
+  } catch { return null }
+}
+
+export function writeReportAnnotationDraft(taskId: string, versionId: string, draft: ReportAnnotationDraft | null, storage: StorageLike = localStorage) {
+  try {
+    const key = annotationDraftStorageKey(taskId, versionId)
+    if (draft) storage.setItem(key, JSON.stringify(draft))
+    else storage.removeItem(key)
+    return true
+  } catch { return false }
 }
 
 export function createTextSelector(text: string, start: number, end: number): TextQuoteSelector {

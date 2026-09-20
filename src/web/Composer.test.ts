@@ -4,9 +4,11 @@ import {
   attachComposerThread,
   changeComposerDraft,
   composerStorageKey,
+  confirmComposerReplacement,
   prepareComposerSubmission,
   readComposerState,
   rejectComposerSubmission,
+  startComposerSubmission,
   shouldSubmitComposerKey,
   writeComposerState,
   type ComposerState,
@@ -41,6 +43,22 @@ describe('reliable composer state', () => {
     expect(acceptComposerSubmission(newer, prepared!.pending!)).toEqual({
       draft: { content: '提交期间新增编辑', revision: 2 },
     })
+  })
+
+  test('version preflight attaches the original submission without overwriting newer editing', () => {
+    const original = changeComposerDraft(empty(), '原消息')
+    const submission = prepareComposerSubmission(original)!.pending!
+    const newer = changeComposerDraft(original, '预检期间新增编辑')
+    const started = startComposerSubmission(newer, submission)
+    expect(started).toMatchObject({ draft: { content: '预检期间新增编辑', revision: 2 }, pending: { content: '原消息', draftRevision: 1 } })
+    expect(acceptComposerSubmission(started, submission)).toEqual({ draft: { content: '预检期间新增编辑', revision: 2 } })
+  })
+
+  test('fill actions require confirmation before replacing a non-empty draft', () => {
+    const current = changeComposerDraft(empty(), '保留我')
+    expect(confirmComposerReplacement(current, '快捷命令', () => false)).toBe(false)
+    expect(confirmComposerReplacement(current, '快捷命令', () => true)).toBe(true)
+    expect(confirmComposerReplacement(empty(), '快捷命令', () => false)).toBe(true)
   })
 
   test('persists the created thread for refresh checks and releases a definite rejection', () => {
