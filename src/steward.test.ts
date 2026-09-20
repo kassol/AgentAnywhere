@@ -40,6 +40,79 @@ test('owner creates and reopens an independent steward conversation', async () =
   }
 })
 
+test('one stable receipt is projected into its original and resume turns', async () => {
+  const dataDir = await mkdtemp(join(tmpdir(), 'agentanywhere-steward-receipts-'))
+  const schema = `steward_receipts_${crypto.randomUUID().replaceAll('-', '')}`
+  const admin = new SQL(databaseUrl)
+  await admin.unsafe(`CREATE SCHEMA ${schema}`)
+  const isolatedUrl = new URL(databaseUrl)
+  isolatedUrl.searchParams.set('options', `-csearch_path=${schema}`)
+  const password = 'test-password-12345'
+  const app = await startServer({ password, port: 0, dataDir, databaseUrl: isolatedUrl.toString() })
+  const db = new SQL(isolatedUrl.toString())
+  try {
+    const sourceThread = crypto.randomUUID()
+    const recoveryThread = crypto.randomUUID()
+    await db`INSERT INTO steward_threads (id, owner_id, request_id, request_hash, title) VALUES
+      (${sourceThread}, 'owner', ${crypto.randomUUID()}, 'source', '原对话'),
+      (${recoveryThread}, 'owner', ${crypto.randomUUID()}, 'recovery', '恢复对话')`
+    const sourceTurn = crypto.randomUUID()
+    const resumeTurns = {
+      research: crypto.randomUUID(), control: crypto.randomUUID(), interaction: crypto.randomUUID(),
+      retry: crypto.randomUUID(), revision: crypto.randomUUID(), crossThread: crypto.randomUUID(),
+    }
+    const model = JSON.stringify({ id: 'receipt-model', protocol: 'chat-completions' })
+    for (const [id, threadId] of [[sourceTurn, sourceThread], ...Object.entries(resumeTurns).map(([name, id]) => [id, name === 'crossThread' ? recoveryThread : sourceThread])] as const) {
+      await db`INSERT INTO steward_turns (id, thread_id, request_id, request_hash, status, model_snapshot, credential_ref)
+        VALUES (${id}, ${threadId}, ${crypto.randomUUID()}, ${id}, 'completed', ${model}::text::jsonb, 'model-connection')`
+    }
+    const operations = {
+      research: crypto.randomUUID(), control: crypto.randomUUID(), interaction: crypto.randomUUID(),
+      retry: crypto.randomUUID(), revision: crypto.randomUUID(),
+    }
+    await db`INSERT INTO steward_research_operations
+      (turn_id, ordinal, operation_id, request_id, request_hash, goal, model_snapshot, credential_ref, reason, evidence, status)
+      VALUES (${sourceTurn}, 0, ${operations.research}, ${crypto.randomUUID()}, 'research', '调研', ${model}::text::jsonb, 'model-connection', '测试', '{}'::jsonb, 'unexecuted')`
+    await db`INSERT INTO steward_control_operations (turn_id, operation_id, request_hash, kind, query, status)
+      VALUES (${sourceTurn}, ${operations.control}, 'control', 'cancel', '工作', 'unexecuted')`
+    await db`INSERT INTO steward_interaction_operations (turn_id, operation_id, request_hash, query, desired_kind, status)
+      VALUES (${sourceTurn}, ${operations.interaction}, 'interaction', '工作', 'question', 'unexecuted')`
+    await db`INSERT INTO steward_retry_operations (turn_id, operation_id, request_id, request_hash, mode, query, status)
+      VALUES (${sourceTurn}, ${operations.retry}, ${crypto.randomUUID()}, 'retry', 'same', '工作', 'unexecuted')`
+    await db`INSERT INTO steward_revision_operations
+      (turn_id, operation_id, request_id, request_hash, query, content, model_snapshot, credential_ref, reason, evidence, status)
+      VALUES (${sourceTurn}, ${operations.revision}, ${crypto.randomUUID()}, 'revision', '工作', '修改', ${model}::text::jsonb, 'model-connection', '测试', '{}'::jsonb, 'unexecuted')`
+    await db`INSERT INTO steward_research_resumes (turn_id, operation_id) VALUES
+      (${resumeTurns.research}, ${operations.research}), (${resumeTurns.crossThread}, ${operations.research})`
+    await db`INSERT INTO steward_control_resumes (turn_id, operation_id) VALUES (${resumeTurns.control}, ${operations.control})`
+    await db`INSERT INTO steward_interaction_resumes (turn_id, operation_id) VALUES (${resumeTurns.interaction}, ${operations.interaction})`
+    await db`INSERT INTO steward_retry_resumes (turn_id, operation_id) VALUES (${resumeTurns.retry}, ${operations.retry})`
+    await db`INSERT INTO steward_revision_resumes (turn_id, operation_id) VALUES (${resumeTurns.revision}, ${operations.revision})`
+
+    const login = await fetch(`${app.url.origin}/api/auth`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password }) })
+    const cookie = login.headers.get('set-cookie')!
+    const source = await (await fetch(`${app.url.origin}/api/steward/threads/${sourceThread}`, { headers: { cookie } })).json()
+    for (const [collection, turnId] of [
+      ['researchOperations', resumeTurns.research], ['controlOperations', resumeTurns.control],
+      ['interactionOperations', resumeTurns.interaction], ['retryOperations', resumeTurns.retry],
+      ['revisionOperations', resumeTurns.revision],
+    ] as const) {
+      expect(source[collection]).toHaveLength(1)
+      expect(source[collection][0]).toMatchObject({ turnId: sourceTurn, resumeTurnIds: [turnId] })
+    }
+    const recovered = await (await fetch(`${app.url.origin}/api/steward/threads/${recoveryThread}`, { headers: { cookie } })).json()
+    expect(recovered.researchOperations).toMatchObject([
+      { operationId: operations.research, turnId: sourceTurn, resumeTurnIds: [resumeTurns.crossThread] },
+    ])
+  } finally {
+    await app.stop(true)
+    await db.close()
+    await admin.unsafe(`DROP SCHEMA ${schema} CASCADE`)
+    await admin.close()
+    await rm(dataDir, { recursive: true, force: true })
+  }
+})
+
 test('steward streams both protocols through one global turn slot', async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'agentanywhere-steward-run-'))
   const schema = `steward_run_${crypto.randomUUID().replaceAll('-', '')}`

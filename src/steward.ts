@@ -340,34 +340,54 @@ export async function createStewardService(databaseUrl: string, resolveCredentia
           AND covered.turn_seq BETWEEN s.from_turn_seq AND s.through_turn_seq) AS "coveredTurns",
         s.created_at AS "createdAt" FROM steward_summaries s WHERE s.thread_id=${id} ORDER BY s.through_turn_seq DESC LIMIT 1`
       const links = await sql`SELECT task_id AS id FROM steward_thread_tasks WHERE thread_id=${id} ORDER BY created_at, task_id`
-      const researchOperations = await sql`SELECT o.turn_id AS "turnId", o.operation_id AS "operationId", o.status, o.task_id AS "taskId", o.run_id AS "runId",
+      const researchOperations = await sql`SELECT o.turn_id AS "turnId",
+        ARRAY(SELECT resume.turn_id::text FROM steward_research_resumes resume JOIN steward_turns resumed ON resumed.id=resume.turn_id
+          WHERE resume.operation_id=o.operation_id AND resumed.thread_id=${id} ORDER BY resumed.turn_seq) AS "resumeTurnIds",
+        o.operation_id AS "operationId", o.status, o.task_id AS "taskId", o.run_id AS "runId",
         o.goal, o.source_url AS "sourceUrl", o.model_snapshot->>'id' AS "modelId", o.model_snapshot->>'protocol' AS protocol,
         o.reason, o.evidence, o.failure, o.created_at AS "createdAt", o.finished_at AS "finishedAt"
         FROM steward_research_operations o JOIN steward_turns r ON r.id=o.turn_id
-        WHERE r.thread_id=${id} ORDER BY r.turn_seq, o.ordinal`
-      const controlOperations = await sql`SELECT o.turn_id AS "turnId", o.operation_id AS "operationId", o.kind, o.status, o.task_id AS "taskId", o.run_id AS "runId",
+        WHERE r.thread_id=${id} OR EXISTS (SELECT 1 FROM steward_research_resumes resume JOIN steward_turns resumed ON resumed.id=resume.turn_id
+          WHERE resume.operation_id=o.operation_id AND resumed.thread_id=${id}) ORDER BY r.turn_seq, o.ordinal`
+      const controlOperations = await sql`SELECT o.turn_id AS "turnId",
+        ARRAY(SELECT resume.turn_id::text FROM steward_control_resumes resume JOIN steward_turns resumed ON resumed.id=resume.turn_id
+          WHERE resume.operation_id=o.operation_id AND resumed.thread_id=${id} ORDER BY resumed.turn_seq) AS "resumeTurnIds",
+        o.operation_id AS "operationId", o.kind, o.status, o.task_id AS "taskId", o.run_id AS "runId",
         o.content, o.result_json AS result, o.failure,
         (SELECT m.status FROM work_messages m WHERE m.command_id=o.command_id) AS "messageStatus",
         o.created_at AS "createdAt", o.finished_at AS "finishedAt"
         FROM steward_control_operations o JOIN steward_turns r ON r.id=o.turn_id
-        WHERE r.thread_id=${id} ORDER BY r.turn_seq, o.created_at`
-      const interactionOperations = await sql`SELECT o.turn_id AS "turnId", o.operation_id AS "operationId", o.status, o.task_id AS "taskId", o.run_id AS "runId",
+        WHERE r.thread_id=${id} OR EXISTS (SELECT 1 FROM steward_control_resumes resume JOIN steward_turns resumed ON resumed.id=resume.turn_id
+          WHERE resume.operation_id=o.operation_id AND resumed.thread_id=${id}) ORDER BY r.turn_seq, o.created_at`
+      const interactionOperations = await sql`SELECT o.turn_id AS "turnId",
+        ARRAY(SELECT resume.turn_id::text FROM steward_interaction_resumes resume JOIN steward_turns resumed ON resumed.id=resume.turn_id
+          WHERE resume.operation_id=o.operation_id AND resumed.thread_id=${id} ORDER BY resumed.turn_seq) AS "resumeTurnIds",
+        o.operation_id AS "operationId", o.status, o.task_id AS "taskId", o.run_id AS "runId",
         o.run_epoch AS epoch, o.interaction_id AS "interactionId", o.interaction_kind AS "interactionKind", o.answer, o.decision,
         o.result_json AS result, o.failure, o.created_at AS "createdAt", o.finished_at AS "finishedAt"
         FROM steward_interaction_operations o JOIN steward_turns r ON r.id=o.turn_id
-        WHERE r.thread_id=${id} ORDER BY r.turn_seq, o.created_at`
-      const retryOperations = await sql`SELECT o.turn_id AS "turnId", o.operation_id AS "operationId", o.mode, o.status, o.task_id AS "taskId",
+        WHERE r.thread_id=${id} OR EXISTS (SELECT 1 FROM steward_interaction_resumes resume JOIN steward_turns resumed ON resumed.id=resume.turn_id
+          WHERE resume.operation_id=o.operation_id AND resumed.thread_id=${id}) ORDER BY r.turn_seq, o.created_at`
+      const retryOperations = await sql`SELECT o.turn_id AS "turnId",
+        ARRAY(SELECT resume.turn_id::text FROM steward_retry_resumes resume JOIN steward_turns resumed ON resumed.id=resume.turn_id
+          WHERE resume.operation_id=o.operation_id AND resumed.thread_id=${id} ORDER BY resumed.turn_seq) AS "resumeTurnIds",
+        o.operation_id AS "operationId", o.mode, o.status, o.task_id AS "taskId",
         o.source_run_id AS "sourceRunId", o.run_id AS "runId", o.model_snapshot AS "modelSnapshot",
         o.result_json AS result, o.failure,
         o.created_at AS "createdAt", o.finished_at AS "finishedAt"
         FROM steward_retry_operations o JOIN steward_turns r ON r.id=o.turn_id
-        WHERE r.thread_id=${id} ORDER BY r.turn_seq, o.created_at`
-      const revisionOperations = await sql`SELECT o.turn_id AS "turnId", o.operation_id AS "operationId", o.status, o.task_id AS "taskId",
+        WHERE r.thread_id=${id} OR EXISTS (SELECT 1 FROM steward_retry_resumes resume JOIN steward_turns resumed ON resumed.id=resume.turn_id
+          WHERE resume.operation_id=o.operation_id AND resumed.thread_id=${id}) ORDER BY r.turn_seq, o.created_at`
+      const revisionOperations = await sql`SELECT o.turn_id AS "turnId",
+        ARRAY(SELECT resume.turn_id::text FROM steward_revision_resumes resume JOIN steward_turns resumed ON resumed.id=resume.turn_id
+          WHERE resume.operation_id=o.operation_id AND resumed.thread_id=${id} ORDER BY resumed.turn_seq) AS "resumeTurnIds",
+        o.operation_id AS "operationId", o.status, o.task_id AS "taskId",
         o.base_run_id AS "baseRunId", o.source_version_id AS "sourceVersionId", o.run_id AS "runId", o.content,
         o.model_snapshot->>'id' AS "modelId", o.model_snapshot->>'protocol' AS protocol, o.reason, o.evidence,
         o.result_json AS result, o.failure, o.created_at AS "createdAt", o.finished_at AS "finishedAt"
         FROM steward_revision_operations o JOIN steward_turns r ON r.id=o.turn_id
-        WHERE r.thread_id=${id} ORDER BY r.turn_seq, o.created_at`
+        WHERE r.thread_id=${id} OR EXISTS (SELECT 1 FROM steward_revision_resumes resume JOIN steward_turns resumed ON resumed.id=resume.turn_id
+          WHERE resume.operation_id=o.operation_id AND resumed.thread_id=${id}) ORDER BY r.turn_seq, o.created_at`
       return { ...thread, messages, summaries: summaries.map((summary: any) => ({ ...summary, fromTurnSeq: Number(summary.fromTurnSeq), throughTurnSeq: Number(summary.throughTurnSeq),
         fromTurnNumber: Number(summary.fromTurnNumber), throughTurnNumber: Number(summary.throughTurnNumber), coveredTurns: Number(summary.coveredTurns) })),
         turns: turns.map((turn: any) => ({ ...turn, activeMs: Number(turn.activeMs), activeLimitMs: Number(turn.activeLimitMs) })),

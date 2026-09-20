@@ -1,8 +1,9 @@
-export type ResearchOperation = { turnId: string; operationId: string; status: string; taskId?: string; runId?: string; goal: string; modelId: string; protocol: string; reason: string; verification: string; sources?: Record<string, { source: string }>; failure?: string }
-export type ControlOperation = { turnId: string; operationId: string; kind: 'steer' | 'cancel'; status: string; taskId?: string; runId?: string; content?: string; messageStatus?: 'pending' | 'applied' | 'carried'; failure?: string }
-export type InteractionOperation = { turnId: string; operationId: string; status: string; taskId?: string; runId?: string; epoch?: number; interactionId?: string; interactionKind?: 'question' | 'limit'; answer?: string; decision?: 'continue' | 'finish'; failure?: string }
-export type RetryOperation = { turnId: string; operationId: string; mode: 'same' | 'replacement'; status: string; taskId?: string; sourceRunId?: string; runId?: string; modelId?: string; protocol?: string; failure?: string }
-export type RevisionOperation = { turnId: string; operationId: string; status: string; taskId?: string; sourceVersionId?: string; runId?: string; content: string; modelId: string; protocol: string; reason: string; verification: string; sources?: Record<string, { source: string }>; failure?: string }
+type ReceiptTurns = { turnId: string; resumeTurnIds?: string[] }
+export type ResearchOperation = ReceiptTurns & { operationId: string; status: string; taskId?: string; runId?: string; goal: string; modelId: string; protocol: string; reason: string; verification: string; sources?: Record<string, { source: string }>; failure?: string }
+export type ControlOperation = ReceiptTurns & { operationId: string; kind: 'steer' | 'cancel'; status: string; taskId?: string; runId?: string; content?: string; messageStatus?: 'pending' | 'applied' | 'carried'; failure?: string }
+export type InteractionOperation = ReceiptTurns & { operationId: string; status: string; taskId?: string; runId?: string; epoch?: number; interactionId?: string; interactionKind?: 'question' | 'limit'; answer?: string; decision?: 'continue' | 'finish'; failure?: string }
+export type RetryOperation = ReceiptTurns & { operationId: string; mode: 'same' | 'replacement'; status: string; taskId?: string; sourceRunId?: string; runId?: string; modelId?: string; protocol?: string; failure?: string }
+export type RevisionOperation = ReceiptTurns & { operationId: string; status: string; taskId?: string; sourceVersionId?: string; runId?: string; content: string; modelId: string; protocol: string; reason: string; verification: string; sources?: Record<string, { source: string }>; failure?: string }
 
 type Props = {
   turnId: string
@@ -32,11 +33,11 @@ function Resume({ operationId, status, action, enabled, onFill, disabled }: { op
 }
 
 export function StewardReceipts({ turnId, research, controls, interactions, retries, revisions, onFill, disabled }: Props) {
-  const ownResearch = research.filter(item => item.turnId === turnId)
-  const ownControls = controls.filter(item => item.turnId === turnId)
-  const ownInteractions = interactions.filter(item => item.turnId === turnId)
-  const ownRetries = retries.filter(item => item.turnId === turnId)
-  const ownRevisions = revisions.filter(item => item.turnId === turnId)
+  const ownResearch = research.filter(item => receiptBelongsToTurn(item, turnId))
+  const ownControls = controls.filter(item => receiptBelongsToTurn(item, turnId))
+  const ownInteractions = interactions.filter(item => receiptBelongsToTurn(item, turnId))
+  const ownRetries = retries.filter(item => receiptBelongsToTurn(item, turnId))
+  const ownRevisions = revisions.filter(item => receiptBelongsToTurn(item, turnId))
   if (![ownResearch, ownControls, ownInteractions, ownRetries, ownRevisions].some(items => items.length)) return null
 
   return <div className="turn-receipts">
@@ -71,3 +72,7 @@ export function StewardReceipts({ turnId, research, controls, interactions, retr
   </div>
 }
 import { QuickActions, type ReceiptAction } from './QuickActions'
+
+export function receiptBelongsToTurn(operation: ReceiptTurns, turnId: string) {
+  return operation.turnId === turnId || operation.resumeTurnIds?.includes(turnId) === true
+}
