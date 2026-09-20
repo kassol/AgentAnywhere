@@ -3,7 +3,7 @@ import './craft/styles.css'
 import './style.css'
 import { useEffect, useState, type FormEvent } from 'react'
 import { createRoot } from 'react-dom/client'
-import { BriefcaseBusiness, FileText, ListChecks, Menu, MessageSquare, Monitor, Moon, Settings, Sun, X } from 'lucide-react'
+import { BriefcaseBusiness, FileText, ListChecks, LogIn, Menu, MessageSquare, Monitor, Moon, Settings, Sun, X } from 'lucide-react'
 import { ModelSettings } from './ModelSettings'
 import { Work } from './Work'
 import { Steward } from './Steward'
@@ -37,8 +37,8 @@ function ThemeSettings() {
     saveTheme(next)
   }
 
-  return <SettingsSection className="settings-card theme-settings" title="外观" description="主题选择保存在当前浏览器。">
-    <SettingsCard divided={false} className="theme-options shadow-none bg-transparent" role="group" aria-label="主题">
+  return <SettingsSection className="theme-settings" title="外观" description="主题选择保存在当前浏览器。">
+    <SettingsCard divided={false} className="theme-options" role="group" aria-label="主题">
       {themeOptions.map(option => <Button key={option.value} type="button" variant="outline"
         className={theme === option.value ? 'theme-option selected' : 'theme-option'}
         aria-pressed={theme === option.value} onClick={() => choose(option.value)}>
@@ -78,13 +78,12 @@ function Login() {
 
   return (
     <main className="login-page">
-      <section className="login-card" aria-labelledby="login-title">
-        <span className="eyebrow">个人委托工作台</span>
-        <h1 id="login-title">AgentAnywhere</h1>
-        <p className="muted">登录后查看工作与成果。</p>
+      <section className="login-panel" aria-labelledby="login-title">
+        <div className="login-brand" aria-label="AgentAnywhere"><span className="brand-mark">A</span><span>AgentAnywhere<small>个人委托工作台</small></span></div>
+        <div className="login-copy"><h1 id="login-title">回到你的工作台</h1><p>输入本机工作台密码。</p></div>
         <form onSubmit={submit}>
           <SettingsInput label="密码" name="password" type="password" value={password} onChange={setPassword} autoComplete="current-password" autoFocus required />
-          <Button type="submit" disabled={busy}>{busy ? '正在登录…' : '登录'}</Button>
+          <Button className="login-submit" type="submit" disabled={busy}><LogIn aria-hidden="true" />{busy ? '正在登录…' : '登录'}</Button>
         </form>
         {error && <p className="error" role="alert">{error}</p>}
       </section>
@@ -125,9 +124,14 @@ function Workbench() {
   }, [conversationContext])
 
   async function logout() {
-    const response = await fetch('/api/logout', { method: 'POST' })
-    if (response.ok) location.assign('/login')
-    else setError('退出失败，请重试。')
+    setError('')
+    try {
+      const response = await fetch('/api/logout', { method: 'POST' })
+      if (response.ok) location.assign('/login')
+      else setError('退出失败，请重试。')
+    } catch {
+      setError('连接失败，无法退出。请检查服务状态后重试。')
+    }
   }
 
   const primaryLinks: SidebarLinkItem[] = [
@@ -161,15 +165,15 @@ function Workbench() {
             {conversationContext && <ConversationNavigation threads={threads} activeId={activeThreadId} error={navigationError} />}
           </div>}
         </header>
-        {!report && <header className="page-header"><div>{!steward && <span>{settings ? '偏好与连接' : '任务与成果'}</span>}
-          {steward && activeThread ? <TitleEditor title={activeThread.title} endpoint={`/api/steward/threads/${activeThread.id}`} onSaved={value => setThreads(current => current?.map(thread => thread.id === activeThread.id ? { ...thread, title: value.title } : thread) ?? null)} /> : <h1>{settings ? '设置' : work ? '工作' : '新对话'}</h1>}</div>
+        {!report && <header className={settings ? 'page-header settings-page-header' : 'page-header'}><div>{!steward && !settings && <span>任务与成果</span>}
+          {steward && activeThread ? <TitleEditor title={activeThread.title} endpoint={`/api/steward/threads/${activeThread.id}`} onSaved={value => setThreads(current => current?.map(thread => thread.id === activeThread.id ? { ...thread, title: value.title } : thread) ?? null)} /> : <h1>{settings ? '设置' : work ? '工作' : '新对话'}</h1>}{settings && <p>模型连接和工作台偏好。</p>}</div>
           {steward && <a href="/tasks">查看工作</a>}
         </header>}
         {error && <p className="error" role="alert">{error}</p>}
         {settings ? (
-          <><ThemeSettings /><ModelSettings /><SettingsSection className="settings-card account-card" title="账户" description="当前已登录。">
+          <div className="settings-page-content"><ModelSettings /><ThemeSettings /><SettingsSection className="account-settings" title="账户" description="当前已登录。">
             <SettingsCard><SettingsRow label="工作台所有者" description="本机登录会话" action={<Button variant="outline" onClick={logout}>退出登录</Button>} /></SettingsCard>
-          </SettingsSection></>
+          </SettingsSection></div>
         ) : work ? <Work /> : report ? <ReportPage /> : <PreviewWorkspace><Steward /></PreviewWorkspace>}
       </Panel>
     </div>

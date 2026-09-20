@@ -1,14 +1,15 @@
-.settings-card.model-settings { margin-bottom: 24px; padding: 0; }
+.model-settings { display: grid; gap: 12px; }
 .settings-controls { min-width: 0; margin: 0; padding: 0; border: 0; }
 
 .model-settings-header {
   display: flex;
-  padding: 20px 24px;
+  padding: 0 4px;
   align-items: flex-start;
   justify-content: space-between;
   gap: 20px;
-  border-bottom: 1px solid var(--border);
 }
+
+.model-settings-header h2 { margin: 0; font-size: 16px; font-weight: 600; }
 
 .model-settings-header p,
 .model-note {
@@ -22,16 +23,18 @@
 
 .model-message {
   margin: 0;
-  padding: 14px 22px;
-  border-bottom: 1px solid var(--border);
+  padding: 11px 14px;
+  border-radius: 9px;
   color: var(--muted);
+  background: var(--subtle);
   font-size: 13px;
   overflow-wrap: anywhere;
 }
 
+.model-message.text-destructive { color: var(--danger); }
+
 .model-settings-content {
   display: grid;
-  padding: 24px;
   gap: 30px;
 }
 
@@ -53,8 +56,7 @@
 }
 
 .model-details {
-  margin: 0 -24px -24px;
-  border-top: 1px solid var(--border);
+  margin: 0;
 }
 
 .model-details > summary,
@@ -69,8 +71,11 @@
 
 .model-details > summary {
   display: grid;
-  padding: 17px 44px 17px 24px;
+  padding: 15px 44px 15px 16px;
   gap: 4px;
+  border-radius: 12px;
+  background: var(--background);
+  box-shadow: var(--shadow-minimal);
   font-size: 13px;
   font-weight: 600;
 }
@@ -93,6 +98,8 @@
 .model-details > summary:hover,
 .selected-model > summary:hover { background: var(--hover); }
 
+.model-details[open] > summary { border-radius: 12px 12px 0 0; }
+
 .model-details > summary small,
 .selected-model > summary small {
   color: var(--muted);
@@ -102,9 +109,8 @@
 
 .model-details-body {
   display: grid;
-  padding: 24px;
+  padding: 24px 0 0;
   gap: 30px;
-  border-top: 1px solid var(--border);
 }
 
 .settings-card-divider { height: 1px; margin: 0 16px; background: color-mix(in srgb, var(--border) 50%, transparent); }
@@ -174,10 +180,9 @@
   }
 
   .model-settings-content,
-  .model-details-body { padding: 18px 16px; }
+  .model-details-body { padding-top: 18px; }
 
-  .model-details { margin: 0 -16px -18px; }
-  .model-details > summary { padding-right: 40px; padding-left: 16px; }
+  .model-details > summary { padding-right: 40px; }
 
   .model-settings [data-layout="settings-row"] {
     align-items: stretch;

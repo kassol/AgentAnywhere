@@ -128,7 +128,7 @@ export function ModelSettings() {
     setState({ ...state, models: state.models.filter(item => item.id !== modelId), defaultModel: state.defaultModel === modelId ? null : state.defaultModel, stewardModel: state.stewardModel?.modelId === modelId ? null : state.stewardModel, researchModelPool: state.researchModelPool.filter(id => id !== modelId) })
   }
 
-  return <section className="settings-card model-settings" aria-labelledby="model-title">
+  return <section className="model-settings" aria-labelledby="model-title">
     <header className="model-settings-header"><div><h2 id="model-title">模型设置</h2><p>先设置日常使用的管家模型和人工调研模型池。连接、协议与能力依据收纳在详情中。</p></div>{dirtyModels && <Badge variant="secondary">有未保存更改</Badge>}</header>
     {!state && !message && <p className="model-message" role="status">正在读取模型配置…</p>}
     <fieldset className="settings-controls" disabled={busy}>
