@@ -13,3 +13,11 @@ test('report renders a GFM table without unsafe links, HTML or images', () => {
   expect(html).not.toContain('<script')
   expect(html).not.toContain('<img')
 })
+
+test('report keeps markdown renderer identities stable across renders', () => {
+  const first = ReportMarkdown({ markdown: '[report](https://example.com/) ![image](https://example.com/image.png)' })
+  const second = ReportMarkdown({ markdown: '[report](https://example.com/) ![image](https://example.com/image.png)' })
+
+  expect(first.props.components.a).toBe(second.props.components.a)
+  expect(first.props.components.img).toBe(second.props.components.img)
+})
