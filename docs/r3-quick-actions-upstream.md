@@ -17,6 +17,6 @@
 
 ## 本地边界
 
-`QuickActions` 不读取 API、不创建管家轮次、不修改 Run、不回答 Interaction。命令构造沿用现有完整授权语法；按钮携带 Task、Run、Interaction、报告版本或操作回执身份，点击后只填入 Composer。用户可检查和编辑内容，显式发送后由服务端重新冻结当前目标、授权和状态。工作详情现有直接回答、额度决定、取消、追加和重试接口保持原语义。
+`QuickActions` 不读取 API、不创建管家轮次、不修改 Run、不回答 Interaction。按钮将 Task、Run、Interaction、报告版本或操作回执身份写入完整授权命令，点击后只填入 Composer。用户可检查和编辑内容，显式发送后由服务端核对指定身份、当前授权和状态；目标已被新 Run 或问题替代时拒绝执行。旧手输命令继续兼容，工作详情现有直接回答、额度决定、取消、追加和重试接口保持原语义。
 
 未引入 Craft 的 Electron 桥接、认证卡业务、附件、富文本、Tooltip、Lucide、Tailwind 或动画依赖。实现只使用 React、原生按钮和项目主题变量。
