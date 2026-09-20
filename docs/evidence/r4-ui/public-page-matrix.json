@@ -1,0 +1,110 @@
+{
+  "release": "0fc03673e44a89b8c9b188575c4d3fceba3d9596",
+  "pages": [
+    {
+      "name": "steward",
+      "mode": "light",
+      "width": 1440,
+      "scrollWidth": 1440,
+      "font": "Inter, \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif"
+    },
+    {
+      "name": "work",
+      "mode": "light",
+      "width": 1440,
+      "scrollWidth": 1440,
+      "font": "Inter, \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif"
+    },
+    {
+      "name": "detail",
+      "mode": "light",
+      "width": 1440,
+      "scrollWidth": 1440,
+      "font": "Inter, \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif"
+    },
+    {
+      "name": "report",
+      "mode": "light",
+      "width": 1440,
+      "scrollWidth": 1440,
+      "font": "Inter, \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif"
+    },
+    {
+      "name": "settings",
+      "mode": "light",
+      "width": 1440,
+      "scrollWidth": 1440,
+      "font": "Inter, \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif"
+    },
+    {
+      "name": "steward",
+      "mode": "dark",
+      "width": 1440,
+      "scrollWidth": 1440,
+      "font": "Inter, \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif"
+    },
+    {
+      "name": "work",
+      "mode": "dark",
+      "width": 1440,
+      "scrollWidth": 1440,
+      "font": "Inter, \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif"
+    },
+    {
+      "name": "detail",
+      "mode": "dark",
+      "width": 1440,
+      "scrollWidth": 1440,
+      "font": "Inter, \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif"
+    },
+    {
+      "name": "report",
+      "mode": "dark",
+      "width": 1440,
+      "scrollWidth": 1440,
+      "font": "Inter, \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif"
+    },
+    {
+      "name": "settings",
+      "mode": "dark",
+      "width": 1440,
+      "scrollWidth": 1440,
+      "font": "Inter, \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif"
+    },
+    {
+      "name": "steward",
+      "mode": "mobile",
+      "width": 390,
+      "scrollWidth": 390,
+      "font": "Inter, \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif"
+    },
+    {
+      "name": "work",
+      "mode": "mobile",
+      "width": 390,
+      "scrollWidth": 390,
+      "font": "Inter, \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif"
+    },
+    {
+      "name": "detail",
+      "mode": "mobile",
+      "width": 390,
+      "scrollWidth": 390,
+      "font": "Inter, \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif"
+    },
+    {
+      "name": "report",
+      "mode": "mobile",
+      "width": 390,
+      "scrollWidth": 390,
+      "font": "Inter, \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif"
+    },
+    {
+      "name": "settings",
+      "mode": "mobile",
+      "width": 390,
+      "scrollWidth": 390,
+      "font": "Inter, \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", system-ui, sans-serif"
+    }
+  ]
+}

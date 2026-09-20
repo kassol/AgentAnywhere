@@ -1,0 +1,30 @@
+{
+  "release": "0fc03673e44a89b8c9b188575c4d3fceba3d9596",
+  "reports": [
+    {
+      "task": "0775cb3d-47b6-4b6d-a201-a822fcc69cb7",
+      "version": "48c15e0a-131a-49b9-a7b0-d12fbd16c199",
+      "sha256": "c38553bcdc5182ac6e80fbc002d59ec297e57083a86e30b785c9a8ebec3a2503"
+    },
+    {
+      "task": "0775cb3d-47b6-4b6d-a201-a822fcc69cb7",
+      "version": "c4451704-314f-4b9e-8e2f-70f5fa4ce705",
+      "sha256": "3c09fdb750a8f399ecdbfbd7126a7a7ab8a1e4e51b6c271129e2019403b3416a"
+    },
+    {
+      "task": "c226e513-ef46-4288-aa5a-021f50ed2ed1",
+      "version": "3d8f3b80-e26c-421e-9533-dec420ffeca4",
+      "sha256": "9ac772349d1041e714d361a0df65ca2f78dde962331dbaf3084aa0164b9c39b2"
+    },
+    {
+      "task": "050b536e-b39c-4330-af00-003625510cf5",
+      "version": "5dfeb4e2-2cab-42e0-bc32-4133246aa908",
+      "sha256": "050abfa440de298b8d30270352b01349c5fc4c00181b9052da536d6aad426d75"
+    },
+    {
+      "task": "d5a06a38-ce96-40d8-a59a-08cf08e792b6",
+      "version": "6756aa60-7b72-407d-9755-431e379e43d0",
+      "sha256": "e0f7a7e44c7fd18c5bb8f687641529ec7c48e5d9df0e8ba40e34b09ce6656e10"
+    }
+  ]
+}

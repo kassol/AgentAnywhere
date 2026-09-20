@@ -178,6 +178,8 @@ R1-08 的 queue 同时连接 `agentanywhere-r1-search` 专用网络，从固定 
 
 2026-09-19 R2 已发布，应用 SHA 为 `6787b70a47a96c8ab9b20056d1d67e3fb0efbbed`；配对备份迁移后位于 `/opt/agentanywhere/backups/20260919-r2-release`。该次发布保留的 R1 回退材料已在 R3 验收后退役，当前保留版本见下文。R2 三阶段验收、旧数据兼容、浏览器和清理结果见 [R2-12](../../docs/evidence/r2-12.md)。
 
-2026-09-20 R3 已发布，正式应用 SHA 为 `1d4d8a286fccdd2c9f4a63608e9eb191a931f255`。仅保留此版本与 R2 `6787b70a47a96c8ab9b20056d1d67e3fb0efbbed` 的 release 和正式镜像；配对备份位于 `/opt/agentanywhere/backups/20260920-r3-release`，最终 UI 更新前的配对备份位于其 `final-ui/`。项目文件统一到 `/opt/agentanywhere/{runtime,releases,backups,checks}`，验收临时资源完成后定向清理；系统 gVisor 路径保持。证据见 [R3-08](../../docs/evidence/r3-08.md)。
+2026-09-20 R3 已发布，正式应用 SHA 为 `1d4d8a286fccdd2c9f4a63608e9eb191a931f255`。该次发布仅保留此版本与 R2 `6787b70a47a96c8ab9b20056d1d67e3fb0efbbed` 的 release 和正式镜像；配对备份位于 `/opt/agentanywhere/backups/20260920-r3-release`，最终 UI 更新前的配对备份位于其 `final-ui/`。项目文件统一到 `/opt/agentanywhere/{runtime,releases,backups,checks}`，验收临时资源完成后定向清理；系统 gVisor 路径保持。证据见 [R3-08](../../docs/evidence/r3-08.md)。
 
-2026-09-20 R3 视觉返工发布后，当前应用为 `1481f3c4042d8bac14d6cf41608daf57b23eea25`，上一健康回退版本为 `1d4d8a286fccdd2c9f4a63608e9eb191a931f255`；仅保留这两版源码与三类正式镜像。上文 R2 回退版本已退役，历史备份继续保留。新增备份为 `backups/20260920-r3-visual-refinement`，字体策略最终更新前的配对快照位于其 `font-final/`，验收日志位于 `acceptance/`。详见 [视觉返工证据](../../docs/evidence/r3-polish.md)。
+2026-09-20 R3 视觉返工发布时，应用为 `1481f3c4042d8bac14d6cf41608daf57b23eea25`，上一健康回退版本为 `1d4d8a286fccdd2c9f4a63608e9eb191a931f255`；仅保留这两版源码与三类正式镜像。上文 R2 回退版本已退役，历史备份继续保留。新增备份为 `backups/20260920-r3-visual-refinement`，字体策略最终更新前的配对快照位于其 `font-final/`，验收日志位于 `acceptance/`。详见 [视觉返工证据](../../docs/evidence/r3-polish.md)。
+
+2026-09-20 R4 已发布，当前应用为 `0fc03673e44a89b8c9b188575c4d3fceba3d9596`，上一健康回退版本为 `1481f3c4042d8bac14d6cf41608daf57b23eea25`；仅保留这两版源码与三类正式镜像。配对备份位于 `backups/20260920-r4-release`，最终控件样式更新前的快照位于其 `final-ui/`。历史备份全部保留；两套隔离测试栈、8 个已核对所有者的测试 schema、测试目录和退役镜像已定向清理，`checks/` 为空，系统 gVisor 路径保持。完整业务回归对应 `1e92847`，最终版仅追加控件样式修正并完成 public 与浏览器复验。证据见 [R4-08](../../docs/evidence/r4-08.md)。
