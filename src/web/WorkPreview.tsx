@@ -172,7 +172,7 @@ function reportPageSelection(): PreviewSelection | null {
 }
 
 export function reportReturnPath(value: string | null): string | null {
-  if (!value || !new RegExp(`^/(?:tasks|steward)/${uuid}(?:\\?[^#]*)?$`, 'i').test(value)) return null
+  if (!value || !new RegExp(`^/(?:(?:tasks|steward)/${uuid})?(?:\\?[^#]*)?$`, 'i').test(value)) return null
   return value
 }
 
@@ -225,7 +225,7 @@ export function ReportPage() {
   }
 
   return <div className="report-page">{selection
-    ? <WorkPreview selection={selection} onSelect={select} onClose={close} onFillComposer={fillComposer} independent returnLabel={returnPath ? sourceThread ? '返回对话' : '返回工作' : '报告'} />
+    ? <WorkPreview selection={selection} onSelect={select} onClose={close} onFillComposer={fillComposer} independent returnLabel={returnPath ? returnPath.startsWith('/tasks/') ? '返回工作' : '返回对话' : '报告'} />
     : <ReportIndex onSelect={select} />}
   </div>
 }
