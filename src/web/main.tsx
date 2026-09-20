@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { ModelSettings } from './ModelSettings'
 import { Work } from './Work'
 import { Steward } from './Steward'
+import { PreviewWorkspace } from './WorkPreview'
 import { applyTheme, readTheme, saveTheme, type ThemeChoice } from './theme'
 import './craft-theme.css'
 import './style.css'
@@ -153,7 +154,7 @@ function Workbench() {
             <p className="muted">当前已登录。</p>
             <button type="button" className="secondary" onClick={logout}>退出登录</button>
           </section></>
-        ) : work ? <Work /> : <Steward />}
+        ) : work ? <Work /> : <PreviewWorkspace><Steward /></PreviewWorkspace>}
       </main>
     </div>
   )

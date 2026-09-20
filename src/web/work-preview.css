@@ -1,0 +1,51 @@
+/* Preview composition adapted from Craft Agents OSS PreviewHeader.tsx and
+ * DocumentFormattedMarkdownOverlay.tsx at e8963854c3679edcceb105a42537a06749e6cb64.
+ * Copyright 2026 Craft Docs Ltd. Licensed under Apache-2.0. */
+.preview-workspace { min-width: 0; }
+.preview-workspace.has-preview { display: grid; grid-template-columns: minmax(0, 1fr) minmax(360px, 44%); min-height: 0; }
+.preview-workspace-main { min-width: 0; }
+.preview-workspace.has-preview .conversation { padding-right: clamp(18px, 3vw, 40px); padding-left: clamp(18px, 3vw, 40px); }
+
+.work-preview { position: sticky; top: 0; min-width: 0; height: calc(100dvh - 94px); overflow: hidden; border-left: 1px solid var(--border); background: var(--subtle); }
+.work-preview-header { position: sticky; z-index: 2; top: 0; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; min-height: 62px; padding: 10px 14px; border-bottom: 1px solid var(--border); background: color-mix(in srgb, var(--panel) 94%, transparent); backdrop-filter: blur(12px); }
+.work-preview-header > div { min-width: 0; text-align: center; }
+.work-preview-header span { color: var(--muted); font-size: 10px; font-weight: 650; letter-spacing: .04em; }
+.work-preview-header h2 { margin: 2px 0 0; overflow: hidden; font-size: 13px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.work-preview-back, .work-preview-close { min-height: 38px; border: 1px solid var(--border); border-radius: 7px; background: var(--panel); color: var(--muted); cursor: pointer; }
+.work-preview-back { padding: 6px 9px; font-size: 11px; }
+.work-preview-close { display: grid; width: 38px; padding: 0; place-items: center; font-size: 20px; line-height: 1; }
+.work-preview-back:hover, .work-preview-close:hover { color: var(--foreground); border-color: var(--border-strong); }
+
+.work-preview-scroll { height: calc(100% - 62px); padding: 24px; overflow: auto; overscroll-behavior: contain; }
+.work-preview-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; max-width: 760px; margin: 0 auto 16px; font-size: 12px; }
+.work-preview-summary > a { margin-left: auto; color: var(--selected-foreground); }
+.work-preview-summary .error { flex-basis: 100%; }
+.work-preview-status { padding: 5px 8px; border-radius: 6px; background: var(--selected); color: var(--selected-foreground); font-weight: 650; }
+.work-preview-versions { display: flex; gap: 7px; max-width: 760px; margin: 0 auto 16px; padding-bottom: 3px; overflow-x: auto; }
+.work-preview-versions button { flex: 0 0 auto; padding: 7px 9px; border: 1px solid var(--border); border-radius: 7px; background: var(--panel); cursor: pointer; font-size: 11px; }
+.work-preview-versions button[aria-pressed='true'] { border-color: var(--accent); background: var(--selected); color: var(--selected-foreground); }
+.work-preview-versions small { display: block; margin-top: 2px; color: var(--muted); font-size: 9px; }
+.work-preview-report-actions { display: flex; justify-content: space-between; gap: 12px; max-width: 760px; margin: 0 auto 9px; color: var(--muted); font-size: 11px; }
+.work-preview-report-actions a { color: var(--selected-foreground); }
+.work-preview-report { max-width: 760px; margin: 0 auto; padding: clamp(24px, 4vw, 40px); border-radius: 16px; background: var(--panel); box-shadow: 0 0 0 1px rgb(var(--foreground-rgb) / 6%), 0 12px 30px var(--shadow); }
+.work-preview-version-error, .work-preview-scroll > .muted, .work-preview-scroll > .error { max-width: 760px; margin-right: auto; margin-left: auto; }
+.work-preview-attachments { max-width: 760px; margin: 18px auto 0; padding: 14px 18px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); }
+.work-preview-attachments h3 { margin: 0 0 8px; font-size: 12px; }
+.work-preview-attachments ul { margin: 0; padding-left: 18px; }
+.work-preview-attachments a { color: var(--selected-foreground); }
+
+@media (max-width: 900px) {
+  .preview-workspace.has-preview { display: block; }
+  .preview-workspace.has-preview .preview-workspace-main { display: none; }
+  .work-preview { position: relative; height: calc(100dvh - 94px); border-left: 0; }
+  .work-preview-scroll { padding: 18px; }
+}
+
+@media (max-width: 680px) {
+  .work-preview { height: calc(100dvh - 184px); }
+  .work-preview-header { grid-template-columns: auto minmax(0, 1fr); }
+  .work-preview-close { display: none; }
+  .work-preview-back, .work-preview-versions button { min-height: 44px; }
+  .work-preview-scroll { padding: 14px; }
+  .work-preview-report { padding: 22px 18px; border-radius: 12px; }
+}

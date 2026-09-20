@@ -9,6 +9,10 @@ type Task = { id: string; goal: string; sourceUrl: string | null; status: string
 type Artifact = { id: string; kind: 'report' | 'attachment'; name: string; versionId: string; runId: string; runStatus: string; sha256: string; sizeBytes: number; createdAt: string }
 type Detail = Task & { run: { id: string; status: string; model: Model; cleanupState: string; failure: string | null; startedAt: string | null; finishedAt: string | null; previousReportVersionId: string | null; retryOfRunId: string | null; modelCalls: number; modelCallLimit: number; activeMs: number; activeLimitMs: number; budgetReason: string | null }; runs: { id: string; status: string; createdAt: string; previousReportVersionId: string | null; retryOfRunId: string | null }[]; interaction: { id: string; kind: 'question' | 'limit'; question: string; status: string; answer: string | null } | null; thread: { id: string; messages: { role: 'user'; content: string; status: 'pending' | 'applied' | 'carried' }[] }; artifacts: Artifact[] }
 type RunEvent = ActivityEvent & { epoch: number }
+export function selectReportVersion<T extends { kind: string; versionId: string; runStatus: string }>(artifacts: T[], requested?: string | null) {
+  const reports = artifacts.filter(item => item.kind === 'report')
+  return requested ? reports.find(item => item.versionId === requested) : reports.find(item => item.runStatus === 'succeeded')
+}
 const statusLabel: Record<string, string> = { queued: '待执行', provisioning: '准备环境', running: '执行中', waiting: '等待回答', cancelling: '正在取消', cancelled: '已取消', succeeded: '已完成', failed: '失败', lost: '执行中断', save_failed: '成果保存失败' }
 const safeLink = (url: string) => {
   if (/^\/tasks\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(url)
@@ -36,7 +40,7 @@ export function Work() {
   const [tasks, setTasks] = useState<Task[] | null>(null)
   const [detail, setDetail] = useState<Detail | null>(null)
   const requestedVersion = new URLSearchParams(location.search).get('version')
-  const [selectedVersion, setSelectedVersion] = useState<string | null>(requestedVersion && /^[0-9a-f-]{36}$/i.test(requestedVersion) ? requestedVersion : null)
+  const [selectedVersion, setSelectedVersion] = useState<string | null>(requestedVersion)
   const [report, setReport] = useState('')
   const [loadedVersion, setLoadedVersion] = useState<string | null>(null)
   const [events, setEvents] = useState<RunEvent[]>([])
@@ -85,8 +89,7 @@ export function Work() {
     return () => { disposed = true; if (timer) clearInterval(timer) }
   }, [detailId])
 
-  const currentVersion = selectedVersion && detail?.artifacts.some(item => item.kind === 'report' && item.versionId === selectedVersion)
-    ? selectedVersion : detail?.artifacts.find(item => item.kind === 'report' && item.runStatus === 'succeeded')?.versionId
+  const currentVersion = detail ? selectReportVersion(detail.artifacts, selectedVersion)?.versionId : undefined
   useEffect(() => {
     if (!currentVersion) return
     let disposed = false
@@ -275,6 +278,7 @@ export function Work() {
       <p className="muted">耗时：{detail.run.startedAt && detail.run.finishedAt ? `${Math.round((Date.parse(detail.run.finishedAt) - Date.parse(detail.run.startedAt)) / 1000)} 秒` : '未知'}</p>
       {detail.run.failure && <p className="error" role="alert">{detail.run.failure}</p>}
       {(detail.run.cleanupState === 'failed' || detail.run.cleanupState === 'blocked') && <p className="error" role="alert">{detail.run.cleanupState === 'blocked' ? '成果尚未安全保存；沙箱已保留。' : '沙箱回收失败，请重试。'} <button type="button" onClick={retryCleanup}>重试保存与回收</button></p>}
+      {selectedVersion && !currentVersion && <p className="error" role="alert">指定报告版本不存在或不属于当前工作。</p>}
       {detail.artifacts.length > 0 && <section className="artifacts"><h3>成果</h3>
         {detail.artifacts.filter(item => item.kind === 'report').map((item, index, reports) => <button type="button" key={item.versionId} onClick={() => setSelectedVersion(item.versionId)} aria-pressed={currentVersion === item.versionId}>第 {reports.length - index} 版 · {new Date(item.createdAt).toLocaleString('zh-CN')} · Run {item.runId.slice(0, 8)}{item.runStatus !== 'succeeded' && ' · 未完成'}</button>)}
         {currentVersion && <><p><a href={`/api/artifacts/${currentVersion}/download`}>下载 Markdown 报告</a></p>
