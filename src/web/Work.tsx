@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { EmptyStateCard } from './EmptyStateCard'
 import { buildToolActivities, readActivityPages, StableScroll, ToolActivityList, type ActivityEvent } from './ActivityFeed'
-import Markdown from 'react-markdown'
+import Markdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
 type Model = { id: string; protocol: 'chat-completions' | 'responses' }
@@ -23,9 +23,13 @@ const safeLink = (url: string) => {
     return ['https:', 'http:'].includes(parsed.protocol) && !parsed.username && !parsed.password ? parsed.href : ''
   } catch { return '' }
 }
+const reportMarkdownComponents: Components = {
+  a: props => <a {...props} target="_blank" rel="noopener noreferrer" />,
+  img: () => null,
+}
 
 export function ReportMarkdown({ markdown }: { markdown: string }) {
-  return <Markdown remarkPlugins={[remarkGfm]} skipHtml urlTransform={safeLink} components={{ a: props => <a {...props} target="_blank" rel="noopener noreferrer" />, img: () => null }}>{markdown}</Markdown>
+  return <Markdown remarkPlugins={[remarkGfm]} skipHtml urlTransform={safeLink} components={reportMarkdownComponents}>{markdown}</Markdown>
 }
 
 async function read<T>(response: Response): Promise<T> {
