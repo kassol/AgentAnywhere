@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { mergeConnectionState, modelSelectionPayload, type ModelSettingsState } from './ModelSettings'
+import { MODEL_SETTINGS_UNSET, mergeConnectionState, modelSelectionPayload, optionalModelId, type ModelSettingsState } from './ModelSettings'
 
 function state(overrides: Partial<ModelSettingsState> = {}): ModelSettingsState {
   return {
@@ -58,5 +58,25 @@ describe('model settings persistence', () => {
       researchModelPool: [],
     })
     expect(mergeConnectionState(refreshed, dirty, true, '/api/model-connection/models')).toBe(refreshed)
+  })
+
+  test('a valid model named like the old unset sentinel remains selectable and persists', () => {
+    const modelId = '__unset__'
+    const current = state({
+      models: [{ id: modelId, protocol: 'responses', overrides: {} }],
+      defaultModel: modelId,
+      stewardModel: { modelId, protocol: 'responses' },
+      researchModelPool: [modelId],
+    })
+
+    expect(MODEL_SETTINGS_UNSET.length).toBeGreaterThan(200)
+    expect(optionalModelId(modelId)).toBe(modelId)
+    expect(optionalModelId(MODEL_SETTINGS_UNSET)).toBeNull()
+    expect(modelSelectionPayload(current)).toMatchObject({
+      models: [{ id: modelId }],
+      defaultModel: modelId,
+      stewardModel: { modelId },
+      researchModelPool: [modelId],
+    })
   })
 })

@@ -13,6 +13,10 @@ import { applyTheme, readTheme, saveTheme, type ThemeChoice } from './theme'
 import { Button } from './craft/components/Button'
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from './craft/components/Empty'
 import { Panel } from './craft/components/Panel'
+import { SettingsCard } from './craft/components/SettingsCard'
+import { SettingsInput } from './craft/components/SettingsInput'
+import { SettingsRow } from './craft/components/SettingsRow'
+import { SettingsSection } from './craft/components/SettingsSection'
 import { SidebarButton, type SidebarLinkItem } from './craft/components/SidebarButton'
 
 const threadStatusLabel: Record<string, string> = { queued: '排队中', running: '回复中', stopping: '停止中', stopped: '已停止', completed: '已完成', interrupted: '已中断', limited: '已达上限', failed: '失败' }
@@ -35,31 +39,27 @@ function ThemeSettings() {
     saveTheme(next)
   }
 
-  return <section className="settings-card theme-settings" aria-labelledby="theme-title">
-    <div>
-      <h2 id="theme-title">外观</h2>
-      <p className="muted">主题选择保存在当前浏览器。</p>
-    </div>
-    <div className="theme-options" role="group" aria-label="主题">
+  return <SettingsSection className="settings-card theme-settings" title="外观" description="主题选择保存在当前浏览器。">
+    <SettingsCard divided={false} className="theme-options shadow-none bg-transparent" role="group" aria-label="主题">
       {themeOptions.map(option => <Button key={option.value} type="button" variant="outline"
         className={theme === option.value ? 'theme-option selected' : 'theme-option'}
         aria-pressed={theme === option.value} onClick={() => choose(option.value)}>
         <span className={`theme-swatch theme-swatch-${option.value}`}><option.icon aria-hidden="true" /></span>
         <span>{option.label}</span>
       </Button>)}
-    </div>
-  </section>
+    </SettingsCard>
+  </SettingsSection>
 }
 
 function Login() {
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [password, setPassword] = useState('')
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setBusy(true)
     setError('')
-    const password = new FormData(event.currentTarget).get('password')
     try {
       const response = await fetch('/api/auth', {
         method: 'POST',
@@ -85,9 +85,8 @@ function Login() {
         <h1 id="login-title">AgentAnywhere</h1>
         <p className="muted">登录后查看工作与成果。</p>
         <form onSubmit={submit}>
-          <label htmlFor="password">密码</label>
-          <input id="password" name="password" type="password" autoComplete="current-password" autoFocus required />
-          <button type="submit" disabled={busy}>{busy ? '正在登录…' : '登录'}</button>
+          <SettingsInput label="密码" name="password" type="password" value={password} onChange={setPassword} autoComplete="current-password" autoFocus required />
+          <Button type="submit" disabled={busy}>{busy ? '正在登录…' : '登录'}</Button>
         </form>
         {error && <p className="error" role="alert">{error}</p>}
       </section>
