@@ -1076,12 +1076,14 @@ test('steward answers require an exact current-user authorization', async () => 
   await admin.unsafe(`CREATE SCHEMA ${schema}`)
   const isolatedUrl = new URL(databaseUrl)
   isolatedUrl.searchParams.set('options', `-csearch_path=${schema}`)
-  const toolResponse = (model: string) => {
+  let exactTaskId = ''
+  let currentInteractionId = ''
+  const toolResponse = (model: string, name = 'freeze_interaction_answer', args: unknown = {}) => {
     const common = { id: crypto.randomUUID(), object: 'chat.completion.chunk', created: 1, model }
     return new Response([
       `data: ${JSON.stringify({ ...common, choices: [{ index: 0, delta: { role: 'assistant', tool_calls: [{ index: 0,
-        id: `call_${crypto.randomUUID()}`, type: 'function', function: { name: 'freeze_interaction_answer',
-          arguments: '{}' } }] }, finish_reason: null }] })}`,
+        id: `call_${crypto.randomUUID()}`, type: 'function', function: { name,
+          arguments: JSON.stringify(args) } }] }, finish_reason: null }] })}`,
       `data: ${JSON.stringify({ ...common, choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] })}`,
       'data: [DONE]', '',
     ].join('\n\n'), { headers: { 'content-type': 'text/event-stream' } })
@@ -1096,12 +1098,29 @@ test('steward answers require an exact current-user authorization', async () => 
   }
   const upstream = Bun.serve({ port: 0, async fetch(request) {
     const body = await request.json() as any
-    const names = (body.tools ?? []).map((tool: any) => tool.function.name)
+    const tools = (body.tools ?? []).map((tool: any) => tool.function)
+    const names = tools.map((tool: any) => tool.name)
     const results = body.messages?.filter((message: any) => message.role === 'tool') ?? []
     const rawUser = body.messages?.filter((message: any) => message.role === 'user').at(-1)?.content
     const user = typeof rawUser === 'string' ? rawUser : rawUser?.filter((part: any) => part.type === 'text').map((part: any) => part.text).join('') ?? ''
-    if (names.includes('freeze_interaction_answer') && results.length === 0) {
-      return toolResponse(body.model)
+    const toolText = (message: any) => typeof message?.content === 'string' ? message.content
+      : message?.content?.filter((part: any) => part.type === 'text').map((part: any) => part.text).join('') ?? ''
+    if (names.includes('resume_interaction_answer') && user.startsWith('继续回答回执 ') && results.length === 0) {
+      return toolResponse(body.model, 'resume_interaction_answer', { operationId: /[0-9a-f-]{36}/i.exec(user)?.[0] })
+    }
+    if (names.includes('apply_frozen_interaction_answer')) {
+      const operationId = tools.find((tool: any) => tool.name === 'apply_frozen_interaction_answer').parameters.properties.operationId.const
+      return results.length === 0 ? toolResponse(body.model, 'apply_frozen_interaction_answer', { operationId }) : textResponse(body.model)
+    }
+    if (names.includes('freeze_interaction_answer')) {
+      if (results.length === 0) return toolResponse(body.model)
+      if (user.includes(' 的 Interaction ')) {
+        const operationId = JSON.parse(toolText(results[0])).operationId
+        if (results.length === 1) return toolResponse(body.model, 'find_interaction_candidates', { cursor: 0 })
+        if (results.length === 2) return toolResponse(body.model, 'freeze_interaction_target', {
+          operationId, taskId: exactTaskId, interactionId: currentInteractionId,
+        })
+      }
     }
     return textResponse(body.model)
   } })
@@ -1139,6 +1158,54 @@ test('steward answers require an exact current-user authorization', async () => 
     const explicitTaskId = crypto.randomUUID()
     expect((await runTurn(`回答工作 ${explicitTaskId}：偏重 API 用法，说明 JSON 返回格式与启用条件。`)).interactionOperations)
       .toMatchObject([{ answer: '偏重 API 用法，说明 JSON 返回格式与启用条件。', status: 'unexecuted', taskId: null }])
+    const exactInteractionId = crypto.randomUUID()
+    expect((await runTurn(`继续工作 ${explicitTaskId} 的 Interaction ${exactInteractionId}`)).interactionOperations)
+      .toMatchObject([{ decision: 'continue', status: 'unexecuted', taskId: null }])
+    expect((await runTurn(`结束工作 ${explicitTaskId} 的 Interaction ${exactInteractionId}`)).interactionOperations)
+      .toMatchObject([{ decision: 'finish', status: 'unexecuted', taskId: null }])
+
+    const work = await (await send('/api/tasks', 'POST', {
+      requestId: crypto.randomUUID(), goal: '精确 Interaction 绑定', modelId: 'interaction-auth',
+    })).json()
+    exactTaskId = work.id
+    const oldInteractionId = crypto.randomUUID()
+    currentInteractionId = crypto.randomUUID()
+    const currentRunId = crypto.randomUUID()
+    const db = new SQL(isolatedUrl.toString())
+    await db`DELETE FROM work_outbox WHERE run_id=${work.run.id}`
+    await db`UPDATE work_runs SET status='failed', active=false, cleanup_state='cleaned', finished_at=now() WHERE id=${work.run.id}`
+    await db`INSERT INTO work_interactions (id, run_id, epoch, question, status)
+      VALUES (${oldInteractionId}, ${work.run.id}, 0, '旧问题', 'pending')`
+    await db`INSERT INTO work_runs (id, task_id, status, model_snapshot, credential_ref, created_at, epoch, cleanup_state, checkpoint_ref)
+      SELECT ${currentRunId}, task_id, 'waiting', model_snapshot, credential_ref, now() + interval '1 second', 1, 'cleaned', ${JSON.stringify({ epoch: 1, files: [] })}::jsonb
+      FROM work_runs WHERE id=${work.run.id}`
+    await db`INSERT INTO work_interactions (id, run_id, epoch, question, status)
+      VALUES (${currentInteractionId}, ${currentRunId}, 1, '新问题', 'pending')`
+    await db`UPDATE work_tasks SET status='waiting' WHERE id=${work.id}`
+
+    const stale = await runTurn(`回答工作 ${work.id} 的 Interaction ${oldInteractionId}：旧草稿答案`)
+    expect(stale.interactionOperations).toMatchObject([{ status: 'unexecuted', taskId: null }])
+    expect((await db`SELECT status, answer FROM work_interactions WHERE id=${currentInteractionId}`)[0]).toEqual({ status: 'pending', answer: null })
+
+    const accepted = await runTurn(`回答工作 ${work.id} 的 Interaction ${currentInteractionId}：新问题答案`)
+    expect(accepted.interactionOperations).toMatchObject([{
+      status: 'accepted', taskId: work.id, runId: currentRunId, interactionId: currentInteractionId,
+    }])
+    const acceptedOperationId = accepted.interactionOperations[0].operationId
+    await send(`/api/steward/threads/${accepted.id}/turns`, 'POST', {
+      requestId: crypto.randomUUID(), content: `继续回答回执 ${acceptedOperationId}`,
+    })
+    let resumed: any
+    for (let index = 0; index < 200; index++) {
+      resumed = await (await send(`/api/steward/threads/${accepted.id}`)).json()
+      if (!['queued', 'running'].includes(resumed.turns.at(-1)?.status)) break
+      await Bun.sleep(20)
+    }
+    expect(resumed.interactionOperations).toHaveLength(1)
+    expect(resumed.interactionOperations[0]).toMatchObject({ operationId: acceptedOperationId, status: 'accepted',
+      interactionId: currentInteractionId, resumeTurnIds: [resumed.turns.at(-1).id] })
+    expect((await db`SELECT status, answer FROM work_interactions WHERE id=${currentInteractionId}`)[0]).toEqual({ status: 'answered', answer: '新问题答案' })
+    await db.close()
   } finally {
     await app.stop(true)
     upstream.stop(true)

@@ -19,8 +19,8 @@ function card(overrides: Partial<StatusCard> = {}): StatusCard {
 describe('steward quick action mapping', () => {
   test('a running related work fills explicit append and cancel commands', () => {
     expect(relatedTaskQuickActions(task('running')).map(quickActionCommand)).toEqual([
-      `给工作 ${taskId} 追加要求：`,
-      `取消工作 ${taskId}`,
+      `给工作 ${taskId} 的 Run ${runId} 追加要求：`,
+      `取消工作 ${taskId} 的 Run ${runId}`,
     ])
   })
 
@@ -33,7 +33,10 @@ describe('steward quick action mapping', () => {
     }), runId)
 
     expect(actions[0]).toEqual({ kind: 'answer', taskId, interactionId })
-    expect(actions.map(quickActionCommand)).toEqual([`回答工作 ${taskId}：`, `取消工作 ${taskId}`])
+    expect(actions.map(quickActionCommand)).toEqual([
+      `回答工作 ${taskId} 的 Interaction ${interactionId}：`,
+      `取消工作 ${taskId} 的 Run ${runId}`,
+    ])
   })
 
   test('limit choices, retry, and revision keep their exact targets', () => {
@@ -43,7 +46,11 @@ describe('steward quick action mapping', () => {
       runStatus: 'waiting',
       interaction: { id: interactionId, kind: 'limit', question: '是否继续？', status: 'pending' },
     }), runId)
-    expect(limit.map(quickActionCommand)).toEqual([`继续工作 ${taskId}`, `结束工作 ${taskId}`, `取消工作 ${taskId}`])
+    expect(limit.map(quickActionCommand)).toEqual([
+      `继续工作 ${taskId} 的 Interaction ${interactionId}`,
+      `结束工作 ${taskId} 的 Interaction ${interactionId}`,
+      `取消工作 ${taskId} 的 Run ${runId}`,
+    ])
 
     const retryModels = [
       { id: 'smaller', protocol: 'responses' as const, contextWindow: 64_000, researchReadiness: { status: 'ready-to-try' } },
@@ -51,8 +58,8 @@ describe('steward quick action mapping', () => {
       { id: 'wrong-protocol', protocol: 'chat-completions' as const, contextWindow: 128_000, researchReadiness: { status: 'ready-to-try' } },
     ]
     expect(statusCardQuickActions(card(), runId, retryModels).map(quickActionCommand)).toEqual([
-      `同模型重试工作 ${taskId}`,
-      `把工作 ${taskId} 改用模型：replacement 重试`,
+      `同模型重试工作 ${taskId} 的 Run ${runId}`,
+      `把工作 ${taskId} 的 Run ${runId} 改用模型：replacement 重试`,
     ])
     expect(statusCardQuickActions(card(), '99999999-9999-4999-8999-999999999999')).toEqual([])
     expect(statusCardQuickActions(card({ kind: 'completed', runStatus: 'succeeded', reports: [{ versionId, href: `/tasks/${taskId}?version=${versionId}` }] })).map(quickActionCommand))
@@ -76,9 +83,9 @@ describe('steward quick action mapping', () => {
       threadId: 'thread-id',
       draft: { content: '批注汇总', revision: 5, review: { taskId, versionId, annotations: [{ id: interactionId, updatedAt: 1, quote: '原文' }] } },
       pending,
-    }, `回答工作 ${taskId}：`)
+    }, `回答工作 ${taskId} 的 Interaction ${interactionId}：`)
 
     expect(next.pending).toBe(pending)
-    expect(next.draft).toEqual({ content: `回答工作 ${taskId}：`, revision: 6 })
+    expect(next.draft).toEqual({ content: `回答工作 ${taskId} 的 Interaction ${interactionId}：`, revision: 6 })
   })
 })

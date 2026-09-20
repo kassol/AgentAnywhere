@@ -410,14 +410,14 @@ export async function createWorkStore(databaseUrl: string, artifactDir = join(pr
     return result.taskId ? { ...result, task: await detail(result.taskId) } : result
   }
 
-  async function freezeStewardControl(currentTurnId: string, operationId: string, taskId: string, currentTime: () => number) {
+  async function freezeStewardControl(currentTurnId: string, operationId: string, taskId: string, expectedRunId: string | null, currentTime: () => number) {
     return db.begin(async sql => {
       const turn = await lockStewardTurnBudget(sql, currentTurnId)
       const [operation] = await sql`SELECT turn_id AS "turnId", kind, status, task_id AS "taskId", run_id AS "runId"
         FROM steward_control_operations WHERE operation_id=${operationId} FOR UPDATE`
       if (!turn || !operation || operation.turnId !== currentTurnId) throw new WorkInputError('控制操作回执无效')
       if (operation.status === 'planned' || operation.status === 'accepted') {
-        if (operation.taskId !== taskId) throw new WorkConflictError('当前轮次的控制目标已冻结')
+        if (operation.taskId !== taskId || expectedRunId && operation.runId !== expectedRunId) throw new WorkConflictError('当前轮次的控制目标已冻结')
         return { operationId, taskId: operation.taskId, runId: operation.runId, status: operation.status }
       }
       if (operation.status !== 'intent') throw new WorkConflictError('控制操作已结束')
@@ -427,6 +427,7 @@ export async function createWorkStore(databaseUrl: string, artifactDir = join(pr
       const [run] = await sql`SELECT r.id, r.status, r.active FROM work_runs r JOIN work_tasks t ON t.id=r.task_id
         WHERE t.id=${taskId} AND t.owner_id='owner' ORDER BY r.created_at DESC, r.id DESC LIMIT 1 FOR UPDATE OF r`
       if (!run) throw new WorkInputError('控制目标不存在')
+      if (expectedRunId && run.id !== expectedRunId) throw new WorkConflictError('快捷操作指定的 Run 已被新的 Run 替代')
       if (operation.kind === 'steer' && (run.status !== 'running' || !run.active)) throw new WorkConflictError('当前 Run 不在执行中')
       if (operation.kind === 'cancel' && !['queued', 'provisioning', 'running', 'waiting'].includes(run.status)) throw new WorkConflictError('当前 Run 不可取消')
       await sql`UPDATE steward_control_operations SET task_id=${taskId}, run_id=${run.id}, status='planned' WHERE operation_id=${operationId}`
@@ -568,7 +569,7 @@ export async function createWorkStore(databaseUrl: string, artifactDir = join(pr
     })
   }
 
-  async function freezeStewardRetry(currentTurnId: string, operationId: string, taskId: string, currentTime: () => number) {
+  async function freezeStewardRetry(currentTurnId: string, operationId: string, taskId: string, expectedRunId: string | null, currentTime: () => number) {
     return db.begin(async sql => {
       const turn = await lockStewardTurnBudget(sql, currentTurnId)
       const [operation] = await sql`SELECT turn_id AS "turnId", mode, status, task_id AS "taskId", source_run_id AS "sourceRunId",
@@ -576,7 +577,7 @@ export async function createWorkStore(databaseUrl: string, artifactDir = join(pr
         FROM steward_retry_operations WHERE operation_id=${operationId} FOR UPDATE`
       if (!turn || !operation || operation.turnId !== currentTurnId) throw new WorkInputError('重试操作回执无效')
       if (['planned', 'accepted', 'failed'].includes(operation.status)) {
-        if (operation.taskId !== taskId) throw new WorkConflictError('当前轮次的重试目标已冻结')
+        if (operation.taskId !== taskId || expectedRunId && operation.sourceRunId !== expectedRunId) throw new WorkConflictError('当前轮次的重试目标已冻结')
         return { operationId, taskId: operation.taskId, sourceRunId: operation.sourceRunId, status: operation.status }
       }
       if (operation.status !== 'intent') throw new WorkConflictError('重试操作已结束')
@@ -587,6 +588,7 @@ export async function createWorkStore(databaseUrl: string, artifactDir = join(pr
         r.credential_ref AS "credentialRef" FROM work_runs r JOIN work_tasks t ON t.id=r.task_id
         WHERE t.id=${taskId} AND t.owner_id='owner' ORDER BY r.created_at DESC, r.id DESC LIMIT 1 FOR UPDATE OF r`
       if (!run) throw new WorkInputError('重试目标不存在')
+      if (expectedRunId && run.id !== expectedRunId) throw new WorkConflictError('快捷操作指定的 Run 已被新的 Run 替代')
       if (run.active || run.cleanupState !== 'cleaned' || !['failed', 'lost'].includes(run.status)) throw new WorkConflictError('当前 Run 不可重试')
       const source = typeof run.modelSnapshot === 'string' ? JSON.parse(run.modelSnapshot) : run.modelSnapshot
       let snapshot = source

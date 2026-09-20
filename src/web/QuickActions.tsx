@@ -14,12 +14,12 @@ export type QuickAction =
 
 export function quickActionCommand(action: QuickAction) {
   switch (action.kind) {
-    case 'append': return `给工作 ${action.taskId} 追加要求：${action.content ?? ''}`
-    case 'answer': return `回答工作 ${action.taskId}：${action.answer ?? ''}`
-    case 'limit': return `${action.decision === 'continue' ? '继续' : '结束'}工作 ${action.taskId}`
-    case 'cancel': return `取消工作 ${action.taskId}`
-    case 'same-retry': return `同模型重试工作 ${action.taskId}`
-    case 'replacement-retry': return `把工作 ${action.taskId} 改用模型：${action.modelId} 重试`
+    case 'append': return `给工作 ${action.taskId} 的 Run ${action.runId} 追加要求：${action.content ?? ''}`
+    case 'answer': return `回答工作 ${action.taskId} 的 Interaction ${action.interactionId}：${action.answer ?? ''}`
+    case 'limit': return `${action.decision === 'continue' ? '继续' : '结束'}工作 ${action.taskId} 的 Interaction ${action.interactionId}`
+    case 'cancel': return `取消工作 ${action.taskId} 的 Run ${action.runId}`
+    case 'same-retry': return `同模型重试工作 ${action.taskId} 的 Run ${action.sourceRunId}`
+    case 'replacement-retry': return `把工作 ${action.taskId} 的 Run ${action.sourceRunId} 改用模型：${action.modelId} 重试`
     case 'revision': return `请修改工作 ${action.taskId} 的报告 ${action.versionId}：${action.content ?? ''}`
     case 'resume': return `继续${action.action}回执 ${action.operationId}`
   }
