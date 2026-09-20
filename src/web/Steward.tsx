@@ -288,18 +288,20 @@ export function Steward({ fillRequest, onFillRequestHandled }: { fillRequest?: {
               {turn.status === 'limited' && <p className="error" role="status">{limitMessage(turn)}</p>}
             </section>
           })}
-          {!!detail?.relatedTasks.length && <section aria-label="关联工作"><h3>关联工作</h3><ul>{detail.relatedTasks.map(task => <li key={task.id}>
-            <a href={task.href}>{task.goal}</a> <span>{statusLabel[task.status] ?? task.status}</span>
-            {task.reports.map(report => <span key={report.versionId}> · <a href={report.href}>成果 {report.versionId.slice(0, 8)}</a></span>)}
+          {!!detail?.relatedTasks.length && <section className="steward-work-section" aria-label="关联工作"><h3>关联工作</h3><ul className="steward-work-list">{detail.relatedTasks.map(task => <li key={task.id}>
+            <div className="steward-work-heading"><a href={task.href}>{task.goal}</a><span>{statusLabel[task.status] ?? task.status}</span></div>
+            {!!task.reports.length && <div className="steward-work-reports">{task.reports.map(report =>
+              <a key={report.versionId} href={report.href}>成果 {report.versionId.slice(0, 8)}</a>)}</div>}
             <QuickActions actions={relatedTaskQuickActions(task)} onFill={fillCommand} disabled={busy} />
           </li>)}</ul></section>}
-          {!!detail?.statusCards.length && <section aria-label="工作状态卡"><h3>工作状态</h3><ul>{detail.statusCards.map(card => <li key={card.id}>
-            <a href={card.href}>{card.goal}</a>{' · '}
-            {card.interaction
-              ? `${card.interaction.kind === 'limit' ? '额度等待' : '提问'}：${card.interaction.question} · ${statusLabel[card.interaction.status] ?? card.interaction.status}`
-              : statusLabel[card.runStatus] ?? card.runStatus}
-            {card.reports.map(report => <span key={report.versionId}> · <a href={report.href}>成果 {report.versionId.slice(0, 8)}</a></span>)}
-            {card.interaction?.answer && <><br /><small>回答：{card.interaction.answer}</small></>}
+          {!!detail?.statusCards.length && <section className="steward-work-section" aria-label="工作状态卡"><h3>工作状态</h3><ul className="steward-work-list">{detail.statusCards.map(card => <li key={card.id}>
+            <div className="steward-work-heading"><a href={card.href}>{card.goal}</a><span>{card.interaction
+              ? statusLabel[card.interaction.status] ?? card.interaction.status
+              : statusLabel[card.runStatus] ?? card.runStatus}</span></div>
+            {card.interaction && <p className="steward-work-note">{card.interaction.kind === 'limit' ? '额度等待' : '提问'}：{card.interaction.question}</p>}
+            {!!card.reports.length && <div className="steward-work-reports">{card.reports.map(report =>
+              <a key={report.versionId} href={report.href}>成果 {report.versionId.slice(0, 8)}</a>)}</div>}
+            {card.interaction?.answer && <small className="steward-work-answer">回答：{card.interaction.answer}</small>}
             <QuickActions actions={statusCardQuickActions(card, detail.relatedTasks.find(task => task.id === card.taskId)?.runs.at(-1)?.id, replacementModels)}
               onFill={fillCommand} disabled={busy} />
           </li>)}</ul></section>}

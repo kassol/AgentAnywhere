@@ -172,6 +172,18 @@ input, select, textarea { border: 1px solid var(--border-strong); background: va
 .turn-receipt p { margin: 5px 0; font-size: 12px; }
 .turn-receipt small { color: var(--muted); }
 .turn-receipt button { margin-top: 8px; }
+.steward-work-section { display: grid; gap: 9px; }
+.steward-work-section > h3 { margin: 0; font-size: 14px; }
+.steward-work-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.steward-work-list > li { min-width: 0; padding: 12px 14px; border-radius: 9px; background: var(--subtle); }
+.steward-work-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.steward-work-heading > a { min-width: 0; color: var(--foreground); font-size: 13px; font-weight: 650; overflow-wrap: anywhere; text-decoration: none; }
+.steward-work-heading > a:hover { text-decoration: underline; text-underline-offset: 2px; }
+.steward-work-heading > span { flex: 0 0 auto; color: var(--muted); font-size: 11px; }
+.steward-work-note, .steward-work-answer { display: block; margin: 6px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.steward-work-reports { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 7px; font-size: 11px; }
+.steward-work-reports a { color: var(--selected-foreground); overflow-wrap: anywhere; }
+.steward-work-list .quick-actions { margin-top: 10px; }
 
 .tool-activities { display: grid; gap: 7px; }
 .tool-activity { overflow: hidden; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); box-shadow: 0 2px 7px var(--shadow); }
@@ -221,6 +233,7 @@ input, select, textarea { border: 1px solid var(--border-strong); background: va
   .sidebar-conversations > div { flex: 0 0 auto; padding: 0; }
   .sidebar-conversations h2 { display: none; }
   .sidebar-conversations > a { flex: 0 0 min(180px, 48vw); padding: 7px 9px; }
+  .steward-work-heading { align-items: flex-start; flex-direction: column; gap: 4px; }
 }
 
 @media (max-width: 420px) {
