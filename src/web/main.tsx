@@ -1,28 +1,27 @@
 import './craft-theme.css'
 import './craft/styles.css'
 import './style.css'
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { createRoot } from 'react-dom/client'
+import { BriefcaseBusiness, ListChecks, MessageSquare, Monitor, Moon, Plus, Settings, Sun } from 'lucide-react'
 import { ModelSettings } from './ModelSettings'
 import { Work } from './Work'
 import { Steward } from './Steward'
 import { PreviewWorkspace } from './WorkPreview'
 import { QuickActions, type QuickAction } from './QuickActions'
 import { applyTheme, readTheme, saveTheme, type ThemeChoice } from './theme'
+import { Button } from './craft/components/Button'
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from './craft/components/Empty'
+import { Panel } from './craft/components/Panel'
+import { SidebarButton, type SidebarLinkItem } from './craft/components/SidebarButton'
 
-type IconName = 'steward' | 'work' | 'todo' | 'settings' | 'sun'
 const threadStatusLabel: Record<string, string> = { queued: '排队中', running: '回复中', stopping: '停止中', stopped: '已停止', completed: '已完成', interrupted: '已中断', limited: '已达上限', failed: '失败' }
 
-function Icon({ name }: { name: IconName }) {
-  const paths: Record<IconName, ReactNode> = {
-    steward: <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v7a2.5 2.5 0 0 1-2.5 2.5H10l-5 4v-4.5A2.5 2.5 0 0 1 4 12.5z" />,
-    work: <><rect x="3" y="6" width="18" height="13" rx="2" /><path d="M8 6V4h8v2M3 11h18" /></>,
-    todo: <path d="m4 7 2 2 4-4M12 7h8M4 15l2 2 4-4M12 15h8" />,
-    settings: <><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6 1.7 1.7 0 0 0 10 3V2.8h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z" /></>,
-    sun: <><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></>,
-  }
-  return <svg className="icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">{paths[name]}</svg>
-}
+const themeOptions = [
+  { value: 'system', label: '跟随系统', icon: Monitor },
+  { value: 'light', label: '浅色', icon: Sun },
+  { value: 'dark', label: '深色', icon: Moon },
+] as const
 
 function ThemeSettings() {
   const [theme, setTheme] = useState<ThemeChoice>(readTheme)
@@ -42,10 +41,12 @@ function ThemeSettings() {
       <p className="muted">主题选择保存在当前浏览器。</p>
     </div>
     <div className="theme-options" role="group" aria-label="主题">
-      {(['system', 'light', 'dark'] as const).map(value => <button key={value} type="button" className={theme === value ? 'theme-option selected' : 'theme-option'} aria-pressed={theme === value} onClick={() => choose(value)}>
-        <span className={`theme-swatch theme-swatch-${value}`}><Icon name="sun" /></span>
-        {value === 'system' ? '跟随系统' : value === 'light' ? '浅色' : '深色'}
-      </button>)}
+      {themeOptions.map(option => <Button key={option.value} type="button" variant="outline"
+        className={theme === option.value ? 'theme-option selected' : 'theme-option'}
+        aria-pressed={theme === option.value} onClick={() => choose(option.value)}>
+        <span className={`theme-swatch theme-swatch-${option.value}`}><option.icon aria-hidden="true" /></span>
+        <span>{option.label}</span>
+      </Button>)}
     </div>
   </section>
 }
@@ -135,29 +136,46 @@ function Workbench() {
     else setError('退出失败，请重试。')
   }
 
+  const primaryLinks: SidebarLinkItem[] = [
+    { id: 'steward', title: '管家', href: '/', icon: MessageSquare, variant: steward ? 'default' : 'ghost' },
+    { id: 'work', title: '工作', href: '/tasks', icon: BriefcaseBusiness, variant: work ? 'default' : 'ghost' },
+    { id: 'todo', title: '待办', href: pendingInteractions[0]?.href ?? '/tasks', icon: ListChecks,
+      label: pendingInteractions.length ? String(pendingInteractions.length) : undefined, variant: 'ghost' },
+    { id: 'settings', title: '设置', href: '/settings', icon: Settings, variant: settings ? 'default' : 'ghost' },
+  ]
+
   return (
     <div className="shell">
-      <aside className="sidebar" aria-label="主导航">
+      <Panel as="aside" variant="shrink" className="sidebar" aria-label="主导航">
         <a className="brand" href="/" aria-label="AgentAnywhere 管家首页"><span className="brand-mark">A</span><span>AgentAnywhere<small>个人委托工作台</small></span></a>
-        <nav>
-          <a href="/" aria-current={!settings && !work ? 'page' : undefined}><Icon name="steward" /><span>管家</span></a>
-          <a href="/tasks" aria-current={work ? 'page' : undefined}><Icon name="work" /><span>工作</span></a>
-          <a href={pendingInteractions[0]?.href ?? '/tasks'}><Icon name="todo" /><span>待办</span>{pendingInteractions.length > 0 && <b>{pendingInteractions.length}</b>}</a>
-          <a href="/settings" aria-current={settings ? 'page' : undefined}><Icon name="settings" /><span>设置</span></a>
+        <nav className="sidebar-primary" aria-label="页面">
+          {primaryLinks.map(link => <SidebarButton key={link.id} link={link} className="sidebar-primary-link" />)}
         </nav>
         {steward && <section className="sidebar-conversations" aria-label="管家对话">
-          <div><h2>对话</h2><a href="/" aria-label="新建管家对话">＋</a></div>
-          {threads.map(thread => <a key={thread.id} href={`/steward/${thread.id}`} aria-current={location.pathname === `/steward/${thread.id}` ? 'page' : undefined}>
-            <span>{thread.title}</span><small>{thread.status ? threadStatusLabel[thread.status] ?? thread.status : '尚未开始'}</small>
-          </a>)}
+          <div className="sidebar-conversations-header"><h2>对话</h2><Button asChild variant="ghost" size="icon" className="sidebar-new-thread">
+            <a href="/" aria-label="新建管家对话"><Plus aria-hidden="true" /></a>
+          </Button></div>
+          {threads.length ? threads.map(thread => <SidebarButton key={thread.id} className="sidebar-thread-link" link={{
+            id: thread.id,
+            title: thread.title,
+            href: `/steward/${thread.id}`,
+            label: thread.status ? threadStatusLabel[thread.status] ?? thread.status : '尚未开始',
+            icon: MessageSquare,
+            compact: true,
+            variant: location.pathname === `/steward/${thread.id}` ? 'default' : 'ghost',
+          }} />) : <Empty className="sidebar-empty">
+            <EmptyMedia variant="icon" className="sidebar-empty-media"><MessageSquare /></EmptyMedia>
+            <EmptyHeader className="sidebar-empty-header"><EmptyTitle>暂无对话</EmptyTitle><EmptyDescription>从管家页开始新的讨论。</EmptyDescription></EmptyHeader>
+          </Empty>}
         </section>}
         {!!pendingInteractions.length && <section className="pending-interactions" aria-label="全局待办"><h2>待回答</h2><ul>{pendingInteractions.map(interaction => <li key={interaction.id}>
-          <a href={interaction.href}>{interaction.goal}</a><small>{interaction.question}</small>
+          <SidebarButton className="sidebar-pending-link" link={{ id: interaction.id, title: interaction.goal, href: interaction.href,
+            icon: ListChecks, compact: true, variant: 'ghost' }} /><small>{interaction.question}</small>
           {steward && <QuickActions actions={pendingActions(interaction)} onFill={command => setFillRequest({ id: ++fillRequestId.current, command })} />}
         </li>)}</ul></section>}
         <div className="account-summary"><span>本机</span><div><strong>工作台所有者</strong><small>已登录</small></div></div>
-      </aside>
-      <main className={steward ? 'content content-steward' : 'content'}>
+      </Panel>
+      <Panel as="main" variant="grow" className={steward ? 'content content-steward' : 'content'}>
         <header className="page-header"><span>{settings ? '偏好与连接' : work ? '任务与成果' : '个人管家'}</span><h1>{settings ? '设置' : work ? '工作' : '管家'}</h1></header>
         {error && <p className="error" role="alert">{error}</p>}
         {settings ? (
@@ -167,7 +185,7 @@ function Workbench() {
             <button type="button" className="secondary" onClick={logout}>退出登录</button>
           </section></>
         ) : work ? <Work /> : <PreviewWorkspace><Steward fillRequest={fillRequest} onFillRequestHandled={() => setFillRequest(undefined)} /></PreviewWorkspace>}
-      </main>
+      </Panel>
     </div>
   )
 }

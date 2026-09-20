@@ -11,10 +11,16 @@ export function readTheme(): ThemeChoice {
   return 'system'
 }
 
+export function resolveTheme(choice: ThemeChoice, systemPrefersDark = systemTheme.matches) {
+  return choice === 'system' ? systemPrefersDark ? 'dark' : 'light' : choice
+}
+
 export function applyTheme(choice: ThemeChoice) {
-  const resolved = choice === 'system' ? systemTheme.matches ? 'dark' : 'light' : choice
+  const resolved = resolveTheme(choice)
   document.documentElement.dataset.theme = resolved
   document.documentElement.dataset.themeChoice = choice
+  document.documentElement.dataset.font = 'inter'
+  document.documentElement.classList.toggle('dark', resolved === 'dark')
   document.documentElement.style.colorScheme = resolved
 }
 

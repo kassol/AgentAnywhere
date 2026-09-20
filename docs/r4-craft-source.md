@@ -127,3 +127,76 @@ A 的侧栏、对话和按需预览整体结构继续保留；局部控件和交
 `src/web/ActivityFeed.tsx:133-190` 的 StableScroll 和 `src/web/Composer.tsx:17-125` 的草稿/请求身份是 AgentAnywhere 业务契约，Craft 没有可直接替换的浏览器实现，本轮保留。`src/web/StewardReceipts.tsx` 的 Task、Run、Interaction、Operation 投影同样保留，只把可执行快捷动作接入 ActionBar/Button。没有新增依赖。
 
 已删除被上述组件替代的 `src/web/quick-actions.css`，并从 `src/web/composer.css` 删除 textarea、旧发送按钮和旧控制行规则。全局 `src/web/style.css` 由 R4-03 独占；其中已失去调用方的 `.tool-activity*` 留给该票合并时删除，`.return-latest` 仍服务 StableScroll。
+
+## R4-03 实际迁入：外壳与主题
+
+固定来源：Craft Agents OSS `v0.13.3` / `e8963854c3679edcceb105a42537a06749e6cb64`。
+
+## Panel
+
+原路径：`apps/electron/src/renderer/components/app-shell/Panel.tsx:24-67`。
+
+```tsx
+export interface PanelProps {
+  variant?: 'shrink' | 'grow'
+  width?: number
+  className?: string
+  style?: React.CSSProperties
+  children: React.ReactNode
+}
+
+className={cn(
+  'h-full flex flex-col min-w-0 overflow-hidden',
+  variant === 'grow' && 'flex-1',
+  variant === 'shrink' && 'shrink-0',
+  className,
+)}
+```
+
+本地保留 sizing、class 合并和 JSX 容器；增加 `as` 以继续输出浏览器 `aside/main` landmark。A 的 252px 网格仍由 `style.css` 决定。
+
+## SidebarButton
+
+原路径：`apps/electron/src/renderer/components/app-shell/LeftSidebar.tsx:456-593`。
+
+```tsx
+className={cn(
+  'group flex w-full items-center gap-2 rounded-[6px] text-[13px] select-none outline-none',
+  'focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring',
+  link.compact ? 'py-[3px]' : 'py-[5px]',
+  'px-2',
+  link.variant === 'default'
+    ? 'bg-foreground/[0.07]'
+    : 'hover:bg-sidebar-hover',
+)}
+```
+
+本地保留图标、标题、label、active/ghost 与焦点结构；导航根元素改为 `a`，保留直接链接、刷新、浏览器历史与新标签页。未迁入 expandable、DnD、context menu、sortable 分支。
+
+## Empty
+
+原路径：`apps/electron/src/renderer/components/ui/empty.tsx:5-104`。
+
+```tsx
+<div data-slot="empty" className={cn(
+  'flex min-w-0 flex-1 flex-col items-center justify-center gap-3 rounded-lg p-6 pb-[20%] text-center text-balance',
+  className,
+)} />
+```
+
+本地保留 `Empty/Header/Media/Title/Description/Content` 的 data-slot 与组合结构；中文内容由调用方传入。
+
+## 主题
+
+原路径：`apps/electron/src/renderer/index.css:66-180,250-311,386-460`。
+
+```css
+--background: oklch(0.98 0.003 265);
+--foreground: oklch(0.185 0.01 270);
+--accent: oklch(0.62 0.13 293);
+--info: oklch(0.75 0.16 70);
+--success: oklch(0.55 0.17 145);
+--destructive: oklch(0.58 0.24 28);
+```
+
+本地保留六色与 Shadcn 派生 token；继续用 `data-theme` 表达浅色、深色和跟随系统，使用自托管 Inter，并在字体栈中保留中文系统回退。
