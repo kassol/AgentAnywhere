@@ -48,7 +48,7 @@ function parseContinueRequest(body: unknown): ContinueRequest {
   return { requestId: input.requestId, content, modelId: input.modelId, protocol: input.protocol as Protocol | null ?? null }
 }
 
-export async function createWorkStore(databaseUrl: string, artifactDir = join(process.cwd(), 'data', 'artifacts')) {
+export async function createWorkStore(databaseUrl: string, artifactDir = join(process.cwd(), 'data', 'artifacts'), onCreated?: (id: string, source: string) => Promise<void>) {
   const db = new SQL(databaseUrl)
   await db`CREATE TABLE IF NOT EXISTS work_tasks (
     id uuid PRIMARY KEY, owner_id text NOT NULL, request_id uuid NOT NULL UNIQUE,
@@ -144,6 +144,12 @@ export async function createWorkStore(databaseUrl: string, artifactDir = join(pr
 
   async function detail(id: string) {
     const [row] = await db`SELECT t.id, t.title, t.title_edited AS "titleEdited", t.goal, t.source_url AS "sourceUrl", t.status, t.created_at AS "createdAt",
+      (SELECT jsonb_build_object('status', g.status, 'attempts', g.attempts, 'maxAttempts', g.max_attempts,
+        'timeoutMs', g.timeout_ms, 'maxOutputTokens', g.max_output_tokens, 'modelId', g.model_snapshot->>'id',
+        'protocol', g.model_snapshot->>'protocol', 'inputTokens', g.input_tokens, 'outputTokens', g.output_tokens,
+        'totalTokens', g.total_tokens, 'estimatedCostUsd', g.estimated_cost_usd, 'failure', g.failure,
+        'createdAt', g.created_at, 'finishedAt', g.finished_at)
+        FROM title_generations g WHERE g.object_kind='task' AND g.object_id=t.id) AS "titleGeneration",
       r.id AS "runId", r.status AS "runStatus", r.model_snapshot AS "model", r.epoch,
       r.cleanup_state AS "cleanupState", r.failure, r.started_at AS "startedAt", r.finished_at AS "finishedAt",
       r.previous_report_version_id AS "previousReportVersionId", r.retry_of_run_id AS "retryOfRunId",
@@ -167,7 +173,8 @@ export async function createWorkStore(databaseUrl: string, artifactDir = join(pr
         epoch: row.epoch, cleanupState: row.cleanupState, failure: row.failure, startedAt: row.startedAt, finishedAt: row.finishedAt,
         previousReportVersionId: row.previousReportVersionId, retryOfRunId: row.retryOfRunId,
         modelCalls: row.modelCalls, modelCallLimit: row.modelCallLimit, activeMs: Number(row.activeMs), activeLimitMs: Number(row.activeLimitMs), budgetReason: row.budgetReason },
-      runs, interaction: interaction ?? null, thread: { id: row.threadId, messages }, artifacts }
+      runs, interaction: interaction ?? null, thread: { id: row.threadId, messages }, artifacts,
+      titleGeneration: typeof row.titleGeneration === 'string' ? JSON.parse(row.titleGeneration) : row.titleGeneration ?? null }
   }
 
   async function artifactVersion(versionId: string) {
@@ -416,7 +423,9 @@ export async function createWorkStore(databaseUrl: string, artifactDir = join(pr
       if (budget.createCount + 1 >= 3) await sql`UPDATE steward_turns SET budget_reason='creates' WHERE id=${currentTurnId}`
       return { ...created, created: true, status: 'accepted' as const }
     })
-    return result.taskId ? { ...result, task: await detail(result.taskId) } : result
+    const task = result.taskId ? await detail(result.taskId) : null
+    if (result.created && task) await onCreated?.(result.taskId, task.goal || task.sourceUrl || '').catch(() => {})
+    return task ? { ...result, task } : result
   }
 
   async function freezeStewardControl(currentTurnId: string, operationId: string, taskId: string, expectedRunId: string | null, currentTime: () => number) {
@@ -884,7 +893,10 @@ export async function createWorkStore(databaseUrl: string, artifactDir = join(pr
     const snapshot = { ...model, protocol: input.protocol ?? model.protocol, endpoint: connection.endpoint }
     const taskId = crypto.randomUUID()
     const inserted = await db.begin(sql => createWorkInTransaction(sql, input, requestHash, snapshot, connection.credentialRef!, taskId))
-    if (inserted) return { task: await detail(taskId), created: true }
+    if (inserted) {
+      await onCreated?.(taskId, input.goal || input.sourceUrl || '').catch(() => {})
+      return { task: await detail(taskId), created: true }
+    }
     const [winner] = await db`SELECT id, request_hash FROM work_tasks WHERE request_id = ${input.requestId} AND owner_id = 'owner'`
     if (!winner || winner.request_hash !== requestHash) throw new WorkConflictError('请求 ID 已用于其他工作')
     return { task: await detail(winner.id), created: false }

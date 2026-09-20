@@ -7,7 +7,7 @@ import { streamSimple as streamCompletions } from '@earendil-works/pi-ai/api/ope
 import { streamSimple as streamResponses } from '@earendil-works/pi-ai/api/openai-responses'
 import { lockStewardTurnBudget, stewardBudgetFailure, stewardOperationBudget } from './steward-budget'
 import { WorkConflictError, WorkInputError } from './work'
-import { parseTitle } from './title'
+import { parseTitle, titleSummary } from './title'
 
 type Protocol = 'chat-completions' | 'responses'
 type SelectedModel = { id: string; protocol: Protocol; contextWindow?: number; maxTokens?: number; input?: ('text' | 'image')[]; reasoning?: boolean; tools?: boolean; sources?: Record<string, { source: string; updatedAt: string }>; researchReadiness?: { status: string; reasons: string[]; verification: string } }
@@ -196,7 +196,8 @@ function parseInput(body: unknown, existingThread = false) {
   return { requestId: value.requestId, ...(existingThread ? { content: (value.content as string).trim() } : {}) }
 }
 
-export async function createStewardService(databaseUrl: string, resolveCredential: (ref: string) => Credential, now = () => Date.now(), workAccess?: WorkAccess) {
+export async function createStewardService(databaseUrl: string, resolveCredential: (ref: string) => Credential, now = () => Date.now(), workAccess?: WorkAccess,
+  onFirstMessage?: (id: string, source: string) => Promise<void>) {
   const db = new SQL(databaseUrl, { max: 1 })
   let closed = false
   let closing: Promise<void> | null = null
@@ -337,8 +338,14 @@ export async function createStewardService(databaseUrl: string, resolveCredentia
 
   async function detail(id: string) {
     const value = await db.begin(async sql => {
-      const [thread] = await sql`SELECT id, title, title_edited AS "titleEdited", created_at AS "createdAt", updated_at AS "updatedAt"
-        FROM steward_threads WHERE id=${id} AND owner_id='owner'`
+      const [thread] = await sql`SELECT t.id, t.title, t.title_edited AS "titleEdited", t.created_at AS "createdAt", t.updated_at AS "updatedAt",
+        (SELECT jsonb_build_object('status', g.status, 'attempts', g.attempts, 'maxAttempts', g.max_attempts,
+          'timeoutMs', g.timeout_ms, 'maxOutputTokens', g.max_output_tokens, 'modelId', g.model_snapshot->>'id',
+          'protocol', g.model_snapshot->>'protocol', 'inputTokens', g.input_tokens, 'outputTokens', g.output_tokens,
+          'totalTokens', g.total_tokens, 'estimatedCostUsd', g.estimated_cost_usd, 'failure', g.failure,
+          'createdAt', g.created_at, 'finishedAt', g.finished_at)
+          FROM title_generations g WHERE g.object_kind='thread' AND g.object_id=t.id) AS "titleGeneration"
+        FROM steward_threads t WHERE t.id=${id} AND t.owner_id='owner'`
       if (!thread) return null
       const messages = await sql`SELECT m.id, m.turn_id AS "turnId", m.role, m.content, m.status, m.created_at AS "createdAt"
         FROM steward_messages m JOIN steward_turns r ON r.id=m.turn_id WHERE m.thread_id=${id}
@@ -415,7 +422,8 @@ export async function createStewardService(databaseUrl: string, resolveCredentia
         revisionOperations: revisionOperations.map((operation: any) => ({ ...operation,
           ...(typeof operation.evidence === 'string' ? JSON.parse(operation.evidence) : operation.evidence),
           result: typeof operation.result === 'string' ? JSON.parse(operation.result) : operation.result })),
-        linkedIds: links.map((link: any) => link.id) }
+        linkedIds: links.map((link: any) => link.id),
+        titleGeneration: typeof thread.titleGeneration === 'string' ? JSON.parse(thread.titleGeneration) : thread.titleGeneration ?? null }
     })
     if (!value) return null
     const [cards, statusCards] = workAccess && value.linkedIds.length
@@ -494,11 +502,14 @@ export async function createStewardService(databaseUrl: string, resolveCredentia
         return { turn: previous, created: false }
       }
       await sql`INSERT INTO steward_messages (id, thread_id, turn_id, role, content, status) VALUES (${crypto.randomUUID()}, ${threadId}, ${turnId}, 'user', ${input.content}, 'completed')`
-      await sql`UPDATE steward_threads SET title=CASE WHEN title='新对话' THEN ${input.content.slice(0, 60)} ELSE title END, updated_at=now() WHERE id=${threadId}`
+      await sql`UPDATE steward_threads SET title=CASE WHEN title='新对话' THEN ${titleSummary(input.content)} ELSE title END, updated_at=now() WHERE id=${threadId}`
       await sql`INSERT INTO steward_events (turn_id, event_id, type, payload) VALUES (${turnId}, ${crypto.randomUUID()}, 'turn.queued', ${JSON.stringify({ status: 'queued' })}::jsonb)`
       return { turn: { id: turnId, status: 'queued', modelCalls: 0, modelCallLimit: callLimit, activeMs: 0, activeLimitMs }, created: true }
     })
-    if (result?.created) drain()
+    if (result?.created) {
+      await onFirstMessage?.(threadId, input.content).catch(() => {})
+      drain()
+    }
     return result
   }
 

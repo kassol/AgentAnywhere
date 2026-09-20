@@ -8,6 +8,25 @@ import { startServer } from './server'
 const databaseUrl = process.env.AGENTANYWHERE_TEST_DATABASE_URL
 if (!databaseUrl) throw new Error('AGENTANYWHERE_TEST_DATABASE_URL is required for the steward API regression')
 
+const isTitleRequest = (body: any) => body.max_tokens === 64 || body.max_completion_tokens === 64 || body.max_output_tokens === 64
+const titleChatResponse = (model: string) => {
+  const common = { id: crypto.randomUUID(), object: 'chat.completion.chunk', created: 1, model }
+  return new Response([
+    `data: ${JSON.stringify({ ...common, choices: [{ index: 0, delta: { role: 'assistant', content: '自动标题' }, finish_reason: null }] })}`,
+    `data: ${JSON.stringify({ ...common, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}`,
+    'data: [DONE]', '',
+  ].join('\n\n'), { headers: { 'content-type': 'text/event-stream' } })
+}
+const titleResponsesResponse = (model: string) => {
+  const item = { id: crypto.randomUUID(), type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: '自动标题', annotations: [] }] }
+  return new Response([
+    `data: ${JSON.stringify({ type: 'response.output_item.added', output_index: 0, item: { ...item, content: [] } })}`,
+    `data: ${JSON.stringify({ type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: '自动标题' })}`,
+    `data: ${JSON.stringify({ type: 'response.output_item.done', output_index: 0, item })}`,
+    `data: ${JSON.stringify({ type: 'response.completed', response: { id: crypto.randomUUID(), status: 'completed', output: [item], usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 } } })}`, '',
+  ].join('\n\n'), { headers: { 'content-type': 'text/event-stream' } })
+}
+
 test('owner creates and reopens an independent steward conversation', async () => {
   const dataDir = await mkdtemp(join(tmpdir(), 'agentanywhere-steward-'))
   const schema = `steward_test_${crypto.randomUUID().replaceAll('-', '')}`
@@ -130,10 +149,11 @@ test('steward streams both protocols through one global turn slot', async () => 
   const chatContexts: string[][] = []
   const responseRequests: any[] = []
   const upstream = Bun.serve({ port: 0, async fetch(request) {
+    const body = await request.json() as any
+    if (isTitleRequest(body)) return request.url.endsWith('/responses') ? titleResponsesResponse(body.model) : titleChatResponse(body.model)
     activeRequests++
     maxActiveRequests = Math.max(maxActiveRequests, activeRequests)
     try {
-      const body = await request.json() as any
       calls.push(`${new URL(request.url).pathname}:${body.model}`)
       if (request.url.endsWith('/chat/completions')) {
         await chatReleased
@@ -279,6 +299,7 @@ test('startup interrupts the active turn and a new explicit turn continues', asy
   let calls = 0
   const upstream = Bun.serve({ port: 0, async fetch(request) {
     const body = await request.json() as any
+    if (isTitleRequest(body)) return titleChatResponse(body.model)
     calls++
     const common = { id: `restart_${calls}`, object: 'chat.completion.chunk', created: 1, model: body.model }
     if (calls === 1) return new Response(new ReadableStream({
@@ -351,7 +372,12 @@ test('five active minutes limits a turn before another model request', async () 
   const baseTime = Date.now()
   let clockReads = 0
   let upstreamCalls = 0
-  const upstream = Bun.serve({ port: 0, fetch() { upstreamCalls++; return new Response('unexpected', { status: 500 }) } })
+  const upstream = Bun.serve({ port: 0, async fetch(request) {
+    const body = await request.json() as any
+    if (isTitleRequest(body)) return titleChatResponse(body.model)
+    upstreamCalls++
+    return new Response('unexpected', { status: 500 })
+  } })
   const password = 'test-password-12345'
   const app = await startServer({
     password, port: 0, dataDir, databaseUrl: isolatedUrl.toString(),
@@ -567,6 +593,7 @@ test('a clear steward delegation creates independent work with a persisted model
   let fourItemCalls = 0
   const upstream = Bun.serve({ port: 0, async fetch(request) {
     const body = await request.json() as any
+    if (isTitleRequest(body)) return titleChatResponse(body.model)
     const messages = body.messages ?? []
     const names = (body.tools ?? []).map((tool: any) => tool.function?.name)
     const currentUserIndex = messages.findLastIndex((message: any) => message.role === 'user')
@@ -628,6 +655,17 @@ test('a clear steward delegation creates independent work with a persisted model
     expect(detail.turns[0]?.status).toBe('completed')
     expect(detail.relatedTasks).toHaveLength(2)
     expect(detail.relatedTasks.map((task: any) => task.goal)).toEqual(['独立调研甲', '独立调研乙'])
+    for (let index = 0; index < 100 && detail.relatedTasks.some((task: any) => task.title !== '自动标题'); index++) {
+      await Bun.sleep(10)
+      detail = await (await send(`/api/steward/threads/${thread.id}`)).json()
+    }
+    expect(detail.relatedTasks.map((task: any) => task.title)).toEqual(['自动标题', '自动标题'])
+    for (const task of detail.relatedTasks) {
+      expect(await (await send(`/api/tasks/${task.id}`)).json()).toMatchObject({
+        titleGeneration: { status: 'succeeded', modelId: 'steward-a', protocol: 'chat-completions' },
+        run: { modelCalls: 0, modelCallLimit: 40 },
+      })
+    }
     expect(detail.researchOperations).toMatchObject([
       { status: 'accepted', modelId: 'research-a', protocol: 'responses', reason: '工具能力资料完整', verification: 'unverified' },
       { status: 'accepted', modelId: 'research-a', protocol: 'responses', reason: '同类任务沿用已授权候选', verification: 'unverified' },

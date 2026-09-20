@@ -4,6 +4,7 @@ import { createModelConnectionStore } from './model-connection'
 import { createWorkStore, WorkArtifactError, WorkConflictError, WorkInputError } from './work'
 import { createStewardService, StewardConflictError, StewardInputError } from './steward'
 import { TitleInputError } from './title'
+import { createTitleGenerator } from './title-generator'
 
 function modelPath(protocol: 'chat-completions' | 'responses') {
   return protocol === 'chat-completions' ? 'chat/completions' : 'responses'
@@ -66,7 +67,7 @@ function closeWith(body: ReadableStream<Uint8Array>, cleanup: () => void) {
   })
 }
 
-type Config = { password: string; host?: string; port?: number; secureCookie?: boolean; publicOrigin?: string; dataDir?: string; artifactDir?: string; modelTimeoutMs?: number; directoryUrl?: string; databaseUrl?: string; testNow?: () => number }
+type Config = { password: string; host?: string; port?: number; secureCookie?: boolean; publicOrigin?: string; dataDir?: string; artifactDir?: string; modelTimeoutMs?: number; directoryUrl?: string; databaseUrl?: string; testNow?: () => number; titleTimeoutMs?: number }
 type Session = { expires: number; sockets: Set<ServerWebSocket<{ token: string }>> }
 
 const cookieName = 'agentanywhere_session'
@@ -95,7 +96,9 @@ export async function startServer(config: Config) {
   const modelConnection = createModelConnectionStore(config.dataDir ?? join(process.cwd(), 'data'), config.modelTimeoutMs, config.directoryUrl)
   await modelConnection.load()
   const artifactDir = config.artifactDir ?? join(config.dataDir ?? join(process.cwd(), 'data'), 'artifacts')
-  const work = config.databaseUrl ? await createWorkStore(config.databaseUrl, artifactDir) : null
+  const titleGenerator = config.databaseUrl ? await createTitleGenerator(config.databaseUrl, modelConnection.resolveCredential, config.titleTimeoutMs) : null
+  const enqueueTitle = (kind: 'task' | 'thread', id: string, source: string) => titleGenerator?.enqueue(kind, id, source, modelConnection.forRun()) ?? Promise.resolve()
+  const work = config.databaseUrl ? await createWorkStore(config.databaseUrl, artifactDir, (id, source) => enqueueTitle('task', id, source)) : null
   const steward = config.databaseUrl ? await createStewardService(config.databaseUrl, modelConnection.resolveCredential, config.testNow,
     work ? { catalog: work.stewardCatalog, metadata: work.stewardMetadata, statusCards: work.stewardStatusCards,
       read: (taskIds: string[], versionIds: string[]) => work.stewardRead(taskIds, versionIds, artifactDir),
@@ -104,7 +107,8 @@ export async function startServer(config: Config) {
       freezeStewardControl: work.freezeStewardControl, applyStewardControl: work.applyStewardControl,
       freezeStewardInteraction: work.freezeStewardInteraction, applyStewardInteraction: work.applyStewardInteraction,
       freezeStewardRetry: work.freezeStewardRetry, applyStewardRetry: work.applyStewardRetry,
-      freezeStewardRevision: work.freezeStewardRevision, applyStewardRevision: work.applyStewardRevision } : undefined) : null
+      freezeStewardRevision: work.freezeStewardRevision, applyStewardRevision: work.applyStewardRevision } : undefined,
+    (id, source) => enqueueTitle('thread', id, source)) : null
   const sessions = new Map<string, Session>()
   const attempts = new Map<string, { count: number; until: number }>()
   const secure = config.secureCookie ?? false
@@ -524,8 +528,10 @@ export async function startServer(config: Config) {
   const stop = app.stop.bind(app)
   app.stop = async force => {
     const closingSteward = steward?.close()
+    const closingTitles = titleGenerator?.close()
     await stop(force)
     await closingSteward
+    await closingTitles
     await work?.close()
   }
   steward?.start()
