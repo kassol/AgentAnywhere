@@ -4,9 +4,10 @@
  * Copyright 2026 Craft Docs Ltd. Licensed under Apache-2.0.
  */
 import type { FormEvent, KeyboardEvent, ReactNode } from 'react'
+import { filterReviewContextForContent, isReviewContext, type ReviewContext } from './ReviewAnnotations'
 import './composer.css'
 
-export type ComposerReviewContext = { taskId: string; versionId: string; annotationIds: string[] }
+export type ComposerReviewContext = ReviewContext
 export type ComposerDraft = { content: string; revision: number; review?: ComposerReviewContext }
 export type ComposerSubmission = {
   content: string
@@ -23,19 +24,12 @@ export function composerStorageKey(threadId: string | null) {
   return `agentanywhere:steward-composer:${threadId ?? 'new'}`
 }
 
-function validReview(value: unknown): value is ComposerReviewContext {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
-  const review = value as Record<string, unknown>
-  return typeof review.taskId === 'string' && typeof review.versionId === 'string'
-    && Array.isArray(review.annotationIds) && review.annotationIds.every(id => typeof id === 'string')
-}
-
 export function readComposerState(threadId: string | null, storage: StorageLike = localStorage): ComposerState {
   try {
     const value = JSON.parse(storage.getItem(composerStorageKey(threadId)) ?? 'null') as any
     if (!value?.draft || typeof value.draft.content !== 'string' || !Number.isSafeInteger(value.draft.revision) || value.draft.revision < 0) throw new Error()
     const draft: ComposerDraft = { content: value.draft.content, revision: value.draft.revision,
-      ...(validReview(value.draft.review) ? { review: value.draft.review } : {}) }
+      ...(isReviewContext(value.draft.review) ? { review: value.draft.review } : {}) }
     const storedThreadId = typeof value.threadId === 'string' ? value.threadId : undefined
     const pending = value.pending
     if (!pending) return { draft, ...(storedThreadId ? { threadId: storedThreadId } : {}) }
@@ -44,7 +38,7 @@ export function readComposerState(threadId: string | null, storage: StorageLike 
     return { draft, ...(storedThreadId ? { threadId: storedThreadId } : {}), pending: { content: pending.content, draftRevision: pending.draftRevision,
       threadRequestId: pending.threadRequestId, turnRequestId: pending.turnRequestId,
       ...(typeof pending.threadId === 'string' ? { threadId: pending.threadId } : {}),
-      ...(validReview(pending.review) ? { review: pending.review } : {}) } }
+      ...(isReviewContext(pending.review) ? { review: pending.review } : {}) } }
   } catch {
     return { draft: { content: '', revision: 0 } }
   }
@@ -65,10 +59,11 @@ export function prepareComposerSubmission(state: ComposerState): ComposerState |
   if (state.pending) return state
   const content = state.draft.content.trim()
   if (!content) return null
+  const review = filterReviewContextForContent(state.draft.review, content)
   return { ...state, pending: { content, draftRevision: state.draft.revision,
     threadRequestId: crypto.randomUUID(), turnRequestId: crypto.randomUUID(),
     ...(state.threadId ? { threadId: state.threadId } : {}),
-    ...(state.draft.review ? { review: state.draft.review } : {}) } }
+    ...(review ? { review } : {}) } }
 }
 
 export function attachComposerThread(state: ComposerState, submission: ComposerSubmission, threadId: string): ComposerState {

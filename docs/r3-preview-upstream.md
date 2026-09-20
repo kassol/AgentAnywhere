@@ -7,4 +7,4 @@
 | `src/web/WorkPreview.tsx` | `packages/ui/src/components/ui/PreviewHeader.tsx` | 居中标题、右侧关闭动作和紧凑预览工具栏 | 移除 Electron 交通灯、`react-i18next`、Lucide 与 `cn`；增加小屏“返回对话”及独立工作链接 |
 | `src/web/WorkPreview.tsx`、`src/web/work-preview.css` | `packages/ui/src/components/overlay/DocumentFormattedMarkdownOverlay.tsx` | 独立滚动容器、16px 文档卡、窄阅读宽度及安全 Markdown 阅读面 | 改为工作台右栏；正文沿用本项目 `ReportMarkdown`；按 Task/报告版本读取并恢复位置；预留带 `data-task-id`、`data-report-version` 的真实报告容器 |
 
-上游完整预览依赖 `FullscreenOverlayBase`、Portal、Tailwind、Motion、Lucide、`react-i18next`、`@craft-agent/core`、Markdown 渲染器和批注控制器。本地不新增运行依赖，也不移植 Electron 全屏窗口、复制、文件打开或批注状态。预览只调用现有只读 Task 与 Artifact API；报告批注由后续任务在真实报告容器上实现。
+上游完整预览依赖 `FullscreenOverlayBase`、Portal、Tailwind、Motion、Lucide、`react-i18next`、`@craft-agent/core`、Markdown 渲染器和批注控制器。本地不新增运行依赖，也不移植 Electron 全屏窗口、复制或文件打开。预览只调用现有只读 Task 与 Artifact API；R3-06 已在真实报告容器接入本机批注草稿和既有改稿流程，来源与边界见 [R3 报告批注上游来源](r3-review-upstream.md)。

@@ -3,7 +3,9 @@ import { Composer, acceptComposerSubmission, attachComposerThread, changeCompose
 import { buildToolActivities, readActivityPages, StableScroll, ToolActivityList, type ActivityEvent } from './ActivityFeed'
 import { ReportMarkdown } from './Work'
 import { QuickActions, type QuickAction } from './QuickActions'
+import { clearAcceptedAnnotations, latestSucceededReportVersion, type ReviewContext } from './ReviewAnnotations'
 import { StewardReceipts, type ControlOperation, type InteractionOperation, type ResearchOperation, type RetryOperation, type RevisionOperation } from './StewardReceipts'
+import { useReviewComposerBridge } from './WorkPreview'
 
 type Message = { id: string; turnId: string; role: 'user' | 'assistant'; content: string; status: string }
 type Summary = { id: string; content: string; fromTurnNumber: number; throughTurnNumber: number; coveredTurns: number }
@@ -73,8 +75,10 @@ export function Steward({ fillRequest, onFillRequestHandled }: { fillRequest?: {
   const [error, setError] = useState('')
   const [events, setEvents] = useState<ActivityEvent[]>([])
   const [replacementModels, setReplacementModels] = useState<RetryModel[]>([])
+  const [reviewConflict, setReviewConflict] = useState<{ taskId: string; versionId: string; latestVersionId: string; draftRevision: number } | null>(null)
   const cursor = useRef(0)
   const composerRef = useRef(composer)
+  const reviewBridge = useReviewComposerBridge()
 
   function storeComposer(next: ComposerState, id = routeId) {
     composerRef.current = next
@@ -88,6 +92,12 @@ export function Steward({ fillRequest, onFillRequestHandled }: { fillRequest?: {
     onFillRequestHandled?.()
   }, [fillRequest?.id])
 
+  useEffect(() => reviewBridge?.register(payload => {
+    storeComposer(changeComposerDraft(composerRef.current, payload.content, payload.review))
+    setReviewConflict(null)
+    requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('#steward-message')?.focus())
+  }), [reviewBridge, routeId])
+
   async function loadDetail(id: string) {
     const response = await fetch(`/api/steward/threads/${id}`)
     if (!response.ok) return
@@ -95,6 +105,7 @@ export function Steward({ fillRequest, onFillRequestHandled }: { fillRequest?: {
     if (routeId) setDetail(next)
     const pending = composerRef.current.pending
     if (pending && next.turns.some(turn => turn.requestId === pending.turnRequestId)) {
+      clearAcceptedAnnotations(pending.review, pending.content)
       const accepted = acceptComposerSubmission(composerRef.current, pending)
       if (!routeId) {
         writeComposerState(null, { draft: { content: '', revision: 0 } })
@@ -146,13 +157,42 @@ export function Steward({ fillRequest, onFillRequestHandled }: { fillRequest?: {
     }).catch(() => { /* same-model retry remains available while settings are unavailable */ })
   }, [])
 
-  async function submit() {
+  async function checkReviewVersion(review: ReviewContext) {
+    const response = await fetch(`/api/tasks/${review.taskId}`)
+    if (response.status === 401) { location.assign('/login'); throw new Error('登录已失效') }
+    if (!response.ok) throw new Error('无法核对报告版本')
+    const task = await response.json() as { artifacts?: { kind: string; runStatus: string; versionId: string }[] }
+    const artifacts = Array.isArray(task.artifacts) ? task.artifacts : []
+    if (!artifacts.some(artifact => artifact.kind === 'report' && artifact.runStatus === 'succeeded' && artifact.versionId === review.versionId)) {
+      throw new Error('批注所选报告版本已不可用')
+    }
+    return latestSucceededReportVersion(artifacts)
+  }
+
+  async function submit(confirmed?: { taskId: string; versionId: string; draftRevision: number }) {
+    const alreadyPending = Boolean(composerRef.current.pending)
     const prepared = prepareComposerSubmission(composerRef.current)
     if (!prepared?.pending) return
-    storeComposer(prepared)
     let request = prepared.pending
     setBusy(true)
     setError('')
+    if (!alreadyPending && request.review
+      && !(confirmed?.taskId === request.review.taskId && confirmed.versionId === request.review.versionId && confirmed.draftRevision === request.draftRevision)) {
+      try {
+        const latestVersionId = await checkReviewVersion(request.review)
+        if (latestVersionId && latestVersionId !== request.review.versionId) {
+          setReviewConflict({ taskId: request.review.taskId, versionId: request.review.versionId, latestVersionId, draftRevision: request.draftRevision })
+          setBusy(false)
+          return
+        }
+      } catch (caught) {
+        setError(`${caught instanceof Error ? caught.message : '无法核对报告版本'}；消息尚未发送，批注已保留。`)
+        setBusy(false)
+        return
+      }
+    }
+    setReviewConflict(null)
+    storeComposer(prepared)
     let outcomeUnknown = true
     try {
       let id = routeId ?? request.threadId ?? null
@@ -183,6 +223,7 @@ export function Steward({ fillRequest, onFillRequestHandled }: { fillRequest?: {
         }
         throw new Error((await response.json()).error ?? '发送失败')
       }
+      clearAcceptedAnnotations(request.review, request.content)
       const accepted = acceptComposerSubmission(composerRef.current, request)
       if (!routeId) {
         writeComposerState(null, { draft: { content: '', revision: 0 } })
@@ -204,12 +245,14 @@ export function Steward({ fillRequest, onFillRequestHandled }: { fillRequest?: {
 
   function fillCommand(command: string) {
     storeComposer(fillQuickCommand(composerRef.current, command))
+    setReviewConflict(null)
     requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('#steward-message')?.focus())
   }
 
   const activeTurns = detail?.turns.filter(turn => ['queued', 'running', 'stopping'].includes(turn.status)) ?? []
   const toolActivities = buildToolActivities(events)
-  const scrollRevision = `${detail?.messages.length ?? 0}:${events.at(-1)?.serverSeq ?? 0}:${detail?.turns.at(-1)?.status ?? ''}`
+  const messageContentLength = detail?.messages.reduce((length, message) => length + message.content.length, 0) ?? 0
+  const scrollRevision = `${detail?.messages.length ?? 0}:${messageContentLength}:${events.at(-1)?.serverSeq ?? 0}:${detail?.turns.at(-1)?.status ?? ''}`
   return (
     <div className="steward-layout">
       <section className="conversation" aria-label="管家对话">
@@ -258,6 +301,12 @@ export function Steward({ fillRequest, onFillRequestHandled }: { fillRequest?: {
           onSubmit={() => void submit()} actions={activeTurns.map((turn, index) => <button key={turn.id} type="button" className="secondary" onClick={() => void stop(turn.id)}>
               {turn.status === 'queued' ? `撤回排队${activeTurns.length > 1 ? ` ${index + 1}` : ''}` : '停止本轮'}
             </button>)} />
+        {reviewConflict && <div className="review-version-conflict" role="alertdialog" aria-labelledby="review-version-conflict-title">
+          <strong id="review-version-conflict-title">这项工作已有新版报告</strong>
+          <p>批注固定在版本 {reviewConflict.versionId}；当前最新版本为 {reviewConflict.latestVersionId}。继续后仍修改原版本。</p>
+          <div><button type="button" className="secondary" onClick={() => setReviewConflict(null)}>取消并保留草稿</button>
+            <button type="button" onClick={() => void submit(reviewConflict)}>继续修改原版本</button></div>
+        </div>}
       </section>
     </div>
   )

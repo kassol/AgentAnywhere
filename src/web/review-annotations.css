@@ -1,0 +1,25 @@
+.review-hint { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.work-preview-report ::selection { background: color-mix(in srgb, var(--selected) 72%, transparent); color: var(--foreground); }
+.review-selection, .review-annotations { display: grid; gap: 12px; padding: 14px; border: 1px solid var(--border-strong); border-radius: 9px; background: var(--panel); }
+.review-selection strong, .review-annotations h3 { margin: 0; font-size: 13px; }
+.review-selection blockquote, .review-annotations blockquote { margin: 0; padding: 9px 11px; border-left: 3px solid var(--selected-foreground); background: var(--subtle); color: var(--muted); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.review-selection label { display: grid; gap: 6px; font-size: 12px; font-weight: 650; }
+.review-selection textarea { width: 100%; padding: 9px 10px; resize: vertical; }
+.review-selection > div, .review-annotations > header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.review-selection button.secondary, .review-annotations button.secondary { margin: 0; }
+.review-annotations > article { display: grid; gap: 8px; padding-top: 12px; border-top: 1px solid var(--border); }
+.review-annotations > article > div { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.review-annotations > article strong { font-size: 12px; }
+.review-annotations > article small { color: var(--muted); font-size: 10px; }
+.review-annotations > article p { margin: 0; font-size: 12px; white-space: pre-wrap; }
+.review-annotations > article button { justify-self: start; }
+.review-version-conflict { display: grid; gap: 9px; padding: 13px 15px; border: 1px solid var(--danger); border-radius: 9px; background: color-mix(in srgb, var(--danger) 7%, var(--panel)); }
+.review-version-conflict > strong { font-size: 13px; }
+.review-version-conflict p { margin: 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.review-version-conflict > div { display: flex; justify-content: flex-end; gap: 8px; }
+.review-version-conflict button.secondary { margin: 0; }
+
+@media (max-width: 680px) {
+  .review-selection > div, .review-annotations > header, .review-annotations > article > div, .review-version-conflict > div { align-items: stretch; flex-direction: column; }
+  .review-selection button, .review-annotations button { width: 100%; }
+}

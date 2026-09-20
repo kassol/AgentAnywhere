@@ -11,6 +11,7 @@ import {
   writeComposerState,
   type ComposerState,
 } from './Composer'
+import { buildReviewCommand, type ReportAnnotation } from './ReviewAnnotations'
 
 const empty = (): ComposerState => ({ draft: { content: '', revision: 0 } })
 
@@ -58,6 +59,18 @@ describe('reliable composer state', () => {
   test('clears only the unchanged draft accepted by the server', () => {
     const prepared = prepareComposerSubmission(changeComposerDraft(empty(), '已发送'))!
     expect(acceptComposerSubmission(prepared, prepared.pending!)).toEqual({ draft: { content: '', revision: 2 } })
+  })
+
+  test('carries only review annotations still represented in the submitted content', () => {
+    const annotation: ReportAnnotation = {
+      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', taskId: '11111111-1111-4111-8111-111111111111',
+      versionId: '22222222-2222-4222-8222-222222222222', quote: '原文', note: '修改意见',
+      selector: { type: 'text-quote', exact: '原文', prefix: '', suffix: '', start: 0, end: 2 }, createdAt: 1, updatedAt: 2,
+    }
+    const built = buildReviewCommand(annotation.taskId, annotation.versionId, [annotation])
+    const reviewDraft = changeComposerDraft(empty(), built.content, built.review)
+    expect(prepareComposerSubmission(reviewDraft)?.pending?.review?.annotations?.map(item => item.id)).toEqual([annotation.id])
+    expect(prepareComposerSubmission(changeComposerDraft(reviewDraft, '普通消息'))?.pending?.review).toBeUndefined()
   })
 })
 

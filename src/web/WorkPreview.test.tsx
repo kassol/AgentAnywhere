@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { parseTaskPreviewHref, reportScrollKey, resolveReportVersion, type PreviewArtifact } from './WorkPreview'
+import { parseTaskPreviewHref, pinPreviewVersion, reportScrollKey, resolveReportVersion, type PreviewArtifact } from './WorkPreview'
 
 const taskId = '11111111-1111-4111-8111-111111111111'
 const oldVersion = '22222222-2222-4222-8222-222222222222'
@@ -20,6 +20,11 @@ test('an explicit unknown report version never falls back to the latest report',
   expect(resolveReportVersion(reports)).toEqual({ artifact: reports[0] })
   expect(resolveReportVersion(reports, oldVersion)).toEqual({ artifact: reports[1] })
   expect(resolveReportVersion(reports, '44444444-4444-4444-8444-444444444444')).toEqual({ error: '指定报告版本不存在或不属于当前工作。' })
+})
+
+test('the first resolved report is pinned before later refreshes can change the preview target', () => {
+  expect(pinPreviewVersion({ taskId }, reports[0])).toEqual({ taskId, versionId: latestVersion })
+  expect(pinPreviewVersion({ taskId, versionId: oldVersion }, reports[0])).toBeNull()
 })
 
 test('reading position is isolated by task and immutable report version', () => {

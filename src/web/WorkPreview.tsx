@@ -4,9 +4,12 @@
  * e8963854c3679edcceb105a42537a06749e6cb64.
  * Copyright 2026 Craft Docs Ltd. Licensed under Apache-2.0.
  */
-import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 import { ReportMarkdown, selectReportVersion } from './Work'
+import { buildReviewCommand, captureTextSelection, readReportAnnotations, selectorStatus, writeReportAnnotations,
+  type ReportAnnotation, type ReviewContext, type TextQuoteSelector } from './ReviewAnnotations'
 import './work-preview.css'
+import './review-annotations.css'
 
 const uuid = '[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}'
 const taskPath = new RegExp(`^/tasks/(${uuid})$`, 'i')
@@ -26,7 +29,16 @@ type PreviewTask = {
   sourceUrl: string | null
   status: string
   run: { id: string; status: string; failure: string | null }
+  interaction: { id: string; kind: 'question' | 'limit'; question: string; status: string; answer: string | null } | null
   artifacts: PreviewArtifact[]
+}
+
+export type ReviewComposerPayload = { content: string; review: ReviewContext }
+type ReviewComposerBridge = { fill(payload: ReviewComposerPayload): void; register(handler: (payload: ReviewComposerPayload) => void): () => void }
+const ReviewComposerBridgeContext = createContext<ReviewComposerBridge | null>(null)
+
+export function useReviewComposerBridge() {
+  return useContext(ReviewComposerBridgeContext)
 }
 
 const statusLabel: Record<string, string> = {
@@ -51,6 +63,10 @@ export function resolveReportVersion(artifacts: PreviewArtifact[], requested?: s
 
 export function reportScrollKey(taskId: string, versionId: string) {
   return `agentanywhere:report-scroll:${taskId}:${versionId}`
+}
+
+export function pinPreviewVersion(selection: PreviewSelection, artifact: PreviewArtifact | null) {
+  return !selection.versionId && artifact ? { taskId: selection.taskId, versionId: artifact.versionId } : null
 }
 
 function selectionFromLocation(): PreviewSelection | null {
@@ -79,6 +95,14 @@ export function PreviewWorkspace({ children }: { children: ReactNode }) {
   const [selection, setSelection] = useState<PreviewSelection | null>(selectionFromLocation)
   const returnFocus = useRef<HTMLElement | null>(null)
   const openedHere = useRef(false)
+  const reviewHandler = useRef<((payload: ReviewComposerPayload) => void) | null>(null)
+  const reviewBridge = useMemo<ReviewComposerBridge>(() => ({
+    fill(payload) { reviewHandler.current?.(payload) },
+    register(handler) {
+      reviewHandler.current = handler
+      return () => { if (reviewHandler.current === handler) reviewHandler.current = null }
+    },
+  }), [])
 
   useEffect(() => {
     const pop = () => setSelection(selectionFromLocation())
@@ -113,37 +137,66 @@ export function PreviewWorkspace({ children }: { children: ReactNode }) {
     open(next, anchor)
   }
 
-  return <div className={`preview-workspace${selection ? ' has-preview' : ''}`}>
-    <div className="preview-workspace-main" onClickCapture={capture}>{children}</div>
-    {selection && <WorkPreview key={selection.taskId} selection={selection} onSelect={next => open(next)} onClose={close} />}
-  </div>
+  return <ReviewComposerBridgeContext.Provider value={reviewBridge}>
+    <div className={`preview-workspace${selection ? ' has-preview' : ''}`}>
+      <div className="preview-workspace-main" onClickCapture={capture}>{children}</div>
+      {selection && <WorkPreview key={selection.taskId} selection={selection} onSelect={next => open(next)} onClose={close}
+        onFillComposer={payload => reviewBridge.fill(payload)} />}
+    </div>
+  </ReviewComposerBridgeContext.Provider>
 }
 
-function WorkPreview({ selection, onSelect, onClose }: { selection: PreviewSelection; onSelect(selection: PreviewSelection): void; onClose(): void }) {
+function WorkPreview({ selection, onSelect, onClose, onFillComposer }: { selection: PreviewSelection; onSelect(selection: PreviewSelection): void;
+  onClose(): void; onFillComposer(payload: ReviewComposerPayload): void }) {
   const [task, setTask] = useState<PreviewTask | null | undefined>()
   const [taskError, setTaskError] = useState('')
   const [report, setReport] = useState<{ versionId: string; markdown: string } | null>(null)
   const [reportError, setReportError] = useState('')
   const scroll = useRef<HTMLDivElement>(null)
+  const reportRoot = useRef<HTMLElement>(null)
   const closeButton = useRef<HTMLButtonElement>(null)
   const frame = useRef<number>()
+  const [annotations, setAnnotations] = useState<ReportAnnotation[]>([])
+  const [pendingSelection, setPendingSelection] = useState<TextQuoteSelector | null>(null)
+  const [note, setNote] = useState('')
+  const [annotationError, setAnnotationError] = useState('')
 
   useEffect(() => { closeButton.current?.focus() }, [])
   useEffect(() => {
-    const controller = new AbortController()
+    let controller: AbortController | null = null
+    let loading = false
+    let disposed = false
     setTask(undefined)
     setTaskError('')
-    fetch(`/api/tasks/${selection.taskId}`, { signal: controller.signal }).then(async response => {
-      if (response.status === 401) return location.assign('/login')
-      if (!response.ok) throw new Error(response.status === 404 ? '工作不存在或无权访问。' : '工作详情加载失败。')
-      setTask(await response.json())
-    }).catch(error => { if (error.name !== 'AbortError') { setTask(null); setTaskError(error.message) } })
-    return () => controller.abort()
+    async function refresh() {
+      if (loading || disposed) return
+      loading = true
+      controller = new AbortController()
+      try {
+        const response = await fetch(`/api/tasks/${selection.taskId}`, { signal: controller.signal })
+        if (response.status === 401) return location.assign('/login')
+        if (!response.ok) throw new Error(response.status === 404 ? '工作不存在或无权访问。' : '工作详情加载失败。')
+        if (!disposed) { setTask(await response.json()); setTaskError('') }
+      } catch (error) {
+        if (!disposed && error instanceof Error && error.name !== 'AbortError') {
+          setTask(previous => previous === undefined ? null : previous)
+          setTaskError(error.message)
+        }
+      } finally { loading = false }
+    }
+    void refresh()
+    const timer = setInterval(refresh, 1000)
+    return () => { disposed = true; clearInterval(timer); controller?.abort() }
   }, [selection.taskId])
 
   const resolved = task ? resolveReportVersion(task.artifacts, selection.versionId) : { artifact: null }
   const artifact = 'artifact' in resolved ? resolved.artifact : null
   const versionError = 'error' in resolved ? resolved.error : ''
+
+  useEffect(() => {
+    const pinned = pinPreviewVersion(selection, artifact)
+    if (pinned) onSelect(pinned)
+  }, [selection.taskId, selection.versionId, artifact?.versionId])
 
   useEffect(() => {
     setReport(null)
@@ -181,13 +234,72 @@ function WorkPreview({ selection, onSelect, onClose }: { selection: PreviewSelec
     })
   }
 
+  useEffect(() => {
+    setPendingSelection(null)
+    setNote('')
+    setAnnotationError('')
+    if (!artifact) { setAnnotations([]); return }
+    setAnnotations(readReportAnnotations(selection.taskId, artifact.versionId))
+    const accepted = (event: Event) => {
+      const detail = (event as CustomEvent<{ taskId?: string; versionId?: string; annotations?: { id: string; updatedAt: number }[] }>).detail
+      if (detail?.taskId === selection.taskId && detail.versionId === artifact.versionId && Array.isArray(detail.annotations)) {
+        const acceptedVersions = new Map(detail.annotations.map(annotation => [annotation.id, annotation.updatedAt]))
+        setAnnotations(current => current.filter(annotation => acceptedVersions.get(annotation.id) !== annotation.updatedAt))
+      }
+    }
+    addEventListener('agentanywhere:report-annotations-accepted', accepted)
+    return () => removeEventListener('agentanywhere:report-annotations-accepted', accepted)
+  }, [selection.taskId, artifact?.versionId])
+
+  function selectReportText() {
+    const selector = reportRoot.current ? captureTextSelection(reportRoot.current) : null
+    if (!selector) return
+    if (selector.exact.length > 4000) {
+      setAnnotationError('单条引用最多 4000 个字符，请缩小选区。')
+      return
+    }
+    setPendingSelection(selector)
+    setNote('')
+    setAnnotationError('')
+  }
+
+  function addAnnotation(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!artifact || !pendingSelection || !note.trim()) return
+    const now = Date.now()
+    const next = [...annotations, { id: crypto.randomUUID(), taskId: selection.taskId, versionId: artifact.versionId,
+      quote: pendingSelection.exact, note: note.trim(), selector: pendingSelection, createdAt: now, updatedAt: now }]
+    setAnnotations(next)
+    writeReportAnnotations(selection.taskId, artifact.versionId, next)
+    setPendingSelection(null)
+    setNote('')
+    getSelection()?.removeAllRanges()
+  }
+
+  function removeAnnotation(annotationId: string) {
+    if (!artifact) return
+    const next = annotations.filter(annotation => annotation.id !== annotationId)
+    setAnnotations(next)
+    writeReportAnnotations(selection.taskId, artifact.versionId, next)
+  }
+
+  function summarizeAnnotations() {
+    if (!artifact || !annotations.length) return
+    try {
+      const built = buildReviewCommand(selection.taskId, artifact.versionId, annotations)
+      if (built.content.length > 16000) throw new Error('汇总内容超过消息长度上限，请减少单次提交的批注。')
+      onFillComposer(built)
+      setAnnotationError('')
+    } catch (error) { setAnnotationError(error instanceof Error ? error.message : '批注汇总失败。') }
+  }
+
   const reports = task?.artifacts.filter(item => item.kind === 'report') ?? []
   const attachments = task?.artifacts.filter(item => item.kind === 'attachment' && item.runId === artifact?.runId) ?? []
   const independentVersion = selection.versionId ?? artifact?.versionId
   return <aside className="work-preview" aria-labelledby="work-preview-title">
     <header className="work-preview-header">
       <button ref={closeButton} type="button" className="work-preview-back" onClick={onClose}>← 返回对话</button>
-      <div><span>工作预览</span><h2 id="work-preview-title">{task?.goal ?? '正在读取工作…'}</h2></div>
+      <div><span>工作预览</span><h2 id="work-preview-title">{task ? task.goal || task.sourceUrl || `工作 ${task.id.slice(0, 8)}` : '正在读取工作…'}</h2></div>
       <button type="button" className="work-preview-close" aria-label="关闭预览" onClick={onClose}>×</button>
     </header>
     <div ref={scroll} className="work-preview-scroll" onScroll={rememberScroll}>
@@ -198,6 +310,9 @@ function WorkPreview({ selection, onSelect, onClose }: { selection: PreviewSelec
           <span className="work-preview-status">{statusLabel[task.status] ?? task.status}</span>
           <a href={`/tasks/${task.id}${independentVersion ? `?version=${encodeURIComponent(independentVersion)}` : ''}`}>独立打开工作</a>
           {task.run.failure && <p className="error">{task.run.failure}</p>}
+          {task.interaction?.status === 'pending' && <p className="work-preview-interaction" role="status">
+            {task.interaction.kind === 'limit' ? '等待额度决定' : '等待回答'}：{task.interaction.question} <a href={`/tasks/${task.id}`}>前往处理</a>
+          </p>}
         </section>
         {!!reports.length && <nav className="work-preview-versions" aria-label="报告版本">
           {reports.map((item, index) => <button key={item.versionId} type="button" aria-pressed={artifact?.versionId === item.versionId}
@@ -214,9 +329,30 @@ function WorkPreview({ selection, onSelect, onClose }: { selection: PreviewSelec
           </div>
           {reportError && <p className="error" role="alert">{reportError}</p>}
           {!reportError && report?.versionId !== artifact.versionId && <p className="muted" role="status">正在加载报告…</p>}
-          {report?.versionId === artifact.versionId && <article className="work-preview-report" data-task-id={task.id} data-report-version={artifact.versionId}>
-            <ReportMarkdown markdown={report.markdown} />
-          </article>}
+          {report?.versionId === artifact.versionId && <>
+            <p className="review-hint">选中报告文字后写批注。批注仅保存在当前浏览器，并固定到此报告版本。</p>
+            <article ref={reportRoot} className="work-preview-report" data-task-id={task.id} data-report-version={artifact.versionId}
+              onMouseUp={selectReportText}>
+              <ReportMarkdown markdown={report.markdown} />
+            </article>
+            {pendingSelection && <form className="review-selection" onSubmit={addAnnotation}>
+              <strong>为所选文字添加批注</strong>
+              <blockquote>{pendingSelection.exact}</blockquote>
+              <label>意见<textarea autoFocus rows={3} maxLength={2000} required value={note} onChange={event => setNote(event.target.value)} /></label>
+              <div><button type="submit" disabled={!note.trim()}>保存批注</button>
+                <button type="button" className="secondary" onClick={() => { setPendingSelection(null); setNote('') }}>取消</button></div>
+            </form>}
+            {!!annotations.length && <section className="review-annotations" aria-label="未发送批注">
+              <header><h3>未发送批注（{annotations.length}）</h3><button type="button" onClick={summarizeAnnotations}>汇总到聊天框</button></header>
+              {annotations.map((annotation, index) => <article key={annotation.id}>
+                <div><strong>批注 {index + 1}</strong><small>{selectorStatus(reportRoot.current?.textContent ?? '', annotation.selector) === 'exact'
+                  ? '原文位置已确认' : '原文位置无法确认，保留引用'}</small></div>
+                <blockquote>{annotation.quote}</blockquote><p>{annotation.note}</p>
+                <button type="button" className="secondary" onClick={() => removeAnnotation(annotation.id)}>删除</button>
+              </article>)}
+            </section>}
+            {annotationError && <p className="error" role="alert">{annotationError}</p>}
+          </>}
           {!!attachments.length && <section className="work-preview-attachments"><h3>该版本附件</h3><ul>{attachments.map(item => <li key={item.versionId}>
             <a href={`/api/artifacts/${item.versionId}/download`}>{item.name}</a>
           </li>)}</ul></section>}
