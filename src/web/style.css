@@ -185,7 +185,8 @@ input:not([data-slot="input"]), select, textarea:not([data-slot="textarea"]) { b
   .content.content-report > .mobile-header { margin: 0; }
   .content-report .report-page { height: calc(100% - 44px); }
   .content-report { padding: 0; }
-  .content-settings > .mobile-header { margin: 0; }
+  .content.content-settings { padding: 0; }
+  .content.content-settings > .mobile-header { margin: 0; }
   .page-header.settings-page-header { min-height: 66px; margin: 0; padding: 11px 16px; }
   .page-header.settings-page-header h1 { font-size: 18px; }
   .settings-page-content { width: calc(100% - 28px) !important; padding: 18px 0 72px; }
