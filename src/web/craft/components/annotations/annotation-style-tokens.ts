@@ -62,4 +62,3 @@ export function getAnnotationChipVisual(chip: { pendingFollowUp?: boolean; sentF
     },
   }
 }
-

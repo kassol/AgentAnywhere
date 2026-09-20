@@ -22,4 +22,3 @@ export function resolveIslandOutsideDismissAction({
 
   return isCompactView ? 'close' : 'back'
 }
-

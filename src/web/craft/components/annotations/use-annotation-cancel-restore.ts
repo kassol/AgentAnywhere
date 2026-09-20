@@ -22,4 +22,3 @@ export function useAnnotationCancelRestore<T extends HTMLElement>({
     scheduleDomSelectionRestore(contentRootRef as { current: HTMLElement | null }, pendingSelection)
   }, [cancelFollowUp, contentRootRef])
 }
-

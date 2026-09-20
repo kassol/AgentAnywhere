@@ -140,4 +140,3 @@ export const annotationInteractionActions = {
   deleteSuccess: (): AnnotationInteractionAction => ({ type: 'DELETE_SUCCESS' }),
   closeAll: (): AnnotationInteractionAction => ({ type: 'CLOSE_ALL' }),
 }
-

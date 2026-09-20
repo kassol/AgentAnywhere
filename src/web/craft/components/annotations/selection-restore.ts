@@ -54,4 +54,3 @@ export function scheduleDomSelectionRestore(
     restoreDomSelection(root, selection)
   })
 }
-

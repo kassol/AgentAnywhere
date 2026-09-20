@@ -11,5 +11,6 @@ WORKDIR /app
 COPY --from=build /app/src ./src
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/node_modules ./node_modules
+COPY licenses ./licenses
 USER bun
 CMD ["bun", "src/server.ts"]

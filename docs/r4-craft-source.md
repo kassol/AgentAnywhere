@@ -35,44 +35,33 @@ git -C /tmp/agentanywhere-r4/craft-upstream status --short
 
 A 的侧栏、对话和按需预览整体结构继续保留；局部控件和交互采用 Craft。Inter 自托管字体继续保留，中文走现有系统回退。React 版本相容：两边均为 React 18.3.1（本项目 `package.json:15-16`；上游 `apps/electron/package.json:65-68`）。
 
-## 核心链路接口
+## 实际迁入索引
 
-| 链路 | Craft 原源码与接口 | 本地入口 | 迁移方式 | #44 最小依赖与待验证项 |
-| --- | --- | --- | --- | --- |
-| 输入 | `apps/electron/src/renderer/components/app-shell/input/FreeFormInput.tsx:130-249` 定义受控值、提交、停止及状态；`:1248-1291` 形成提交快照；`:1314-1417` 处理 IME、Enter、Shift+Enter 与停止 | `src/web/Composer.tsx:23-95` 保存按 Thread 隔离的草稿和提交身份，`:97-130` 渲染输入 | **原源码适配**。保留 FreeFormInput 的表单容器、受控输入、发送/停止分支和键盘处理；移除附件、模型选择、连接、权限、slash/mention/label、工作目录等未开放功能。上游 `:1277-1283` 在调用 `onSubmit` 后立即清空输入；这里必须改为沿用本地提交快照，服务端接受后才精确清理，拒绝或未知结果保留草稿，旧响应不得清除后来输入 | `Tailwind v4`、`lucide-react`、`motion`、公共 Button/cn。#44 验证 React 18 构建、中文 IME、失败保留、并发编辑和停止回调；中文文本作为明确适配，不引入整套 i18n |
-| 消息与工具 | `packages/ui/src/components/chat/TurnCard.tsx:238-277` 定义 `ActivityItem` / `ResponseContent`，`:292-359` 定义主要回调，`:791-1386` 为状态图标、活动行和分组，`:1653-2679` 为回复卡，`:2766-2850` 为轮次展开状态 | `src/web/ActivityFeed.tsx:3-65` 从持久事件生成真实活动，`:101-130` 展示工具；`src/web/Steward.tsx:70`、`src/web/Work.tsx:50` 读取真实轮次 | **原源码适配**。迁入 TurnCard 的轮次、活动行、回复卡和展开结构；增加单一 DTO 适配层，将 `turnId`、事件状态、参数和结果映射为上游展示类型。删除 plan 接受、branch、文件 diff、父任务工具和 Craft annotation 分支 | 同上。保留现有 `react-markdown` 安全边界。#44 验证 running/completed/error、工具详情、真实结果、所属轮次和流式更新；不引入 `@pierre/diffs`、Craft Core 或 Shared runtime |
-| 打开报告 | `packages/ui/src/components/overlay/DocumentFormattedMarkdownOverlay.tsx:22-59` 定义内容与回调，`:61-138` 渲染文档卡；`packages/ui/src/components/ui/PreviewHeader.tsx:102-168` 定义预览头 | `src/web/WorkPreview.tsx:159-228` 固定 Task/Version 并读取真实报告；`src/web/Work.tsx:39-48` 负责安全 Markdown | **原源码适配**。保留 DocumentFormattedMarkdownOverlay 的组件、文档卡和 PreviewHeader；把 FullscreenOverlayBase 外壳改接 A 的右侧预览容器，把 `messageId` 映射为不可变 Version UUID。#44 只接只读报告；批注原组件留给 #48 | 公共依赖加现有 `react-markdown` / `remark-gfm`。#44 验证真实报告、版本固定、关闭/返回、历史链接和下载不受影响 |
+| 范围 | 实际迁入记录 |
+| --- | --- |
+| 输入、消息、工具与只读报告 | R4-02；`Button`、`RichTextInput`、`FreeFormInput`、`TurnCard`、`UserMessageBubble`、`PreviewHeader`、`DocumentFormattedMarkdownOverlay` 已接入真实链路 |
+| 外壳、导航、主题与空态 | R4-03；`Panel`、`SidebarButton`、`Empty` 与固定上游主题 token 已覆盖 A 外壳 |
+| 完整输入、活动、快捷动作与阅读位置 | R4-04；`LoadingIndicator`、`ActionBar` 及完整输入/活动适配已接入 |
+| 工作与待办 | R4-05；`EntityRow`、`StatusBadge`、`PermissionRequest`、`Textarea` 已组合现有 Task/Run/Interaction |
+| 报告批注 | R4-06；`AnnotatableMarkdownDocument`、`AnnotationIslandMenu`、`Island` 与 annotations 辅助源码已接入不可变 Version 和本机草稿 |
+| 设置、登录与账户 | R4-07；`Input`、`Label`、`Badge`、`Select`、`Switch`、`Settings*` 已组合现有单连接与模型池 |
 
-核心链路不需要重写例外。`FreeFormInput.tsx` 共 2537 行、`TurnCard.tsx` 共 3284 行，且分别绑定多项 Craft 产品能力；整文件原样搬入会带入未开放功能。按上述行段保留实际组件结构、状态和交互，再删除不使用分支，符合原源码适配。#44 必须用 diff 审查确认迁入代码实际参与渲染，不能只提取样式。
-
-## 全部页面迁移清单
-
-| 范围 | Craft 原组件与源码证据 | 当前本地模块 | 分类与适配方式 | 最小依赖 / 风险 |
-| --- | --- | --- | --- | --- |
-| 应用外壳 | `apps/electron/src/renderer/components/app-shell/Panel.tsx:24-67` 是无业务状态的面板容器；完整 `PanelSlot.tsx:16-46` 依赖 Jotai、路由和 AppShellContext | `src/web/main.tsx:96-174`、`src/web/style.css` | Panel 为**原源码适配**；侧栏、导航和按需预览为**业务专用组合**，保留 A 整体。不得迁入 PanelSlot 的桌面状态 | Tailwind、cn。小屏导航和路由恢复在 #45 验证 |
-| 公共控件 | `apps/electron/src/renderer/components/ui/button.tsx:1-57`；`input.tsx:1-22`；`textarea.tsx:1-18`；`badge.tsx:1-39`；`empty.tsx:1-104`；`packages/ui/src/components/ui/LoadingIndicator.tsx:18-141` | 原生 button/input、`src/web/EmptyStateCard.tsx:3-10` 与各页加载态 | 全部为**原源码适配**；保留 props、variant 和 data-slot，中文 aria 文本显式传入 | Tailwind、cn、CVA、Radix Slot；Spinner 去掉 `useTranslation` 后接中文 aria-label |
-| 管家输入 | FreeFormInput 见核心链路 | `src/web/Composer.tsx`、`src/web/Steward.tsx` | **原源码适配**，现有草稿、请求身份、批注上下文仍由本地业务层管理 | #44 先跑通，#46 补全草稿、快捷填充、停止和长对话状态 |
-| 管家消息与工具 | TurnCard、`packages/ui/src/components/chat/UserMessageBubble.tsx:305-519`、`turn-utils.ts:331-676` | `src/web/ActivityFeed.tsx`、`src/web/Steward.tsx`、`src/web/StewardReceipts.tsx` | TurnCard/UserMessageBubble 为**原源码适配**；按真实 `turnId` 分组和稳定回执为**业务专用组合** | #44 验证基本链路；#46 验证历史阅读保持、流式更新和回执归属。现有 StableScroll 行为继续作为业务层 |
-| 工作列表与详情 | `apps/electron/src/renderer/components/ui/entity-row.tsx:46-148` 提供领域无关列表行插槽；`app-shell/kanban/StatusBadge.tsx:4-48` 提供状态徽标；完整 `TaskTile.tsx:46-539` 绑定 Craft Kanban、模型、子任务和 Jotai | `src/web/Work.tsx:50-336` | EntityRow、StatusBadge、Panel 为**原源码适配**；Task/Run/Artifact 数据、列表分组和详情为**业务专用组合**。不迁入 TaskTile 业务状态机 | #47 验证空态、长标题、状态、详情、回答/追加/取消/重试和报告链接 |
-| 待办 | `input/StructuredInput.tsx:7-50` 只路由 permission/credential/admin approval；`structured/PermissionRequest.tsx:8-109` 提供带说明和主次动作的卡片结构 | `src/web/main.tsx:101-145` 汇总 pending Interaction；工作详情执行回答和额度决定 | PermissionRequest 的卡片与动作区为**原源码适配**；Interaction 去重、问题/额度语义和精确身份为**业务专用组合**。Craft 无 Interaction 页面直接对应物 | Button、Panel、Badge。#47 验证跨入口同一 Interaction、已回答消失和精确目标 |
-| 报告预览与批注 | `DocumentFormattedMarkdownOverlay.tsx:22-138`；`AnnotatableMarkdownDocument.tsx:47-83` 定义内容/身份/增删改接口，`:145-227` 计算持久批注覆盖层；`annotations/annotation-core.ts:3-111` 创建 position+quote selector，`:113-223` 计算 DOM 偏移 | `src/web/WorkPreview.tsx`、`src/web/ReviewAnnotations.ts` | 预览与批注组件为**原源码适配**；Task/Version 身份、localStorage 草稿、改稿命令和成功清理为**业务专用组合**。用本地 Annotation 适配类型替代 Craft Core 类型 | #44 只读链路；#48 迁入 AnnotationIsland 相关源码并验证选区、失效引用、刷新恢复、新版确认和精确清理。风险为 Markdown DOM 偏移与当前安全 renderer 的一致性 |
-| 快捷操作与回执 | `apps/electron/src/renderer/components/chat/AuthRequestCard.tsx:77-140` 提供紧凑主次动作区；`components/ui/button.tsx:6-57` | `src/web/QuickActions.tsx:3-73`、`src/web/StewardReceipts.tsx:21-78` | 动作条和 Button 为**原源码适配**；完整授权命令生成、填入后发送、目标身份为**业务专用组合**。不迁入 credential 业务 | #46/#47/#48 分别验证各入口；覆盖草稿确认继续保留现有 Composer 契约 |
-| 模型设置 | `components/settings/SettingsSection.tsx:14-117`、`SettingsCard.tsx:11-86`、`SettingsRow.tsx:12-104`；完整 `pages/settings/AiSettingsPage.tsx:12-57` 绑定多连接、工作区、OAuth、Jotai 和 Onboarding | `src/web/ModelSettings.tsx:28-199`、`main.tsx:26-49` | 三个 Settings 原组件与 Button/Input/Badge 为**原源码适配**；单连接、调研池、协议与能力配置为**业务专用组合**。不迁入 AiSettingsPage 业务状态机 | #49 验证未保存状态、折叠不丢字段、凭证不回显、刷新保留选择和主题设置 |
-| 主题与字体 | `apps/electron/src/renderer/index.css:143-180` 定义色阶与 Shadcn 兼容变量，`:196-205` 定义字体/布局，`:250-311` 定义深色，`:386-393` 定义 Inter，`:395-460` 映射 Tailwind v4 | `src/web/craft-theme.css:1-46`、`fonts.css:1-9`、`theme.ts:1-32` | 上游 token 与 Tailwind 映射为**原源码适配**；保留本地 `data-theme` 三态和自托管 Inter。A 的总体表面关系继续存在，局部组件类以 Craft 为准 | #45 验证明暗/系统、小屏、焦点和字体实际加载；不加载 Google Fonts |
+各节记录固定上游路径、保留源码、实际适配和运行入口。最终全部页面、旧数据、草稿兼容、正式环境及清理验收归 #50。
 
 ## 依赖方案
 
-先引入所有迁移组件共同需要的最小底座，版本沿用固定上游根依赖：
+迁入组件使用以下最小底座，版本与固定上游一致：
 
 | 依赖 | 固定上游证据 | 用途 |
 | --- | --- | --- |
 | `tailwindcss ^4.1.18`、`@tailwindcss/vite ^4.1.18` | 上游根 `package.json:114,140`；WebUI Vite 插件见 `apps/webui/vite.config.ts:1-17` | 执行原组件 class 和主题 token |
 | `clsx ^2.1.1`、`tailwind-merge ^3.4.0` | 根 `package.json:181,203`；`packages/ui/src/lib/utils.ts:5-12` | 原 `cn` 实现 |
 | `class-variance-authority ^0.7.1`、`@radix-ui/react-slot ^1.2.4` | 根 `package.json:160,180`；Button import 见 `button.tsx:1-4` | Button/Badge variants 与 `asChild` |
+| `@radix-ui/react-label 2.1.8`、`@radix-ui/react-select 2.2.6`、`@radix-ui/react-switch 1.2.6` | `apps/electron/package.json:50,52,54` | 设置标签、选择器与模型池开关原组件 |
 | `lucide-react ^0.561.0` | 根 `package.json:188` | 原组件图标 |
 | `motion ^12.23.26` | `apps/electron/package.json:62` | 输入、TurnCard 和批注的原动画/展开状态 |
 
-`i18next` / `react-i18next` 不列入初始最小依赖。AgentAnywhere 当前只有中文界面，迁入组件将 `t(...)` 替换为明确中文文本，避免复制上游完整词典和初始化。若 #44 证明这会造成大范围源码改动，再将两项依赖作为运行验证结论补入。
+`i18next` / `react-i18next` 未引入。AgentAnywhere 当前只有中文界面，迁入组件以明确中文 props 或默认文本替代 `t(...)`，避免复制上游完整词典和初始化。
 
 不引入完整 `@craft-agent/ui`，其包清单同时依赖 Craft Core/Shared、多种 Markdown、PDF、diff、shader、Jotai、Radix 和国际化（`packages/ui/package.json:21-58`）。按组件复制可保留原源码，同时避免无关产品功能。`@craft-agent/core` 的 `AnnotationV1`、消息和工具类型只在本地适配层复刻最小展示形状；服务端事实仍以 AgentAnywhere DTO 为准。
 
@@ -90,27 +79,25 @@ A 的侧栏、对话和按需预览整体结构继续保留；局部控件和交
 
 接入点：`Composer.tsx:94-125` 把现有草稿状态传给 FreeFormInput；`ActivityFeed.tsx:112-131` 把持久工具事件映射给 ActivityRow；`Steward.tsx:276-311` 按真实 `turnId` 组合 UserMessageBubble、ActivityItem、TurnCard 和安全 `ReportMarkdown`，`:334-341` 使用原 Button 停止对应真实轮次。Tailwind v4 插件位于 `vite.config.ts:1-8`，局部 theme/utilities 映射位于 `src/web/craft/styles.css:1-35`；未启用 preflight，A 外壳继续使用原 CSS。
 
-实际安装版本与固定上游一致：`@tailwindcss/vite 4.1.18`、`tailwindcss 4.1.18`、`clsx 2.1.1`、`tailwind-merge 3.4.0`、`class-variance-authority 0.7.1`、`@radix-ui/react-slot 1.2.4`、`lucide-react 0.561.0`、`motion 12.23.26`。未引入 Electron、Craft Core/Shared、i18next、diff 或批注运行时。
-
-## 后续任务清单
-
-| 任务 | 可直接使用的 Craft 组件 | 本地适配层 | 进入任务前仍需验证 |
-| --- | --- | --- | --- |
-| #44 核心链路 | Panel、Button、Spinner、FreeFormInput 裁剪版、TurnCard/ActivityRow/ResponseCard 裁剪版、DocumentFormattedMarkdownOverlay 只读版、PreviewHeader | Composer 状态、ActivityEvent → ActivityItem、Artifact Version → 文档 props | Tailwind 构建、React 18、实际 API 数据、流式更新、中文 IME、真实报告 |
-| #45 外壳与主题 | Panel、Button、Badge、原 token/Tailwind 映射、Lucide 图标 | A 路由与侧栏、`data-theme`、Inter | 主题首屏、系统切换、小屏导航、焦点、字体加载 |
-| #46 管家输入与活动 | FreeFormInput、TurnCard、UserMessageBubble、LoadingIndicator | Thread 草稿/请求身份、turn 分组、StableScroll、回执 | 停止与发送区分、失败保留、旧响应保护、历史阅读位置 |
-| #47 工作与待办 | EntityRow、StatusBadge、PermissionRequest 卡片结构、Button、Badge、Empty、Panel | Task/Run/Interaction DTO 与操作回调 | 全状态、长内容、跨入口 Interaction、精确控制目标 |
-| #48 报告审阅 | DocumentFormattedMarkdownOverlay、PreviewHeader、AnnotatableMarkdownDocument、AnnotationIslandMenu 及 annotations 辅助源码 | Version 身份、localStorage 草稿、改稿命令、成功清理 | Markdown DOM 偏移、键盘选区、失效引用、新版冲突、恢复后清理 |
-| #49 设置 | SettingsSection、SettingsCard、SettingsRow、Button、Input、Badge | 单连接、模型池、协议、能力与主题状态 | 折叠字段保留、刷新并发、凭证不回显、未保存提示 |
-| #50 验收发布 | 上述全部 | 旧链接、旧数据、草稿兼容与清理 | 源码参与渲染、旧实现清理、全页面 ego-browser、正式环境与回滚 |
-
-#43 核查没有核心未决问题；#44 已完成构建和核心运行兼容性验证。局部失败只阻塞对应组件，若失败要求放弃已有上游组件，才升级为产品所有者决定的重写例外。
+实际安装版本与固定上游一致。未引入 Electron、Craft Core/Shared、i18next 或 diff；R4-06 将必要批注运行时按文件复制到本地，未引入 Craft 运行时包。
 
 ## R4-02 报告与下游接口确认
 
-`src/web/craft/components/PreviewHeader.tsx` 保留上游预览头的三栏结构与 Badge，移除 Electron 窗口占位，以 `leftActions/rightActions/onClose` 接浏览器返回、下载及关闭；`DocumentFormattedMarkdownOverlay.tsx` 保留文档卡 JSX，以 `renderMarkdown` 接安全渲染，`beforeContent/afterContent` 接现有版本批注，`documentRef/onDocumentMouseUp` 保留选区入口。`WorkPreview.tsx` 仍拥有 Task/Version 加载、锁定、下载和本机批注状态。
+`src/web/craft/components/PreviewHeader.tsx` 保留上游预览头的三栏结构与 Badge，移除 Electron 窗口占位，以 `leftActions/rightActions/onClose` 接浏览器返回、下载及关闭；`DocumentFormattedMarkdownOverlay.tsx` 保留文档卡 JSX，以 `renderMarkdown` 接安全渲染，`beforeContent/afterContent` 接现有版本批注。#48 已由 `AnnotatableMarkdownDocument` 直接拥有选区入口。`WorkPreview.tsx` 仍拥有 Task/Version 加载、锁定、下载和本机批注状态。
 
-#44 已实测 React 18、Tailwind、真实 ActivityItem DTO 和版本报告 props；上述公共接口可供下游使用。#45 接 Panel/SidebarButton 与主题，#46 完整验收输入和活动，#47 组合 Task/Interaction，#48 替换批注插槽，#49 组合设置行。各票表中高风险交互由对应票继续验收；没有新增范围决定或重写例外。核心浏览器完成工具详情、报告打开/下载/Esc 返回，所有页面最终验收仍由 #50 执行。
+#44 已实测 React 18、Tailwind、真实 ActivityItem DTO 和版本报告 props；#45—#49 已分别接入外壳与主题、完整输入与活动、Task/Interaction、报告批注和设置组件。核心浏览器已完成工具详情、报告打开/下载/Esc 返回；全部页面与正式环境最终验收归 #50。
+
+## R4-06 实际迁入：报告批注
+
+固定来源：Craft Agents OSS `v0.13.3` / `e8963854c3679edcceb105a42537a06749e6cb64`，Apache-2.0。
+
+| 本地源码 | 固定上游路径 | 保留内容 | 必要适配与裁剪 |
+| --- | --- | --- | --- |
+| `src/web/craft/components/AnnotatableMarkdownDocument.tsx` | `packages/ui/src/components/overlay/AnnotatableMarkdownDocument.tsx` | selection/controller、DOM offset、position+quote selector、覆盖层几何、chip、Island 状态和恢复 | Markdown 改为调用本地安全 renderer；增删改接布尔回执；写批注前先将稳定 UUID 存入 Version 草稿，存储失败时不写批注，重试按同一 UUID upsert；恢复时从精确 DOM Range 取锚点；删除依赖 Craft block 标记的 shift-click |
+| `src/web/craft/components/annotations/AnnotationIslandMenu.tsx`、`Island.tsx`、`IslandFollowUpContentView.tsx` | 同名 `packages/ui/src/components/annotations` 与 `packages/ui/src/components/ui` 文件 | 原 Island motion、视图切换、编辑/查看/删除和 textarea 高度计算 | 中文替代 i18n；裁掉产品未提供的“保存并发送”下拉；补 IME Escape 保护和视口纵向约束；A 右侧预览使用 body portal，使 Island 与原 blocker 处于同一层叠上下文 |
+| `src/web/craft/components/annotations/*.ts(x)` | `packages/ui/src/components/annotations/*`、`packages/ui/src/components/markdown/annotation-resolver.ts` | controller、reducer、selection restore、overlay geometry、interaction/dismiss policy | `AnnotationV1` 采用固定上游结构的本地类型；Tooltip 改为原生 title；resolver 要求 position 与 quote 同时一致，重复 quote 无唯一上下文时不定位 |
+
+`src/web/ReviewAnnotations.ts` 是业务适配边界，继续拥有 Task/Version、本地存储和 reviewBridge 身份。`WorkPreview.tsx` 只把原文已确认的批注交给覆盖层，失效引用仍保留在列表与改稿命令中。完整自动与浏览器验证见 `docs/evidence/r4-06.md`。
 
 ## R4-04 实际迁入：完整输入与活动
 
@@ -126,7 +113,7 @@ A 的侧栏、对话和按需预览整体结构继续保留；局部控件和交
 
 `src/web/ActivityFeed.tsx:133-190` 的 StableScroll 和 `src/web/Composer.tsx:17-125` 的草稿/请求身份是 AgentAnywhere 业务契约，Craft 没有可直接替换的浏览器实现，本轮保留。`src/web/StewardReceipts.tsx` 的 Task、Run、Interaction、Operation 投影同样保留，只把可执行快捷动作接入 ActionBar/Button。没有新增依赖。
 
-已删除被上述组件替代的 `src/web/quick-actions.css`，并从 `src/web/composer.css` 删除 textarea、旧发送按钮和旧控制行规则。全局 `src/web/style.css` 由 R4-03 独占；其中已失去调用方的 `.tool-activity*` 留给该票合并时删除，`.return-latest` 仍服务 StableScroll。
+已删除被上述组件替代的 `src/web/quick-actions.css`，并从 `src/web/composer.css` 删除 textarea、旧发送按钮和旧控制行规则；`src/web/style.css` 的孤儿 `.tool-activity*` 已删除。StableScroll 继续保留本地阅读位置逻辑，其“回到最新内容”入口已改用迁入的 Button。
 
 ## R4-03 实际迁入：外壳与主题
 
@@ -200,3 +187,37 @@ className={cn(
 ```
 
 本地保留六色与 Shadcn 派生 token；继续用 `data-theme` 表达浅色、深色和跟随系统，使用自托管 Inter，并在字体栈中保留中文系统回退。
+
+
+## R4-05 实际迁入：工作与待办组件
+
+固定来源：Craft Agents OSS `v0.13.3` / `e8963854c3679edcceb105a42537a06749e6cb64`，Apache-2.0。许可与归属见 `licenses/CRAFT-APACHE-2.0.txt` 和 `licenses/CRAFT-NOTICE.txt`。
+
+| 本地源码 | 固定上游源码 | 保留内容 | 必要适配与裁剪 |
+| --- | --- | --- | --- |
+| `src/web/craft/components/EntityRow.tsx` | `apps/electron/src/renderer/components/ui/entity-row.tsx:46-148,266-421` | icon、title、subtitle、badges、trailing、children、选中条和主表面 JSX | 主表面在有 `href` 时输出浏览器链接，保留新标签页和复制链接；裁掉 Craft dropdown/context menu、长按和多选状态依赖。children 仍位于主表面外，成果链接与快捷按钮不会嵌套进链接 |
+| `src/web/craft/components/StatusBadge.tsx` | `apps/electron/src/renderer/components/app-shell/kanban/StatusBadge.tsx:4-48` | 圆点、淡色药丸、label、live ping 与原 class/style 结构 | `SessionStatus.resolvedColor` 改为调用方传入 `{label,color}`；`WorkStatus.tsx` 把真实 Run/Interaction 状态映射到中文，工作 `running` 显示“执行中” |
+| `src/web/craft/components/PermissionRequest.tsx` | `apps/electron/src/renderer/components/app-shell/input/structured/PermissionRequest.tsx:8-109` | info 背景、边框/阴影、ShieldAlert 标题、滚动正文和固定动作区 | Craft permission DTO、i18n 和 Allow/Always Allow/Deny 回调改为 Task/Run/Interaction 身份、问题/额度文案及既有回答回调；动作区复用已迁入 ActionBar/Button |
+| `src/web/craft/components/Textarea.tsx` | `apps/electron/src/renderer/components/ui/textarea.tsx:1-18` | `data-slot`、边框/焦点/无效/禁用状态、field sizing 和全部 JSX | 把 `cn` 改为相对 import；为 React 18 显式 `forwardRef`，供键盘选区读取原生选择范围；全局 CSS 排除 `[data-slot="textarea"]`，避免旧表单规则覆盖原组件 |
+| `src/web/EmptyStateCard.tsx` | `apps/electron/src/renderer/components/ui/empty.tsx:5-104` | 使用已迁入的 Empty/EmptyHeader/EmptyMedia/EmptyTitle/EmptyDescription 组合 | 保留本地中文 title/description 接口并增加可替换 icon；删除旧近似空态 DOM |
+
+`Work.tsx` 使用上述组件和 R4-03/R4-07 已迁入的 Button、Empty、Input、Label、Select、LoadingIndicator、UserMessageBubble。Task/Run/Interaction/Artifact DTO、API 路径、幂等 requestId/commandId 和生命周期继续由 AgentAnywhere 业务层管理。`Steward.tsx`、`StewardReceipts.tsx` 与 `main.tsx` 只把持久工作投影组合进 EntityRow；精确命令生成仍在 `QuickActions.tsx`，点击只填草稿。
+
+完整 Craft `TaskTile.tsx` 依赖 Kanban/Jotai/子任务/模型状态机，其前提与本产品持久 Task/Run 不同，因此没有迁入。这里是业务边界适配，不是重写原 EntityRow、StatusBadge 或 PermissionRequest。
+
+
+## R4-07 实际迁入：模型设置、登录与账户
+
+以下源码固定来自 Craft Agents OSS `v0.13.3`、commit `e8963854c3679edcceb105a42537a06749e6cb64`。所有本地文件保留原路径、版权和 Apache-2.0 说明。
+
+| 本地组件 | 固定上游源码 | 实际适配 |
+| --- | --- | --- |
+| `src/web/craft/components/Input.tsx:1-21`、`Label.tsx:1-19`、`Badge.tsx:1-28`、`Switch.tsx` | `apps/electron/src/renderer/components/ui/input.tsx:1-22`、`label.tsx:1-22`、`badge.tsx:1-39`、`switch.tsx:1-31` | 保留 JSX、`data-slot`、forwardRef 和变体；仅改相对 import，Badge 的 destructive 文本接现有主题。 |
+| `src/web/craft/components/Select.tsx:1-56` | `apps/electron/src/renderer/components/ui/select.tsx:1-167` | 保留 Radix Root/Trigger/Portal/Viewport/Item 与滚动按钮；将上游全局 `popover-styled`、`z-dropdown` 改为组件内等价主题类。 |
+| `src/web/craft/components/SettingsSection.tsx:1-39`、`SettingsCard.tsx:1-24`、`SettingsRow.tsx:1-22` | `components/settings/SettingsSection.tsx:14-117`、`SettingsCard.tsx:11-86`、`SettingsRow.tsx:12-104` | 保留分组、卡片分隔、行标签/说明/动作结构；改相对 import。SettingsCard 接收原生 div 属性，供主题分组传入 aria。 |
+| `src/web/craft/components/SettingsInput.tsx:1-50`、`SettingsSelect.tsx:1-34`、`SettingsUIConstants.ts:1-14` | `components/settings/SettingsInput.tsx:16-304`、`SettingsSelect.tsx:20-179`、`SettingsUIConstants.ts:7-22` | 保留输入、密钥显隐、行内选择及样式常量；增加现有表单需要的 name/autocomplete/required/autofocus，并为密钥显隐补键盘名称。Select 触发器显式关联可见标签和说明。中文占位为本地文案适配。 |
+| `src/web/craft/components/SettingsToggle.tsx` | `components/settings/SettingsToggle.tsx:13-80` | 保留原 Settings 行、label、description 与 Switch 组合；人工调研模型池使用受控 `checked/onCheckedChange`，替代旧原生 checkbox。 |
+
+`src/web/ModelSettings.tsx:126-204` 用上述原组件组合现有单连接、管家模型、调研模型池、协议和能力字段。`main.tsx:44-53,56-95,182-188` 将主题、登录和账户区接入同一组件组。没有迁入 Craft 的多连接、OAuth、Workspace、Jotai 或 Electron 状态机；没有重写例外。
+
+新增依赖严格使用固定上游版本：`@radix-ui/react-label 2.1.8`、`@radix-ui/react-select 2.2.6` 和 `@radix-ui/react-switch 1.2.6`。

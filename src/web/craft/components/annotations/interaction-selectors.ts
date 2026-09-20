@@ -27,4 +27,3 @@ export function getAnnotationInteractionAnchor(state: AnnotationInteractionState
 export function hasAnnotationInteraction(state: AnnotationInteractionState): boolean {
   return Boolean(state.pendingSelection || state.activeAnnotationDetail)
 }
-

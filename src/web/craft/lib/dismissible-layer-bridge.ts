@@ -47,4 +47,3 @@ export function setDismissibleLayerBridge(bridge: DismissibleLayerBridge | null)
 export function getDismissibleLayerBridge(): DismissibleLayerBridge | null {
   return getBridgeHost()[BRIDGE_KEY] ?? null
 }
-

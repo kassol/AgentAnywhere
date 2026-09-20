@@ -1,0 +1,10 @@
+Craft Agents
+Copyright 2026 Craft Docs Ltd.
+
+This product includes software developed by Craft Docs Ltd.
+https://craft.do
+
+AgentAnywhere adapts UI source from Craft Agents OSS v0.13.3,
+commit e8963854c3679edcceb105a42537a06749e6cb64.
+Local source paths and changes are recorded in docs/r4-craft-source.md.
+The Apache-2.0 license is included in CRAFT-APACHE-2.0.txt.
