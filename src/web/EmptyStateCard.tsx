@@ -1,10 +1,10 @@
-// Adapted from Craft packages/ui/src/components/ui/BrowserEmptyStateCard.tsx.
-// The browser-specific examples and i18n dependency are not needed here.
-export function EmptyStateCard({ title, description }: { title: string; description: string }) {
-  return (
-    <div className="empty-state">
-      <div className="empty-state-heading"><h2>{title}</h2></div>
-      <p>{description}</p>
-    </div>
-  )
+import type { ReactNode } from 'react'
+import { BriefcaseBusiness } from 'lucide-react'
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from './craft/components/Empty'
+
+export function EmptyStateCard({ title, description, icon = <BriefcaseBusiness /> }: { title: string; description: string; icon?: ReactNode }) {
+  return <Empty className="empty-state min-h-40 border border-border bg-background p-6 pb-6">
+    <EmptyMedia variant="icon">{icon}</EmptyMedia>
+    <EmptyHeader><EmptyTitle>{title}</EmptyTitle><EmptyDescription>{description}</EmptyDescription></EmptyHeader>
+  </Empty>
 }

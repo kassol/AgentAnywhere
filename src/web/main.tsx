@@ -18,6 +18,8 @@ import { SettingsInput } from './craft/components/SettingsInput'
 import { SettingsRow } from './craft/components/SettingsRow'
 import { SettingsSection } from './craft/components/SettingsSection'
 import { SidebarButton, type SidebarLinkItem } from './craft/components/SidebarButton'
+import { EntityRow } from './craft/components/EntityRow'
+import { InteractionStatusBadge } from './WorkStatus'
 
 const threadStatusLabel: Record<string, string> = { queued: '排队中', running: '回复中', stopping: '停止中', stopped: '已停止', completed: '已完成', interrupted: '已中断', limited: '已达上限', failed: '失败' }
 
@@ -168,21 +170,22 @@ function Workbench() {
           </Empty>}
         </section>}
         {!!pendingInteractions.length && <section className="pending-interactions" aria-label="全局待办"><h2>待回答</h2><ul>{pendingInteractions.map(interaction => <li key={interaction.id}>
-          <SidebarButton className="sidebar-pending-link" link={{ id: interaction.id, title: interaction.goal, href: interaction.href,
-            icon: ListChecks, compact: true, variant: 'ghost' }} /><small>{interaction.question}</small>
-          {steward && <QuickActions actions={pendingActions(interaction)} onFill={command => setFillRequest({ id: ++fillRequestId.current, command })} />}
+          <EntityRow href={interaction.href} className="sidebar-pending-row" surfaceClassName="px-1.5 py-2"
+            icon={<ListChecks />} title={interaction.goal} subtitle={interaction.question}
+            badges={<InteractionStatusBadge status="pending" />}
+            trailing={<span className="font-mono text-[9px] text-muted-foreground" title={interaction.id}>{interaction.id.slice(0, 8)}</span>}>
+            {steward && <QuickActions actions={pendingActions(interaction)} onFill={command => setFillRequest({ id: ++fillRequestId.current, command })} />}
+          </EntityRow>
         </li>)}</ul></section>}
         <div className="account-summary"><span>本机</span><div><strong>工作台所有者</strong><small>已登录</small></div></div>
       </Panel>
-      <Panel as="main" variant="grow" className={steward ? 'content content-steward' : 'content'}>
+      <Panel as="main" variant="grow" className={settings ? 'content content-settings' : steward ? 'content content-steward' : 'content'}>
         <header className="page-header"><span>{settings ? '偏好与连接' : work ? '任务与成果' : '个人管家'}</span><h1>{settings ? '设置' : work ? '工作' : '管家'}</h1></header>
         {error && <p className="error" role="alert">{error}</p>}
         {settings ? (
-          <><ThemeSettings /><ModelSettings /><section className="settings-card account-card">
-            <h2>账户</h2>
-            <p className="muted">当前已登录。</p>
-            <button type="button" className="secondary" onClick={logout}>退出登录</button>
-          </section></>
+          <><ThemeSettings /><ModelSettings /><SettingsSection className="settings-card account-card" title="账户" description="当前已登录。">
+            <SettingsCard><SettingsRow label="工作台所有者" description="本机登录会话" action={<Button variant="outline" onClick={logout}>退出登录</Button>} /></SettingsCard>
+          </SettingsSection></>
         ) : work ? <Work /> : <PreviewWorkspace><Steward fillRequest={fillRequest} onFillRequestHandled={() => setFillRequest(undefined)} /></PreviewWorkspace>}
       </Panel>
     </div>

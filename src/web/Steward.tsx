@@ -6,11 +6,13 @@ import { TurnCard, type ActivityItem } from './craft/components/TurnCard'
 import { UserMessageBubble } from './craft/components/UserMessageBubble'
 import { Button } from './craft/components/Button'
 import { LoadingIndicator } from './craft/components/LoadingIndicator'
-import { Square } from 'lucide-react'
+import { BriefcaseBusiness, ListChecks, Square } from 'lucide-react'
 import { QuickActions, type QuickAction } from './QuickActions'
 import { clearAcceptedAnnotations, latestSucceededReportVersion, type ReviewContext } from './ReviewAnnotations'
 import { StewardReceipts, type ControlOperation, type InteractionOperation, type ResearchOperation, type RetryOperation, type RevisionOperation } from './StewardReceipts'
 import { useReviewComposerBridge } from './WorkPreview'
+import { EntityRow } from './craft/components/EntityRow'
+import { InteractionStatusBadge, WorkStatusBadge } from './WorkStatus'
 
 type Message = { id: string; turnId: string; role: 'user' | 'assistant'; content: string; status: string }
 type Summary = { id: string; content: string; fromTurnNumber: number; throughTurnNumber: number; coveredTurns: number }
@@ -317,21 +319,30 @@ export function Steward({ fillRequest, onFillRequestHandled }: { fillRequest?: {
             </section>
           })}
           {!!detail?.relatedTasks.length && <section className="steward-work-section" aria-label="关联工作"><h3>关联工作</h3><ul className="steward-work-list">{detail.relatedTasks.map(task => <li key={task.id}>
-            <div className="steward-work-heading"><a href={task.href}>{task.goal}</a><span>{statusLabel[task.status] ?? task.status}</span></div>
-            {!!task.reports.length && <div className="steward-work-reports">{task.reports.map(report =>
-              <a key={report.versionId} href={report.href}>成果 {report.versionId.slice(0, 8)}</a>)}</div>}
-            <QuickActions actions={relatedTaskQuickActions(task)} onFill={fillCommand} disabled={busy} />
+            <EntityRow href={task.href} className="steward-work-row overflow-hidden rounded-[8px] border border-border bg-background"
+              icon={<BriefcaseBusiness />} title={task.goal} badges={<WorkStatusBadge status={task.status} />}
+              trailing={<span className="font-mono text-[10px] text-muted-foreground" title={task.id}>Task {task.id.slice(0, 8)}</span>}>
+              <div className="steward-work-content">
+                {!!task.reports.length && <div className="steward-work-reports">{task.reports.map(report =>
+                  <a key={report.versionId} href={report.href} title={report.versionId}>成果 {report.versionId.slice(0, 8)}</a>)}</div>}
+                <QuickActions actions={relatedTaskQuickActions(task)} onFill={fillCommand} disabled={busy} />
+              </div>
+            </EntityRow>
           </li>)}</ul></section>}
           {!!detail?.statusCards.length && <section className="steward-work-section" aria-label="工作状态卡"><h3>工作状态</h3><ul className="steward-work-list">{detail.statusCards.map(card => <li key={card.id}>
-            <div className="steward-work-heading"><a href={card.href}>{card.goal}</a><span>{card.interaction
-              ? statusLabel[card.interaction.status] ?? card.interaction.status
-              : statusLabel[card.runStatus] ?? card.runStatus}</span></div>
-            {card.interaction && <p className="steward-work-note">{card.interaction.kind === 'limit' ? '额度等待' : '提问'}：{card.interaction.question}</p>}
-            {!!card.reports.length && <div className="steward-work-reports">{card.reports.map(report =>
-              <a key={report.versionId} href={report.href}>成果 {report.versionId.slice(0, 8)}</a>)}</div>}
-            {card.interaction?.answer && <small className="steward-work-answer">回答：{card.interaction.answer}</small>}
-            <QuickActions actions={statusCardQuickActions(card, detail.relatedTasks.find(task => task.id === card.taskId)?.runs.at(-1)?.id, replacementModels)}
-              onFill={fillCommand} disabled={busy} />
+            <EntityRow href={card.href} className="steward-work-row overflow-hidden rounded-[8px] border border-border bg-background"
+              icon={card.interaction ? <ListChecks /> : <BriefcaseBusiness />} title={card.goal}
+              subtitle={card.interaction ? `${card.interaction.kind === 'limit' ? '额度等待' : '提问'}：${card.interaction.question}` : card.failure}
+              badges={card.interaction ? <InteractionStatusBadge status={card.interaction.status} /> : <WorkStatusBadge status={card.runStatus} />}
+              trailing={<span className="font-mono text-[10px] text-muted-foreground" title={`${card.taskId} · ${card.runId}`}>Run {card.runId.slice(0, 8)}</span>}>
+              <div className="steward-work-content">
+                {!!card.reports.length && <div className="steward-work-reports">{card.reports.map(report =>
+                  <a key={report.versionId} href={report.href} title={report.versionId}>成果 {report.versionId.slice(0, 8)}</a>)}</div>}
+                {card.interaction?.answer && <small className="steward-work-answer">回答：{card.interaction.answer}</small>}
+                <QuickActions actions={statusCardQuickActions(card, detail.relatedTasks.find(task => task.id === card.taskId)?.runs.at(-1)?.id, replacementModels)}
+                  onFill={fillCommand} disabled={busy} />
+              </div>
+            </EntityRow>
           </li>)}</ul></section>}
         </StableScroll>
         <Composer state={composer} busy={busy} error={error} onChange={content => storeComposer(changeComposerDraft(composerRef.current, content))}
