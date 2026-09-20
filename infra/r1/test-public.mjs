@@ -42,6 +42,16 @@ for (const path of ['/api/share', '/api/channels', '/api/subscriptions', '/api/r
 const page = await fetch(base, { headers: { cookie } })
 assert.equal(page.status, 200)
 assert.match(page.headers.get('content-security-policy'), /frame-ancestors 'none'/)
+assert.match(page.headers.get('content-security-policy'), /(?:^|; )font-src 'self'(?:;|$)/)
+const html = await page.text()
+const cssPath = html.match(/href="([^"]+\.css)"/)?.[1]
+assert.ok(cssPath, 'Production page must load its stylesheet')
+const stylesheet = await (await fetch(new URL(cssPath, base))).text()
+const fontPath = stylesheet.match(/url\(["']?([^"')]+\.woff2)["']?\)/)?.[1]
+assert.ok(fontPath, 'Production stylesheet must declare the self-hosted font')
+const font = await fetch(new URL(fontPath, new URL(cssPath, base)))
+assert.equal(font.status, 200)
+assert.equal(new TextDecoder().decode((await font.arrayBuffer()).slice(0, 4)), 'wOF2')
 assert.equal((await fetch(new URL('/api/logout', base), { method: 'POST', headers: { cookie, origin: 'https://other.example' } })).status, 403)
 assert.equal((await fetch(new URL('/api/logout', base), { method: 'POST', headers: { cookie, origin: base.origin } })).status, 204)
 assert.equal(await handshake(cookie), 401)
