@@ -268,7 +268,7 @@ export function Work() {
     {!detail && !error && <div className="work-loading muted"><LoadingIndicator label="正在加载工作…" /></div>}
     {detail && <section className="work-detail">
       <header className="work-detail-header">
-        <div className="work-detail-heading"><WorkStatusBadge status={detail.run.status} />
+        <div className="work-detail-heading"><WorkStatusBadge status={detail.run.status} className="justify-self-start" />
           <h2>{detail.goal || detail.sourceUrl}</h2>
           {detail.sourceUrl && <a className="work-source" href={detail.sourceUrl} target="_blank" rel="noopener noreferrer">{detail.sourceUrl}</a>}
         </div>

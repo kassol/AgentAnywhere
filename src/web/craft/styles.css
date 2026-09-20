@@ -34,10 +34,14 @@
 }
 
 @layer components {
-  button[data-craft-button] {
+  button[data-craft-button],
+  button[data-slot="button"],
+  button[data-slot="select-trigger"],
+  button[data-slot="switch"],
+  button[data-slot="settings-secret-toggle"] {
     appearance: none;
     margin: 0;
-    border: 0;
+    border: 0 solid;
     background: transparent;
     color: inherit;
     font-family: inherit;
