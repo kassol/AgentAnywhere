@@ -5,7 +5,7 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BriefcaseBusiness, FileText, ListChecks, LogIn, Menu, MessageSquare, Monitor, Moon, Settings, Sun, X } from 'lucide-react'
 import { ModelSettings } from './ModelSettings'
-import { Work } from './Work'
+import { Pending, Work } from './Work'
 import { Steward } from './Steward'
 import { TitleEditor } from './TitleEditor'
 import { PreviewWorkspace, ReportPage } from './WorkPreview'
@@ -94,9 +94,10 @@ function Login() {
 function Workbench() {
   const settings = location.pathname === '/settings'
   const work = location.pathname === '/tasks' || location.pathname.startsWith('/tasks/')
+  const pending = location.pathname === '/pending'
   const report = location.pathname === '/reports'
-  const steward = !settings && !work && !report
-  const conversationContext = steward || report
+  const steward = !settings && !work && !pending && !report
+  const conversationContext = steward || work || pending || report
   const [error, setError] = useState('')
   const [navigationError, setNavigationError] = useState('')
   const [pendingInteractions, setPendingInteractions] = useState<{ id: string; kind: 'question' | 'limit'; question: string; taskId: string; runId: string; goal: string; href: string }[]>([])
@@ -137,8 +138,8 @@ function Workbench() {
   const primaryLinks: SidebarLinkItem[] = [
     { id: 'steward', title: '管家', href: '/', icon: MessageSquare, variant: steward ? 'default' : 'ghost' },
     { id: 'work', title: '工作', href: '/tasks', icon: BriefcaseBusiness, variant: work ? 'default' : 'ghost' },
-    { id: 'todo', title: '待办', href: pendingInteractions[0]?.href ?? '/tasks', icon: ListChecks,
-      label: pendingInteractions.length ? String(pendingInteractions.length) : undefined, variant: 'ghost' },
+    { id: 'todo', title: '待办', href: '/pending', icon: ListChecks,
+      label: pendingInteractions.length ? String(pendingInteractions.length) : undefined, variant: pending ? 'default' : 'ghost' },
     { id: 'report', title: '报告', href: '/reports', icon: FileText, variant: report ? 'default' : 'ghost' },
     { id: 'settings', title: '设置', href: '/settings', icon: Settings, variant: settings ? 'default' : 'ghost' },
   ]
@@ -155,9 +156,9 @@ function Workbench() {
         <a className="account-summary" href="/settings"><span>K</span><div><strong>工作台所有者</strong><small>本机 · 已登录</small></div></a>
       </Panel>
       {conversationContext && <ConversationNavigation threads={threads} activeId={activeThreadId} error={navigationError} />}
-      <Panel as="main" variant="grow" className={settings ? 'content content-settings' : steward ? 'content content-steward' : report ? 'content content-report' : 'content'}>
+      <Panel as="main" variant="grow" className={settings ? 'content content-settings' : steward ? 'content content-steward' : report ? 'content content-report' : pending ? 'content content-pending' : work ? 'content content-work' : 'content'}>
         <header className="mobile-header"><a className="brand-mark" href="/" aria-label="AgentAnywhere 管家首页">A</a>
-          <strong>{settings ? '设置' : work ? '工作' : report ? '报告' : '管家对话'}</strong>
+          <strong>{settings ? '设置' : work ? '工作' : pending ? '待办' : report ? '报告' : '管家对话'}</strong>
           <Button type="button" variant="ghost" size="icon" aria-label={mobileMenuOpen ? '关闭导航' : '打开导航'} aria-expanded={mobileMenuOpen}
             onClick={() => setMobileMenuOpen(open => !open)}>{mobileMenuOpen ? <X /> : <Menu />}</Button>
           {mobileMenuOpen && <div className="mobile-menu" role="dialog" aria-label="移动导航">
@@ -166,7 +167,7 @@ function Workbench() {
           </div>}
         </header>
         {!report && <header className={settings ? 'page-header settings-page-header' : 'page-header'}><div>{!steward && !settings && <span>任务与成果</span>}
-          {steward && activeThread ? <TitleEditor title={activeThread.title} endpoint={`/api/steward/threads/${activeThread.id}`} onSaved={value => setThreads(current => current?.map(thread => thread.id === activeThread.id ? { ...thread, title: value.title } : thread) ?? null)} /> : <h1>{settings ? '设置' : work ? '工作' : '新对话'}</h1>}{settings && <p>模型连接和工作台偏好。</p>}</div>
+          {steward && activeThread ? <TitleEditor title={activeThread.title} endpoint={`/api/steward/threads/${activeThread.id}`} onSaved={value => setThreads(current => current?.map(thread => thread.id === activeThread.id ? { ...thread, title: value.title } : thread) ?? null)} /> : <h1>{settings ? '设置' : work ? '工作' : pending ? '待办' : '新对话'}</h1>}{settings && <p>模型连接和工作台偏好。</p>}{(work || pending) && <p>{work ? '查看、创建并控制真实工作。' : '只保留需要你介入后才能继续的事项。'}</p>}</div>
           {steward && <a href="/tasks">查看工作</a>}
         </header>}
         {error && <p className="error" role="alert">{error}</p>}
@@ -174,7 +175,7 @@ function Workbench() {
           <div className="settings-page-content"><ModelSettings /><ThemeSettings /><SettingsSection className="account-settings" title="账户" description="当前已登录。">
             <SettingsCard><SettingsRow label="工作台所有者" description="本机登录会话" action={<Button variant="outline" onClick={logout}>退出登录</Button>} /></SettingsCard>
           </SettingsSection></div>
-        ) : work ? <Work /> : report ? <ReportPage /> : <PreviewWorkspace><Steward /></PreviewWorkspace>}
+        ) : work ? <Work /> : pending ? <Pending /> : report ? <ReportPage /> : <PreviewWorkspace><Steward /></PreviewWorkspace>}
       </Panel>
     </div>
   )

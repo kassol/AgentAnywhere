@@ -3,9 +3,8 @@ import { EmptyStateCard } from './EmptyStateCard'
 import { buildToolActivities, readActivityPages, StableScroll, ToolActivityList, type ActivityEvent } from './ActivityFeed'
 import Markdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { ArrowLeft, ArrowRight, BriefcaseBusiness, RotateCcw } from 'lucide-react'
+import { ArrowLeft, BriefcaseBusiness, Check, ListChecks, Plus, RotateCcw } from 'lucide-react'
 import { Button } from './craft/components/Button'
-import { EntityRow } from './craft/components/EntityRow'
 import { Input } from './craft/components/Input'
 import { Label } from './craft/components/Label'
 import { LoadingIndicator } from './craft/components/LoadingIndicator'
@@ -22,6 +21,8 @@ type Task = { id: string; title: string; titleEdited: boolean; goal: string; sou
 type Artifact = { id: string; kind: 'report' | 'attachment'; name: string; versionId: string; runId: string; runStatus: string; sha256: string; sizeBytes: number; createdAt: string }
 type Detail = Task & { run: { id: string; status: string; model: Model; cleanupState: string; failure: string | null; startedAt: string | null; finishedAt: string | null; previousReportVersionId: string | null; retryOfRunId: string | null; modelCalls: number; modelCallLimit: number; activeMs: number; activeLimitMs: number; budgetReason: string | null }; runs: { id: string; status: string; createdAt: string; previousReportVersionId: string | null; retryOfRunId: string | null }[]; interaction: { id: string; kind: 'question' | 'limit'; question: string; status: string; answer: string | null } | null; thread: { id: string; messages: { role: 'user'; content: string; status: 'pending' | 'applied' | 'carried' }[] }; artifacts: Artifact[] }
 type RunEvent = ActivityEvent & { epoch: number }
+type PendingInteraction = { id: string; kind: 'question' | 'limit'; question: string; createdAt: string; runId: string; runStatus: string;
+  taskId: string; title: string; titleEdited: boolean; goal: string; sourceUrl: string | null; taskStatus: string; href: string }
 export function selectReportVersion<T extends { kind: string; versionId: string; runStatus: string }>(artifacts: T[], requested?: string | null) {
   const reports = artifacts.filter(item => item.kind === 'report')
   return requested ? reports.find(item => item.versionId === requested) : reports.find(item => item.runStatus === 'succeeded')
@@ -273,8 +274,12 @@ export function Work() {
           <TitleEditor<Detail> title={detail.title} endpoint={`/api/tasks/${detail.id}`} onSaved={setDetail} />
           {detail.sourceUrl && <a className="work-source" href={detail.sourceUrl} target="_blank" rel="noopener noreferrer">{detail.sourceUrl}</a>}
         </div>
-        {activeStatuses.includes(detail.run.status) && <Button variant="destructive" size="sm" className="work-danger-button" type="button" disabled={busy} onClick={cancel}>取消工作</Button>}
+        <div className="work-detail-actions">
+          {currentVersion && <Button asChild variant="outline" size="sm"><a href={`/reports?task=${detail.id}&version=${currentVersion}`}>打开报告</a></Button>}
+          {activeStatuses.includes(detail.run.status) && <Button variant="destructive" size="sm" className="work-danger-button" type="button" disabled={busy} onClick={cancel}>取消工作</Button>}
+        </div>
       </header>
+      <details className="work-original"><summary>原始要求</summary><p>{detail.goal || detail.sourceUrl}</p></details>
       <dl className="work-metadata">
         <div><dt>模型</dt><dd>{detail.run.model.id}</dd></div>
         <div><dt>协议</dt><dd>{detail.run.model.protocol}</dd></div>
@@ -334,22 +339,94 @@ export function Work() {
   </div>
 
   return <div className="work-index">
-    <form className="work-form work-create" onSubmit={submit} onChange={() => setRequestId(crypto.randomUUID())}>
-      <header><div><h2>创建工作</h2><p>写清目标，Agent 会在隔离环境中执行并保存结果。</p></div></header>
-      <div className="work-goal-field grid gap-2"><Label htmlFor="work-goal">目标</Label><Textarea id="work-goal" name="goal" rows={3} maxLength={4000} placeholder="描述希望完成的工作" /></div>
-      <div className="work-create-options"><div className="grid gap-2"><Label htmlFor="work-source">公开链接 <small>可选</small></Label><Input id="work-source" name="sourceUrl" type="url" placeholder="https://example.com" /></div>
-        <div className="grid gap-2"><Label>模型</Label><ModelSelect value={modelId} models={models} onValueChange={value => { setModelId(value); setRequestId(crypto.randomUUID()) }} /></div></div>
-      <div className="work-create-footer"><details><summary>高级选项</summary><div className="grid gap-2"><Label>协议</Label><ProtocolSelect value={protocol} onValueChange={value => { setProtocol(value); setRequestId(crypto.randomUUID()) }} /></div></details>
-        <Button disabled={busy || !modelId} type="submit">{busy ? <LoadingIndicator label="正在保存…" spinnerClassName="text-[10px]" /> : '创建工作'}</Button></div>
-      {!models.length && <p className="work-form-note muted">请先到<a href="/settings">设置</a>选择模型。</p>}
-    </form>
+    <details className="work-create-disclosure">
+      <summary><span><Plus aria-hidden="true" />创建工作</span><small>完整目标、链接、模型与协议</small></summary>
+      <form className="work-form work-create" onSubmit={submit} onChange={() => setRequestId(crypto.randomUUID())}>
+        <header><div><h2>创建工作</h2><p>写清目标，Agent 会在隔离环境中执行并保存结果。</p></div></header>
+        <div className="work-goal-field grid gap-2"><Label htmlFor="work-goal">目标</Label><Textarea id="work-goal" name="goal" rows={3} maxLength={4000} placeholder="描述希望完成的工作" /></div>
+        <div className="work-create-options"><div className="grid gap-2"><Label htmlFor="work-source">公开链接 <small>可选</small></Label><Input id="work-source" name="sourceUrl" type="url" placeholder="https://example.com" /></div>
+          <div className="grid gap-2"><Label>模型</Label><ModelSelect value={modelId} models={models} onValueChange={value => { setModelId(value); setRequestId(crypto.randomUUID()) }} /></div></div>
+        <div className="work-create-footer"><details><summary>高级选项</summary><div className="grid gap-2"><Label>协议</Label><ProtocolSelect value={protocol} onValueChange={value => { setProtocol(value); setRequestId(crypto.randomUUID()) }} /></div></details>
+          <Button disabled={busy || !modelId} type="submit">{busy ? <LoadingIndicator label="正在保存…" spinnerClassName="text-[10px]" /> : '创建工作'}</Button></div>
+        {!models.length && <p className="work-form-note muted">请先到<a href="/settings">设置</a>选择模型。</p>}
+      </form>
+    </details>
     {error && <p className="error" role="alert">{error}</p>}
     <section className="work-list"><header><div><h2>工作列表</h2><p>按最近创建排序</p></div>{tasks && <span>{tasks.length} 项</span>}</header>
       {tasks === null ? (!error && <div className="work-loading muted"><LoadingIndicator label="正在加载工作…" /></div>) : tasks.length === 0 ?
         <EmptyStateCard title="还没有工作" description="创建后会显示在这里。" /> :
-        <ul className="task-list">{tasks.map(task => <li key={task.id}><EntityRow href={`/tasks/${task.id}`}
-          icon={<BriefcaseBusiness />} title={task.title} subtitle={new Date(task.createdAt).toLocaleString('zh-CN')}
-          badges={<WorkStatusBadge status={task.status} />} trailing={<ArrowRight aria-hidden="true" />} /></li>)}</ul>}
+        <ul className="task-list">{tasks.map(task => <li key={task.id}><article className="task-summary">
+          <div className="task-summary-heading"><span><BriefcaseBusiness aria-hidden="true" /></span><div><a href={`/tasks/${task.id}`}>{task.title}</a>
+            <small>{new Date(task.createdAt).toLocaleString('zh-CN')}</small></div></div>
+          <WorkStatusBadge status={task.status} />
+          <details><summary>原始要求</summary><p>{task.goal || task.sourceUrl}</p></details>
+          <Button asChild variant="ghost" size="sm"><a href={`/tasks/${task.id}`}>{task.status === 'succeeded' ? '查看成果' : task.status === 'waiting' ? '前往处理' : ['failed', 'lost'].includes(task.status) ? '查看并重试' : '查看进度'}</a></Button>
+        </article></li>)}</ul>}
     </section>
+  </div>
+}
+
+export function Pending() {
+  const [items, setItems] = useState<PendingInteraction[] | null>(null)
+  const [answers, setAnswers] = useState<Record<string, string>>({})
+  const [busyId, setBusyId] = useState('')
+  const [error, setError] = useState('')
+
+  async function refresh() {
+    const value = await read<PendingInteraction[]>(await fetch('/api/interactions/pending'))
+    setItems(value)
+    setError('')
+  }
+
+  useEffect(() => {
+    let disposed = false
+    let loading = false
+    async function poll() {
+      if (loading || disposed) return
+      loading = true
+      try {
+        const value = await read<PendingInteraction[]>(await fetch('/api/interactions/pending'))
+        if (!disposed) { setItems(value); setError('') }
+      } catch (caught) {
+        if (!disposed) setError(caught instanceof Error ? caught.message : '待办加载失败')
+      } finally { loading = false }
+    }
+    void poll()
+    const timer = setInterval(poll, 1000)
+    return () => { disposed = true; clearInterval(timer) }
+  }, [])
+
+  async function resolve(item: PendingInteraction, answer: string) {
+    setBusyId(item.id)
+    setError('')
+    try {
+      await read(await fetch(`/api/interactions/${item.id}/resolve`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ answer }),
+      }))
+      setAnswers(current => ({ ...current, [item.id]: '' }))
+      await refresh()
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : '待办处理失败')
+    } finally { setBusyId('') }
+  }
+
+  return <div className="pending-page">
+    {error && <p className="error pending-error" role="alert">{error}</p>}
+    {items === null && !error && <div className="work-loading muted"><LoadingIndicator label="正在加载待办…" /></div>}
+    {items && !items.length && <div className="pending-empty"><span><Check aria-hidden="true" /></span><h2>当前没有待办</h2>
+      <p>需要回答的问题和额度决定会集中显示在这里。</p><Button asChild variant="outline"><a href="/">返回对话</a></Button></div>}
+    {!!items?.length && <div className="pending-list">{items.map(item => <section key={item.id} className="pending-item">
+      <header><div><ListChecks aria-hidden="true" /><span><strong>{item.title}</strong><small>{item.kind === 'limit' ? '额度决定' : '工作提问'} · {new Date(item.createdAt).toLocaleString('zh-CN')}</small></span></div>
+        <a href={item.href}>查看工作</a></header>
+      {item.kind === 'question' ? <form onSubmit={event => { event.preventDefault(); void resolve(item, answers[item.id]?.trim() ?? '') }}>
+        <PermissionRequest title="需要回答" identity={`Task ${item.taskId} · Run ${item.runId} · Interaction ${item.id}`}
+          description={item.question} hint="回答后继续当前工作" actions={<Button size="sm" type="submit" disabled={busyId === item.id || !answers[item.id]?.trim()}>提交回答</Button>}>
+          <div className="grid gap-2"><Label htmlFor={`pending-answer-${item.id}`}>回答</Label><Textarea id={`pending-answer-${item.id}`}
+            value={answers[item.id] ?? ''} onChange={event => setAnswers(current => ({ ...current, [item.id]: event.target.value }))} maxLength={4000} rows={3} required /></div>
+        </PermissionRequest>
+      </form> : <PermissionRequest title="需要决定" identity={`Task ${item.taskId} · Run ${item.runId} · Interaction ${item.id}`}
+        description={item.question} hint="决定后继续或结束当前工作" actions={<><Button size="sm" type="button" disabled={busyId === item.id} onClick={() => void resolve(item, 'continue')}>增加额度并继续</Button>
+          <Button size="sm" type="button" variant="outline" disabled={busyId === item.id} onClick={() => void resolve(item, 'finish')}>结束执行</Button></>} />}
+    </section>)}</div>}
   </div>
 }

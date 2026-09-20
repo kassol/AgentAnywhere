@@ -76,6 +76,7 @@ input:not([data-slot="input"]), select, textarea:not([data-slot="textarea"]) { b
 .page-header { display: grid; width: 100%; max-width: 980px; margin: 0 auto 24px; }
 .page-header > span { color: var(--muted); font-size: 10px; font-weight: 600; letter-spacing: .06em; }
 .page-header h1 { margin: 3px 0 0; font-size: 23px; line-height: 1.2; font-weight: 650; letter-spacing: -.03em; }
+.page-header p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
 .content > :not(.page-header) { width: 100%; margin-right: auto; margin-left: auto; }
 .content-settings > :not(.page-header) { flex: none; }
 .content-settings { padding: 0; }
@@ -89,6 +90,8 @@ input:not([data-slot="input"]), select, textarea:not([data-slot="textarea"]) { b
 .content-steward .page-header > a:hover { text-decoration: underline; text-underline-offset: 3px; }
 .content-steward .steward-layout { width: 100%; height: 100%; max-width: none; min-height: 0; }
 .content-report { height: 100%; padding: 0; overflow: hidden; }
+.content-work, .content-pending { display: flex; height: 100%; padding: 0; flex-direction: column; overflow: hidden; }
+.content-work .page-header, .content-pending .page-header { min-height: 78px; max-width: none; margin: 0; padding: 14px 28px; flex: 0 0 auto; border-bottom: 1px solid var(--border); }
 
 .empty-state { max-width: 900px; overflow: hidden; border-radius: 12px; background: var(--panel); box-shadow: 0 0 0 1px rgba(var(--foreground-rgb), .07), 0 8px 24px var(--shadow); }
 .empty-state-heading { padding: 14px 20px; border-bottom: 1px solid var(--border); background: var(--subtle); }
