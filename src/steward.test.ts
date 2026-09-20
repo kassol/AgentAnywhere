@@ -101,9 +101,7 @@ test('one stable receipt is projected into its original and resume turns', async
       expect(source[collection][0]).toMatchObject({ turnId: sourceTurn, resumeTurnIds: [turnId] })
     }
     const recovered = await (await fetch(`${app.url.origin}/api/steward/threads/${recoveryThread}`, { headers: { cookie } })).json()
-    expect(recovered.researchOperations).toMatchObject([
-      { operationId: operations.research, turnId: sourceTurn, resumeTurnIds: [resumeTurns.crossThread] },
-    ])
+    expect(recovered.researchOperations).toEqual([])
   } finally {
     await app.stop(true)
     await db.close()

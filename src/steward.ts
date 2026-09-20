@@ -362,8 +362,7 @@ export async function createStewardService(databaseUrl: string, resolveCredentia
         o.goal, o.source_url AS "sourceUrl", o.model_snapshot->>'id' AS "modelId", o.model_snapshot->>'protocol' AS protocol,
         o.reason, o.evidence, o.failure, o.created_at AS "createdAt", o.finished_at AS "finishedAt"
         FROM steward_research_operations o JOIN steward_turns r ON r.id=o.turn_id
-        WHERE r.thread_id=${id} OR EXISTS (SELECT 1 FROM steward_research_resumes resume JOIN steward_turns resumed ON resumed.id=resume.turn_id
-          WHERE resume.operation_id=o.operation_id AND resumed.thread_id=${id}) ORDER BY r.turn_seq, o.ordinal`
+        WHERE r.thread_id=${id} ORDER BY r.turn_seq, o.ordinal`
       const controlOperations = await sql`SELECT o.turn_id AS "turnId",
         ARRAY(SELECT resume.turn_id::text FROM steward_control_resumes resume JOIN steward_turns resumed ON resumed.id=resume.turn_id
           WHERE resume.operation_id=o.operation_id AND resumed.thread_id=${id} ORDER BY resumed.turn_seq) AS "resumeTurnIds",
@@ -372,8 +371,7 @@ export async function createStewardService(databaseUrl: string, resolveCredentia
         (SELECT m.status FROM work_messages m WHERE m.command_id=o.command_id) AS "messageStatus",
         o.created_at AS "createdAt", o.finished_at AS "finishedAt"
         FROM steward_control_operations o JOIN steward_turns r ON r.id=o.turn_id
-        WHERE r.thread_id=${id} OR EXISTS (SELECT 1 FROM steward_control_resumes resume JOIN steward_turns resumed ON resumed.id=resume.turn_id
-          WHERE resume.operation_id=o.operation_id AND resumed.thread_id=${id}) ORDER BY r.turn_seq, o.created_at`
+        WHERE r.thread_id=${id} ORDER BY r.turn_seq, o.created_at`
       const interactionOperations = await sql`SELECT o.turn_id AS "turnId",
         ARRAY(SELECT resume.turn_id::text FROM steward_interaction_resumes resume JOIN steward_turns resumed ON resumed.id=resume.turn_id
           WHERE resume.operation_id=o.operation_id AND resumed.thread_id=${id} ORDER BY resumed.turn_seq) AS "resumeTurnIds",
@@ -381,8 +379,7 @@ export async function createStewardService(databaseUrl: string, resolveCredentia
         o.run_epoch AS epoch, o.interaction_id AS "interactionId", o.interaction_kind AS "interactionKind", o.answer, o.decision,
         o.result_json AS result, o.failure, o.created_at AS "createdAt", o.finished_at AS "finishedAt"
         FROM steward_interaction_operations o JOIN steward_turns r ON r.id=o.turn_id
-        WHERE r.thread_id=${id} OR EXISTS (SELECT 1 FROM steward_interaction_resumes resume JOIN steward_turns resumed ON resumed.id=resume.turn_id
-          WHERE resume.operation_id=o.operation_id AND resumed.thread_id=${id}) ORDER BY r.turn_seq, o.created_at`
+        WHERE r.thread_id=${id} ORDER BY r.turn_seq, o.created_at`
       const retryOperations = await sql`SELECT o.turn_id AS "turnId",
         ARRAY(SELECT resume.turn_id::text FROM steward_retry_resumes resume JOIN steward_turns resumed ON resumed.id=resume.turn_id
           WHERE resume.operation_id=o.operation_id AND resumed.thread_id=${id} ORDER BY resumed.turn_seq) AS "resumeTurnIds",
@@ -391,8 +388,7 @@ export async function createStewardService(databaseUrl: string, resolveCredentia
         o.result_json AS result, o.failure,
         o.created_at AS "createdAt", o.finished_at AS "finishedAt"
         FROM steward_retry_operations o JOIN steward_turns r ON r.id=o.turn_id
-        WHERE r.thread_id=${id} OR EXISTS (SELECT 1 FROM steward_retry_resumes resume JOIN steward_turns resumed ON resumed.id=resume.turn_id
-          WHERE resume.operation_id=o.operation_id AND resumed.thread_id=${id}) ORDER BY r.turn_seq, o.created_at`
+        WHERE r.thread_id=${id} ORDER BY r.turn_seq, o.created_at`
       const revisionOperations = await sql`SELECT o.turn_id AS "turnId",
         ARRAY(SELECT resume.turn_id::text FROM steward_revision_resumes resume JOIN steward_turns resumed ON resumed.id=resume.turn_id
           WHERE resume.operation_id=o.operation_id AND resumed.thread_id=${id} ORDER BY resumed.turn_seq) AS "resumeTurnIds",
@@ -401,8 +397,7 @@ export async function createStewardService(databaseUrl: string, resolveCredentia
         o.model_snapshot->>'id' AS "modelId", o.model_snapshot->>'protocol' AS protocol, o.reason, o.evidence,
         o.result_json AS result, o.failure, o.created_at AS "createdAt", o.finished_at AS "finishedAt"
         FROM steward_revision_operations o JOIN steward_turns r ON r.id=o.turn_id
-        WHERE r.thread_id=${id} OR EXISTS (SELECT 1 FROM steward_revision_resumes resume JOIN steward_turns resumed ON resumed.id=resume.turn_id
-          WHERE resume.operation_id=o.operation_id AND resumed.thread_id=${id}) ORDER BY r.turn_seq, o.created_at`
+        WHERE r.thread_id=${id} ORDER BY r.turn_seq, o.created_at`
       return { ...thread, messages, summaries: summaries.map((summary: any) => ({ ...summary, fromTurnSeq: Number(summary.fromTurnSeq), throughTurnSeq: Number(summary.throughTurnSeq),
         fromTurnNumber: Number(summary.fromTurnNumber), throughTurnNumber: Number(summary.throughTurnNumber), coveredTurns: Number(summary.coveredTurns) })),
         turns: turns.map((turn: any) => ({ ...turn, activeMs: Number(turn.activeMs), activeLimitMs: Number(turn.activeLimitMs) })),
