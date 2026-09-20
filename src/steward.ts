@@ -502,7 +502,7 @@ export async function createStewardService(databaseUrl: string, resolveCredentia
         return { turn: previous, created: false }
       }
       await sql`INSERT INTO steward_messages (id, thread_id, turn_id, role, content, status) VALUES (${crypto.randomUUID()}, ${threadId}, ${turnId}, 'user', ${input.content}, 'completed')`
-      await sql`UPDATE steward_threads SET title=CASE WHEN title='新对话' THEN ${titleSummary(input.content)} ELSE title END, updated_at=now() WHERE id=${threadId}`
+      await sql`UPDATE steward_threads SET title=CASE WHEN title='新对话' AND NOT title_edited THEN ${titleSummary(input.content)} ELSE title END, updated_at=now() WHERE id=${threadId}`
       await sql`INSERT INTO steward_events (turn_id, event_id, type, payload) VALUES (${turnId}, ${crypto.randomUUID()}, 'turn.queued', ${JSON.stringify({ status: 'queued' })}::jsonb)`
       return { turn: { id: turnId, status: 'queued', modelCalls: 0, modelCallLimit: callLimit, activeMs: 0, activeLimitMs }, created: true }
     })

@@ -119,6 +119,10 @@ test('automatic titles are bounded, metered, idempotent, and cannot overwrite a 
     expect(conversation).toMatchObject({ title: '自动对话标题', titleEdited: false, titleGeneration: {
       status: 'succeeded', modelId: 'title-responses', protocol: 'responses', inputTokens: 9, outputTokens: 3, totalTokens: 12,
     } })
+    const manualThread = await (await send('/api/steward/threads', 'POST', { requestId: crypto.randomUUID() })).json()
+    await send(`/api/steward/threads/${manualThread.id}`, 'PATCH', { title: '新对话' })
+    expect((await send(`/api/steward/threads/${manualThread.id}/turns`, 'POST', { requestId: crypto.randomUUID(), content: '手工命名后开始讨论' })).status).toBe(202)
+    expect(await (await send(`/api/steward/threads/${manualThread.id}`)).json()).toMatchObject({ title: '新对话', titleEdited: true })
   } finally {
     await app.stop(true)
     upstream.stop(true)
