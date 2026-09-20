@@ -4,7 +4,7 @@
  * e8963854c3679edcceb105a42537a06749e6cb64.
  * Copyright 2026 Craft Docs Ltd. Licensed under Apache-2.0.
  */
-import { createContext, useContext, useEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 import { ReportMarkdown, selectReportVersion } from './Work'
 import { buildReviewCommand, captureTextControlSelection, captureTextSelection, readReportAnnotationDraft, readReportAnnotations, selectorStatus,
   writeReportAnnotationDraft, writeReportAnnotations,
@@ -167,6 +167,7 @@ function WorkPreview({ selection, onSelect, onClose, onFillComposer }: { selecti
   const [note, setNote] = useState('')
   const [annotationError, setAnnotationError] = useState('')
   const [keyboardReportText, setKeyboardReportText] = useState<string | null>(null)
+  const [renderedReportText, setRenderedReportText] = useState<{ versionId: string; text: string } | null>(null)
 
   useEffect(() => { closeButton.current?.focus() }, [])
   useEffect(() => {
@@ -220,6 +221,11 @@ function WorkPreview({ selection, onSelect, onClose, onFillComposer }: { selecti
     }).catch(error => { if (error.name !== 'AbortError') setReportError(error.message) })
     return () => controller.abort()
   }, [artifact?.versionId])
+
+  useLayoutEffect(() => {
+    if (!report || report.versionId !== artifact?.versionId || !reportRoot.current) setRenderedReportText(null)
+    else setRenderedReportText({ versionId: report.versionId, text: reportRoot.current.textContent ?? '' })
+  }, [artifact?.versionId, report?.versionId])
 
   useEffect(() => {
     if (!artifact || report?.versionId !== artifact.versionId || !scroll.current) return
@@ -419,7 +425,8 @@ function WorkPreview({ selection, onSelect, onClose, onFillComposer }: { selecti
             {!!annotations.length && <section className="review-annotations" aria-label="未发送批注">
               <header><h3>未发送批注（{annotations.length}）</h3><button type="button" onClick={summarizeAnnotations}>汇总到聊天框</button></header>
               {annotations.map((annotation, index) => <article key={annotation.id}>
-                <div><strong>批注 {index + 1}</strong><small>{selectorStatus(reportRoot.current?.textContent ?? '', annotation.selector) === 'exact'
+                <div><strong>批注 {index + 1}</strong><small>{selectorStatus(
+                  renderedReportText?.versionId === artifact.versionId ? renderedReportText.text : '', annotation.selector) === 'exact'
                   ? '原文位置已确认' : '原文位置无法确认，保留引用'}</small></div>
                 <blockquote>{annotation.quote}</blockquote><p>{annotation.note}</p>
                 <button type="button" className="secondary" onClick={() => removeAnnotation(annotation.id)}>删除</button>
