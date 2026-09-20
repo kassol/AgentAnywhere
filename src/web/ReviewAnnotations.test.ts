@@ -1,4 +1,6 @@
 import { describe, expect, test } from 'bun:test'
+import { createTextSelectionAnnotation } from './craft/components/annotations/annotation-core'
+import { persistSelectionWithDraftCleanup } from './craft/components/annotations/selection-persistence'
 import {
   annotationStorageKey,
   annotationDraftStorageKey,
@@ -7,10 +9,13 @@ import {
   clearAcceptedAnnotations,
   createTextSelector,
   filterReviewContextForContent,
+  fromCraftAnnotation,
+  isReviewContext,
   latestSucceededReportVersion,
   readReportAnnotations,
   readReportAnnotationDraft,
   selectorStatus,
+  toCraftAnnotation,
   writeReportAnnotations,
   writeReportAnnotationDraft,
   type ReportAnnotation,
@@ -51,6 +56,74 @@ describe('report annotation drafts', () => {
     expect(captureTextControlSelection('前文   后文', 2, 5)).toBeNull()
   })
 
+  test('keeps Task and Version identity through the Craft annotation adapter', () => {
+    const local = annotation('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', '意见 A')
+    const craft = toCraftAnnotation(local)
+    expect(craft.target.source).toEqual({ sessionId: taskId, messageId: versionId })
+    expect(fromCraftAnnotation(taskId, versionId, craft)).toEqual(local)
+  })
+
+  test('persists a newly created Craft annotation through review context validation', () => {
+    const storage = memoryStorage()
+    const craft = createTextSelectionAnnotation(versionId, {
+      start: 1,
+      end: 5,
+      selectedText: '重复原文',
+      prefix: '甲',
+      suffix: '乙',
+    }, '意见 A', taskId)
+    const local = fromCraftAnnotation(taskId, versionId, craft)
+
+    expect(local).not.toBeNull()
+    expect(local?.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i)
+    expect(writeReportAnnotations(taskId, versionId, [local!], storage)).toBe(true)
+    const restored = readReportAnnotations(taskId, versionId, storage)
+    expect(restored).toEqual([local!])
+    const { review } = buildReviewCommand(taskId, versionId, restored)
+    expect(isReviewContext(review)).toBe(true)
+  })
+
+  test('retries a failed annotation storage write with the UUID already stored in the real draft', () => {
+    const stored = memoryStorage()
+    let failAnnotationWrite = true
+    const storage = {
+      getItem: stored.getItem,
+      removeItem: stored.removeItem,
+      setItem: (key: string, value: string) => {
+        if (failAnnotationWrite && key === annotationStorageKey(taskId, versionId)) throw new Error('unavailable')
+        stored.setItem(key, value)
+      },
+    }
+    const selection = { start: 1, end: 5, selectedText: '重复原文', prefix: '甲', suffix: '乙' }
+    const craft = createTextSelectionAnnotation(versionId, selection, '意见 A', taskId)
+    const callbacks = {
+      annotationId: craft.id,
+      rememberPersistedDraft: (id: string) => writeReportAnnotationDraft(taskId, versionId, {
+        selector: createTextSelector('甲重复原文乙', 1, 5), note: '意见 A', persistedAnnotationId: id,
+      }, storage),
+      persist: (id: string) => {
+        const local = fromCraftAnnotation(taskId, versionId, { ...craft, id })
+        if (!local) return false
+        const current = readReportAnnotations(taskId, versionId, storage)
+        const next = current.some(item => item.id === id) ? current.map(item => item.id === id ? local : item) : [...current, local]
+        return writeReportAnnotations(taskId, versionId, next, storage)
+      },
+      clearDraft: () => writeReportAnnotationDraft(taskId, versionId, null, storage),
+    }
+
+    const first = persistSelectionWithDraftCleanup({ ...callbacks, persistedAnnotationId: null })
+    expect(first).toEqual({ status: 'failed', persistedAnnotationId: craft.id })
+    expect(readReportAnnotationDraft(taskId, versionId, storage)?.persistedAnnotationId).toBe(craft.id)
+    expect(readReportAnnotations(taskId, versionId, storage)).toEqual([])
+
+    failAnnotationWrite = false
+    expect(persistSelectionWithDraftCleanup({ ...callbacks, persistedAnnotationId: first.persistedAnnotationId })).toEqual({
+      status: 'complete', persistedAnnotationId: null,
+    })
+    expect(readReportAnnotations(taskId, versionId, storage).map(item => item.id)).toEqual([craft.id])
+    expect(readReportAnnotationDraft(taskId, versionId, storage)).toBeNull()
+  })
+
   test('restores an unfinished selection and note only for its report version', () => {
     const storage = memoryStorage()
     const selector = createTextSelector('甲重复原文乙', 1, 5)
@@ -60,6 +133,14 @@ describe('report annotation drafts', () => {
     expect(readReportAnnotationDraft(taskId, otherVersion, storage)).toBeNull()
     writeReportAnnotationDraft(taskId, versionId, null, storage)
     expect(readReportAnnotationDraft(taskId, versionId, storage)).toBeNull()
+  })
+
+  test('restores the persisted annotation identity after draft cleanup fails', () => {
+    const storage = memoryStorage()
+    const selector = createTextSelector('甲重复原文乙', 1, 5)
+    const persistedAnnotationId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    writeReportAnnotationDraft(taskId, versionId, { selector, note: '已保存但清理失败', persistedAnnotationId }, storage)
+    expect(readReportAnnotationDraft(taskId, versionId, storage)).toEqual({ selector, note: '已保存但清理失败', persistedAnnotationId })
   })
 
   test('reports unavailable storage so the editor can retain unsaved input', () => {
@@ -90,10 +171,51 @@ describe('report annotation drafts', () => {
     const second = annotation('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', '意见 B', 3)
     const built = buildReviewCommand(taskId, versionId, [first, second])
     writeReportAnnotations(taskId, versionId, [first, { ...second, note: '发送期间的新编辑', updatedAt: 4 }], storage)
+    writeReportAnnotationDraft(taskId, versionId, { selector: first.selector, note: first.note, persistedAnnotationId: first.id }, storage)
     writeReportAnnotations(taskId, otherVersion, [{ ...first, versionId: otherVersion }], storage)
-    clearAcceptedAnnotations(built.review, built.content, storage)
+    expect(clearAcceptedAnnotations(built.review, built.content, storage)).toBe(true)
     expect(readReportAnnotations(taskId, versionId, storage).map(item => item.id)).toEqual([second.id])
+    expect(readReportAnnotationDraft(taskId, versionId, storage)).toBeNull()
     expect(readReportAnnotations(taskId, otherVersion, storage)).toHaveLength(1)
+  })
+
+  test('keeps accepted annotations visible when their storage cleanup fails', () => {
+    const stored = memoryStorage()
+    const first = annotation('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', '意见 A')
+    const second = annotation('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', '意见 B')
+    const built = buildReviewCommand(taskId, versionId, [first])
+    writeReportAnnotations(taskId, versionId, [first, second], stored)
+    const unavailable = {
+      getItem: stored.getItem,
+      removeItem: stored.removeItem,
+      setItem: (key: string, value: string) => {
+        if (key === annotationStorageKey(taskId, versionId)) throw new Error('unavailable')
+        stored.setItem(key, value)
+      },
+    }
+
+    expect(clearAcceptedAnnotations(built.review, built.content, unavailable)).toBe(false)
+    expect(readReportAnnotations(taskId, versionId, stored).map(item => item.id)).toEqual([first.id, second.id])
+  })
+
+  test('does not remove an accepted annotation when its matching persisted draft cannot be cleared', () => {
+    const stored = memoryStorage()
+    const first = annotation('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', '意见 A')
+    const built = buildReviewCommand(taskId, versionId, [first])
+    writeReportAnnotations(taskId, versionId, [first], stored)
+    writeReportAnnotationDraft(taskId, versionId, { selector: first.selector, note: first.note, persistedAnnotationId: first.id }, stored)
+    const unavailable = {
+      getItem: stored.getItem,
+      setItem: stored.setItem,
+      removeItem: (key: string) => {
+        if (key === annotationDraftStorageKey(taskId, versionId)) throw new Error('unavailable')
+        stored.removeItem(key)
+      },
+    }
+
+    expect(clearAcceptedAnnotations(built.review, built.content, unavailable)).toBe(false)
+    expect(readReportAnnotations(taskId, versionId, stored)).toEqual([first])
+    expect(readReportAnnotationDraft(taskId, versionId, stored)?.persistedAnnotationId).toBe(first.id)
   })
 
   test('finds the latest successful report without rewriting the requested version', () => {

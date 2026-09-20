@@ -1,0 +1,119 @@
+/*
+ * Adapted from packages/ui/src/components/annotations/AnnotationOverlayLayer.tsx in Craft Agents OSS v0.13.3 at
+ * e8963854c3679edcceb105a42537a06749e6cb64.
+ * Copyright 2026 Craft Docs Ltd. Licensed under Apache-2.0.
+ * Local changes: use the local AnnotationV1 type, native title tooltips, and the shared Craft button reset.
+ */
+import * as React from 'react'
+import type { AnnotationV1 } from './types'
+import { cn } from '../../lib/utils'
+import { getAnnotationRectVisual, getAnnotationChipVisual } from './annotation-style-tokens'
+import { getAnnotationChipInteraction } from './interaction-policy'
+import type { AnnotationOverlayRect } from './annotation-core'
+import type { AnnotationOverlayChip } from './annotation-overlay-geometry'
+
+export interface AnnotationOverlayLayerProps {
+  rects: AnnotationOverlayRect[]
+  chips: AnnotationOverlayChip[]
+  annotations?: AnnotationV1[]
+  getTooltipText?: (annotation: AnnotationV1, index: number) => string
+  /** Whether clicking a chip should open the annotation island/details view. */
+  allowChipOpen?: boolean
+  onChipOpen: (params: { annotationId: string; index: number; anchorX: number; anchorY: number; mode: 'view' }) => void
+}
+
+export function AnnotationOverlayLayer({
+  rects,
+  chips,
+  annotations,
+  getTooltipText,
+  allowChipOpen = true,
+  onChipOpen,
+}: AnnotationOverlayLayerProps) {
+  const annotationMap = React.useMemo(() => {
+    return new Map((annotations ?? []).map((annotation) => [annotation.id, annotation]))
+  }, [annotations])
+
+  if (rects.length === 0 && chips.length === 0) {
+    return null
+  }
+
+  return (
+    <div data-ca-annotation-overlay className="pointer-events-none absolute inset-0 z-[2]">
+      {rects.map((rect, idx) => {
+        const rectVisual = getAnnotationRectVisual(rect)
+
+        return (
+          <div
+            key={`rect-${rect.id}-${idx}`}
+            className={rectVisual.className}
+            style={{
+              left: rect.left - 4,
+              top: rect.top - 1,
+              width: rect.width + 8,
+              height: rect.height + 2,
+              backgroundColor: rect.color,
+              borderRadius: '4px',
+              ...rectVisual.style,
+            }}
+          />
+        )
+      })}
+
+      {chips.map((chip) => {
+        const chipVisual = getAnnotationChipVisual(chip)
+        const chipAnnotation = annotationMap.get(chip.id) ?? null
+        const interaction = getAnnotationChipInteraction(chipAnnotation)
+        const tooltipText = chipAnnotation && getTooltipText ? getTooltipText(chipAnnotation, chip.index) : ''
+
+        const canOpenChip = allowChipOpen && interaction.clickable
+
+        const chipButton = (
+          <button
+            data-craft-button
+            type="button"
+            data-ca-annotation-id={chip.id}
+            data-ca-annotation-index={String(chip.index)}
+            aria-disabled={!canOpenChip}
+            title={tooltipText || undefined}
+            onClick={canOpenChip ? (event) => {
+              const rect = event.currentTarget.getBoundingClientRect()
+              onChipOpen({
+                annotationId: chip.id,
+                index: chip.index,
+                anchorX: rect.left + rect.width / 2,
+                anchorY: rect.top - 8,
+                mode: interaction.openMode,
+              })
+            } : undefined}
+            className={cn(chipVisual.className, !canOpenChip && 'cursor-default')}
+            style={{
+              left: chip.left,
+              top: chip.top,
+              transform: 'translate(-2px, -8px)',
+              minWidth: '16px',
+              height: '15px',
+              padding: '0 3px',
+              borderRadius: '4px',
+              fontSize: '10px',
+              fontWeight: '600',
+              lineHeight: '15px',
+              textAlign: 'center',
+              userSelect: 'none',
+              position: 'absolute',
+              ...chipVisual.style,
+            }}
+          >
+            {chip.sentFollowUp ? 'i' : chip.index}
+          </button>
+        )
+
+        return (
+          <React.Fragment key={`chip-${chip.id}`}>
+            {chipButton}
+          </React.Fragment>
+        )
+      })}
+    </div>
+  )
+}

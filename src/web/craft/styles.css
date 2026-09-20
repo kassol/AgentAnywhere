@@ -1,7 +1,9 @@
 /*
  * Tailwind theme mapping for the Craft Agents OSS components migrated at
- * e8963854c3679edcceb105a42537a06749e6cb64. Preflight is intentionally omitted
- * so the existing AgentAnywhere A-shell remains the global styling authority.
+ * e8963854c3679edcceb105a42537a06749e6cb64. Copyright 2026 Craft Docs Ltd.
+ * Licensed under Apache-2.0. Local changes: omit preflight so the existing
+ * AgentAnywhere A-shell remains the global styling authority; map only tokens
+ * and shared utilities used by the migrated browser components.
  */
 @layer theme, components, utilities;
 @import "tailwindcss/theme.css" layer(theme);
@@ -38,7 +40,18 @@
     border: 0;
     background: transparent;
     color: inherit;
-    font: inherit;
+    font-family: inherit;
+  }
+
+  [data-slot="button"],
+  [data-slot="input"],
+  [data-slot="textarea"],
+  [data-slot="select-trigger"],
+  [data-slot="select-scroll-up-button"],
+  [data-slot="select-scroll-down-button"],
+  [data-slot="switch"],
+  [data-slot="settings-secret-toggle"] {
+    font-family: inherit;
   }
 
   [role="textbox"][contenteditable="true"] {
@@ -48,6 +61,28 @@
 
   [role="textbox"][contenteditable="true"]:focus-visible {
     outline: none;
+  }
+
+  /* packages/ui/src/styles/index.css:401-423 at the pinned Craft source. */
+  .shadow-tinted {
+    --shadow-color: 0, 0, 0;
+    box-shadow:
+      rgba(var(--shadow-color), 0) 0 0 0 0,
+      rgba(var(--shadow-color), 0) 0 0 0 0,
+      rgba(var(--shadow-color), calc(var(--shadow-border-opacity) * 1.5)) 0 0 0 1px,
+      rgba(var(--shadow-color), var(--shadow-border-opacity)) 0 1px 1px -.5px,
+      rgba(var(--shadow-color), var(--shadow-blur-opacity)) 0 3px 3px -1.5px,
+      rgba(var(--shadow-color), calc(var(--shadow-blur-opacity) * .67)) 0 6px 6px -3px;
+  }
+
+  :root[data-theme='dark'] .shadow-tinted {
+    box-shadow:
+      rgba(var(--shadow-color), 0) 0 0 0 0,
+      rgba(var(--shadow-color), 0) 0 0 0 0,
+      rgba(var(--shadow-color), calc(var(--shadow-border-opacity) * 3)) 0 0 0 1px,
+      rgba(var(--shadow-color), 0) 0 1px 1px -.5px,
+      rgba(var(--shadow-color), 0) 0 3px 3px -1.5px,
+      rgba(var(--shadow-color), 0) 0 6px 6px -3px;
   }
 
   .spinner {

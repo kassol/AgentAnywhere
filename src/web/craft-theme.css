@@ -38,9 +38,12 @@
   --accent: oklch(0.62 0.13 293);
   --accent-rgb: 104, 78, 133;
   --info: oklch(0.75 0.16 70);
+  --info-rgb: 180, 120, 40;
   --success: oklch(0.55 0.17 145);
   --destructive: oklch(0.58 0.24 28);
   --danger: var(--destructive);
+  --shadow-border-opacity: 0.08;
+  --shadow-blur-opacity: 0.06;
 
   --foreground-2: color-mix(in srgb, var(--foreground) 2%, var(--background));
   --foreground-5: color-mix(in srgb, var(--foreground) 5%, var(--background));
@@ -82,9 +85,12 @@
   --accent: oklch(0.65 0.22 293);
   --accent-rgb: 130, 75, 185;
   --info: oklch(0.78 0.14 70);
+  --info-rgb: 200, 140, 60;
   --success: oklch(0.60 0.17 145);
   --destructive: oklch(0.65 0.22 28);
   --danger: var(--destructive);
+  --shadow-border-opacity: 0.15;
+  --shadow-blur-opacity: 0.12;
   --shadow: rgba(0, 0, 0, 0.24);
 }
 

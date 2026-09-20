@@ -231,20 +231,17 @@
   scrollbar-width: thin;
 }
 
-.work-preview-versions button {
+.work-preview-versions .work-preview-version-button {
   flex: 0 0 auto;
   min-height: 29px;
   padding: 4px 8px;
-  border: 0;
   border-radius: 5px;
-  background: transparent;
   color: var(--muted);
-  cursor: pointer;
   font-size: 10px;
   line-height: 1.1;
 }
 
-.work-preview-versions button[aria-pressed='true'] {
+.work-preview-versions .work-preview-version-button[aria-pressed='true'] {
   background: var(--panel);
   color: var(--foreground);
   box-shadow: 0 1px 3px var(--shadow);
@@ -270,23 +267,10 @@
   max-width: 54ch;
 }
 
-.work-preview-review-tools button {
+.work-preview-review-tools [data-craft-button] {
   flex: 0 0 auto;
-  min-height: 32px;
   margin: 0;
-  padding: 0 9px;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: transparent;
-  color: var(--muted);
-  cursor: pointer;
   font-size: 10px;
-  font-weight: 600;
-}
-
-.work-preview-review-tools button:hover {
-  border-color: var(--border-strong);
-  color: var(--foreground);
 }
 
 .work-preview-report {
@@ -412,7 +396,7 @@
   }
 
   .work-preview-back,
-  .work-preview-versions button {
+  .work-preview-versions .work-preview-version-button {
     min-height: 44px;
   }
 
@@ -442,7 +426,7 @@
     flex-direction: column;
   }
 
-  .work-preview-review-tools button {
+  .work-preview-review-tools [data-craft-button] {
     min-height: 44px;
   }
 

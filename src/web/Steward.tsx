@@ -114,14 +114,14 @@ export function Steward({ fillRequest, onFillRequestHandled }: { fillRequest?: {
     if (routeId) setDetail(next)
     const pending = composerRef.current.pending
     if (pending && next.turns.some(turn => turn.requestId === pending.turnRequestId)) {
-      clearAcceptedAnnotations(pending.review, pending.content)
+      const annotationsCleared = clearAcceptedAnnotations(pending.review, pending.content)
       const accepted = acceptComposerSubmission(composerRef.current, pending)
       if (!routeId) {
         writeComposerState(null, { draft: { content: '', revision: 0 } })
         writeComposerState(id, accepted)
         location.assign(`/steward/${id}`)
       } else storeComposer(accepted, id)
-      setError('')
+      setError(annotationsCleared ? '' : '消息已发送，但浏览器无法清理已接受批注；请在报告中删除已提交的批注。')
     }
   }
 
@@ -234,7 +234,7 @@ export function Steward({ fillRequest, onFillRequestHandled }: { fillRequest?: {
         }
         throw new Error((await response.json()).error ?? '发送失败')
       }
-      clearAcceptedAnnotations(request.review, request.content)
+      const annotationsCleared = clearAcceptedAnnotations(request.review, request.content)
       const accepted = acceptComposerSubmission(composerRef.current, request)
       if (!routeId) {
         writeComposerState(null, { draft: { content: '', revision: 0 } })
@@ -243,6 +243,7 @@ export function Steward({ fillRequest, onFillRequestHandled }: { fillRequest?: {
       } else {
         storeComposer(accepted, id)
         await loadDetail(id)
+        setError(annotationsCleared ? '' : '消息已发送，但浏览器无法清理已接受批注；请在报告中删除已提交的批注。')
       }
     } catch (caught) { setError(`${caught instanceof Error ? caught.message : '发送失败'}；${outcomeUnknown ? '结果尚未确认，请核对并重试。' : '草稿已保留，请更正后重试。'}`) }
     finally { setBusy(false) }
@@ -356,8 +357,8 @@ export function Steward({ fillRequest, onFillRequestHandled }: { fillRequest?: {
         {reviewConflict && <div className="review-version-conflict" role="alertdialog" aria-labelledby="review-version-conflict-title">
           <strong id="review-version-conflict-title">这项工作已有新版报告</strong>
           <p>批注固定在版本 {reviewConflict.versionId}；当前最新版本为 {reviewConflict.latestVersionId}。继续后仍修改原版本。</p>
-          <div><button type="button" className="secondary" onClick={() => setReviewConflict(null)}>取消并保留草稿</button>
-            <button type="button" onClick={() => void submit(reviewConflict)}>继续修改原版本</button></div>
+          <div><Button type="button" variant="outline" size="sm" onClick={() => setReviewConflict(null)}>取消并保留草稿</Button>
+            <Button type="button" size="sm" onClick={() => void submit(reviewConflict)}>继续修改原版本</Button></div>
         </div>}
       </section>
     </div>

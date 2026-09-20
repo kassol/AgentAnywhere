@@ -5,10 +5,11 @@
  *
  * AgentAnywhere renders the original document surface inside the A workspace's
  * right panel. Portal, Electron window controls, file actions, copy, and Craft's
- * annotation model are omitted; the local safe Markdown renderer and existing
- * version-bound review controls are passed in by WorkPreview.
+ * annotation data is adapted at the WorkPreview boundary; the full-screen
+ * min-height/vertical centering is removed for this embedded surface. The local
+ * safe Markdown renderer and existing version-bound review controls are retained.
  */
-import { useEffect, type MouseEventHandler, type ReactNode, type Ref } from 'react'
+import { useEffect, type ReactNode, type Ref } from 'react'
 import { ListTodo } from 'lucide-react'
 import { cn } from '../lib/utils'
 
@@ -26,7 +27,6 @@ export interface DocumentFormattedMarkdownOverlayProps {
   documentRef?: Ref<HTMLElement>
   documentClassName?: string
   documentAriaLabel?: string
-  onDocumentMouseUp?: MouseEventHandler<HTMLElement>
 }
 
 export function DocumentFormattedMarkdownOverlay({
@@ -43,7 +43,6 @@ export function DocumentFormattedMarkdownOverlay({
   documentRef,
   documentClassName,
   documentAriaLabel,
-  onDocumentMouseUp,
 }: DocumentFormattedMarkdownOverlayProps) {
   useEffect(() => {
     if (!isOpen) return
@@ -57,7 +56,7 @@ export function DocumentFormattedMarkdownOverlay({
   if (!isOpen) return null
 
   return (
-    <div className="min-h-full flex flex-col justify-center px-0 py-2 sm:px-6 sm:py-8">
+    <div className="flex flex-col px-0 py-2 sm:px-6 sm:py-8">
       {error && (
         <div className="w-full max-w-[960px] mx-auto mb-3 px-4 py-3 rounded-[10px] bg-destructive/5 text-destructive" role="alert">
           <strong className="text-[13px]">报告读取失败</strong>
@@ -65,7 +64,7 @@ export function DocumentFormattedMarkdownOverlay({
         </div>
       )}
 
-      <div className="bg-background rounded-[16px] shadow-middle w-full max-w-[960px] h-fit mx-auto my-auto">
+      <div className="bg-background rounded-[16px] shadow-middle w-full max-w-[960px] h-fit mx-auto">
         {variant === 'plan' && (
           <div className="px-4 py-2 border-b border-border/30 flex items-center gap-2 bg-success/5 rounded-t-[16px]">
             <ListTodo className="w-3 h-3 text-success" />
@@ -82,7 +81,6 @@ export function DocumentFormattedMarkdownOverlay({
               data-task-id={sessionId}
               data-report-version={messageId}
               aria-label={documentAriaLabel}
-              onMouseUp={onDocumentMouseUp}
             >
               {renderMarkdown(content)}
             </article>

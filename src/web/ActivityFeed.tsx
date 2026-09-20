@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, useState, type ReactNode, type UIEvent } from 'react'
 import { ActivityRow, type ActivityItem } from './craft/components/TurnCard'
+import { Button } from './craft/components/Button'
 
 export type ActivityEvent = {
   serverSeq: number
@@ -185,6 +186,6 @@ export function StableScroll({ storageKey, revision, className, children }: { st
 
   return <div className="stable-scroll-region">
     <div ref={ref} className={className} onScroll={remember} aria-live="polite">{children}</div>
-    {away && <button type="button" className="return-latest" onClick={latest}>回到最新内容 ↓</button>}
+    {away && <Button type="button" variant="outline" size="sm" className="return-latest rounded-full shadow-middle" onClick={latest}>回到最新内容 ↓</Button>}
   </div>
 }

@@ -4,15 +4,20 @@
  * e8963854c3679edcceb105a42537a06749e6cb64.
  * Copyright 2026 Craft Docs Ltd. Licensed under Apache-2.0.
  */
-import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 import { ChevronLeft } from 'lucide-react'
 import { ReportMarkdown, selectReportVersion } from './Work'
-import { buildReviewCommand, captureTextControlSelection, captureTextSelection, readReportAnnotationDraft, readReportAnnotations, selectorStatus,
+import { buildReviewCommand, captureTextControlSelection, fromCraftAnnotation, fromCraftSelection, readReportAnnotationDraft, readReportAnnotations, selectorStatus,
+  toCraftAnnotation, toCraftSelection,
   writeReportAnnotationDraft, writeReportAnnotations,
-  type ReportAnnotation, type ReviewContext, type TextQuoteSelector } from './ReviewAnnotations'
+  type ReportAnnotation, type ReportAnnotationDraft, type ReviewContext } from './ReviewAnnotations'
 import { Button } from './craft/components/Button'
+import { Textarea } from './craft/components/Textarea'
+import { AnnotatableMarkdownDocument } from './craft/components/AnnotatableMarkdownDocument'
 import { DocumentFormattedMarkdownOverlay } from './craft/components/DocumentFormattedMarkdownOverlay'
 import { PreviewHeader, PreviewHeaderBadge } from './craft/components/PreviewHeader'
+import { getCanonicalText } from './craft/components/annotations/annotation-core'
+import type { AnnotationV1 } from './craft/components/annotations/types'
 import './work-preview.css'
 import './review-annotations.css'
 
@@ -167,11 +172,19 @@ function WorkPreview({ selection, onSelect, onClose, onFillComposer }: { selecti
   const closeButton = useRef<HTMLButtonElement>(null)
   const frame = useRef<number>()
   const [annotations, setAnnotations] = useState<ReportAnnotation[]>([])
-  const [pendingSelection, setPendingSelection] = useState<TextQuoteSelector | null>(null)
-  const [note, setNote] = useState('')
+  const [restoredDraft, setRestoredDraft] = useState<ReportAnnotationDraft | null>(null)
+  const [draftSnapshot, setDraftSnapshot] = useState<ReportAnnotationDraft | null>(null)
+  const [keyboardSelectionRequest, setKeyboardSelectionRequest] = useState<{
+    selection: ReturnType<typeof toCraftSelection>; note: string; nonce: number
+  } | null>(null)
   const [annotationError, setAnnotationError] = useState('')
   const [keyboardReportText, setKeyboardReportText] = useState<string | null>(null)
   const [renderedReportText, setRenderedReportText] = useState<{ versionId: string; text: string } | null>(null)
+
+  function reportCanonicalText() {
+    const root = reportRoot.current?.querySelector<HTMLElement>('[data-ca-annotatable-content]')
+    return root ? getCanonicalText(root) : ''
+  }
 
   useEffect(() => { closeButton.current?.focus() }, [])
   useEffect(() => {
@@ -228,7 +241,7 @@ function WorkPreview({ selection, onSelect, onClose, onFillComposer }: { selecti
 
   useLayoutEffect(() => {
     if (!report || report.versionId !== artifact?.versionId || !reportRoot.current) setRenderedReportText(null)
-    else setRenderedReportText({ versionId: report.versionId, text: reportRoot.current.textContent ?? '' })
+    else setRenderedReportText({ versionId: report.versionId, text: reportCanonicalText() })
   }, [artifact?.versionId, report?.versionId])
 
   useEffect(() => {
@@ -254,11 +267,12 @@ function WorkPreview({ selection, onSelect, onClose, onFillComposer }: { selecti
   useEffect(() => {
     setAnnotationError('')
     setKeyboardReportText(null)
-    if (!artifact) { setAnnotations([]); setPendingSelection(null); setNote(''); return }
+    setKeyboardSelectionRequest(null)
+    if (!artifact) { setAnnotations([]); setRestoredDraft(null); setDraftSnapshot(null); return }
     setAnnotations(readReportAnnotations(selection.taskId, artifact.versionId))
     const draft = readReportAnnotationDraft(selection.taskId, artifact.versionId)
-    setPendingSelection(draft?.selector ?? null)
-    setNote(draft?.note ?? '')
+    setRestoredDraft(draft)
+    setDraftSnapshot(draft)
     const accepted = (event: Event) => {
       const detail = (event as CustomEvent<{ taskId?: string; versionId?: string; annotations?: { id: string; updatedAt: number }[] }>).detail
       if (detail?.taskId === selection.taskId && detail.versionId === artifact.versionId && Array.isArray(detail.annotations)) {
@@ -270,26 +284,8 @@ function WorkPreview({ selection, onSelect, onClose, onFillComposer }: { selecti
     return () => removeEventListener('agentanywhere:report-annotations-accepted', accepted)
   }, [selection.taskId, artifact?.versionId])
 
-  function acceptReportSelector(selector: TextQuoteSelector) {
-    if (selector.exact.length > 4000) {
-      setAnnotationError('单条引用最多 4000 个字符，请缩小选区。')
-      return false
-    }
-    if (pendingSelection && !confirmAnnotationReplacement(note)) return false
-    setPendingSelection(selector)
-    setNote('')
-    const stored = artifact && writeReportAnnotationDraft(selection.taskId, artifact.versionId, { selector, note: '' })
-    setAnnotationError(stored ? '' : '浏览器无法保存批注草稿；当前选区仍保留，请勿刷新或切换版本。')
-    return true
-  }
-
-  function selectReportText() {
-    const selector = reportRoot.current ? captureTextSelection(reportRoot.current) : null
-    if (selector) acceptReportSelector(selector)
-  }
-
   function openKeyboardSelection() {
-    setKeyboardReportText(reportRoot.current?.textContent ?? '')
+    setKeyboardReportText(reportCanonicalText())
     requestAnimationFrame(() => keyboardSelection.current?.focus())
   }
 
@@ -300,43 +296,13 @@ function WorkPreview({ selection, onSelect, onClose, onFillComposer }: { selecti
       setAnnotationError('请先在报告纯文本中选择要引用的文字。')
       return
     }
-    if (acceptReportSelector(selector)) setKeyboardReportText(null)
-  }
-
-  function changeAnnotationNote(value: string) {
-    setNote(value)
-    if (artifact && pendingSelection && !writeReportAnnotationDraft(selection.taskId, artifact.versionId, { selector: pendingSelection, note: value })) {
-      setAnnotationError('浏览器无法保存批注草稿；当前意见仍保留，请勿刷新或切换版本。')
-    } else setAnnotationError('')
-  }
-
-  function cancelAnnotation() {
-    if (artifact && !writeReportAnnotationDraft(selection.taskId, artifact.versionId, null)) {
-      setAnnotationError('浏览器无法清除批注草稿，请重试。')
+    if (selector.exact.length > 4000) {
+      setAnnotationError('单条引用最多 4000 个字符，请缩小选区。')
       return
     }
-    setPendingSelection(null)
-    setNote('')
-  }
-
-  function addAnnotation(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    if (!artifact || !pendingSelection || !note.trim()) return
-    const now = Date.now()
-    const next = [...annotations, { id: crypto.randomUUID(), taskId: selection.taskId, versionId: artifact.versionId,
-      quote: pendingSelection.exact, note: note.trim(), selector: pendingSelection, createdAt: now, updatedAt: now }]
-    if (!writeReportAnnotations(selection.taskId, artifact.versionId, next)) {
-      setAnnotationError('浏览器无法保存批注；所选原文和意见仍保留，请重试。')
-      return
-    }
-    setAnnotations(next)
-    if (!writeReportAnnotationDraft(selection.taskId, artifact.versionId, null)) {
-      setAnnotationError('批注已保存，但临时草稿无法清除；请重试取消。')
-      return
-    }
-    setPendingSelection(null)
-    setNote('')
-    getSelection()?.removeAllRanges()
+    if (draftSnapshot && !confirmAnnotationReplacement(draftSnapshot.note)) return
+    setKeyboardSelectionRequest({ selection: toCraftSelection(selector), note: '', nonce: Date.now() })
+    setKeyboardReportText(null)
   }
 
   function removeAnnotation(annotationId: string) {
@@ -348,6 +314,79 @@ function WorkPreview({ selection, onSelect, onClose, onFillComposer }: { selecti
     }
     setAnnotations(next)
     setAnnotationError('')
+  }
+
+  function persistCraftDraft(selectionValue: Parameters<typeof fromCraftSelection>[0], nextNote: string, persistedAnnotationId?: string) {
+    if (!artifact) return false
+    const draft = { selector: fromCraftSelection(selectionValue), note: nextNote, ...(persistedAnnotationId ? { persistedAnnotationId } : {}) }
+    setRestoredDraft(null)
+    setDraftSnapshot(draft)
+    if (!writeReportAnnotationDraft(selection.taskId, artifact.versionId, draft)) {
+      setAnnotationError('浏览器无法保存批注草稿；当前意见仍保留，请勿刷新或切换版本。')
+      return false
+    }
+    setAnnotationError('')
+    return true
+  }
+
+  function clearCraftDraft() {
+    if (!artifact) return false
+    if (!writeReportAnnotationDraft(selection.taskId, artifact.versionId, null)) {
+      setAnnotationError('浏览器无法清除批注草稿，请重试。')
+      return false
+    }
+    setRestoredDraft(null)
+    setDraftSnapshot(null)
+    return true
+  }
+
+  function addCraftAnnotation(_messageId: string, annotation: AnnotationV1) {
+    if (!artifact) return false
+    const local = fromCraftAnnotation(selection.taskId, artifact.versionId, annotation)
+    if (!local) return false
+    if (local.quote.length > 4000) {
+      setAnnotationError('单条引用最多 4000 个字符，请缩小选区。')
+      return false
+    }
+    const next = annotations.some(item => item.id === local.id)
+      ? annotations.map(item => item.id === local.id ? { ...local, createdAt: item.createdAt } : item)
+      : [...annotations, local]
+    if (!writeReportAnnotations(selection.taskId, artifact.versionId, next)) {
+      setAnnotationError('浏览器无法保存批注；所选原文和意见仍保留，请重试。')
+      return false
+    }
+    setAnnotations(next)
+    setAnnotationError('')
+    return true
+  }
+
+  function updateCraftAnnotation(_messageId: string, annotationId: string, patch: Partial<AnnotationV1>) {
+    if (!artifact) return false
+    const index = annotations.findIndex(annotation => annotation.id === annotationId)
+    if (index < 0) return false
+    const current = toCraftAnnotation(annotations[index])
+    const local = fromCraftAnnotation(selection.taskId, artifact.versionId, { ...current, ...patch, id: annotationId })
+    if (!local) return false
+    const next = annotations.map((annotation, itemIndex) => itemIndex === index ? local : annotation)
+    if (!writeReportAnnotations(selection.taskId, artifact.versionId, next)) {
+      setAnnotationError('浏览器无法更新批注，原批注仍保留，请重试。')
+      return false
+    }
+    setAnnotations(next)
+    setAnnotationError('')
+    return true
+  }
+
+  function removeCraftAnnotation(_messageId: string, annotationId: string) {
+    if (!artifact) return false
+    const next = annotations.filter(annotation => annotation.id !== annotationId)
+    if (!writeReportAnnotations(selection.taskId, artifact.versionId, next)) {
+      setAnnotationError('浏览器无法删除批注，请重试。')
+      return false
+    }
+    setAnnotations(next)
+    setAnnotationError('')
+    return true
   }
 
   function summarizeAnnotations() {
@@ -367,6 +406,8 @@ function WorkPreview({ selection, onSelect, onClose, onFillComposer }: { selecti
   const reports = task?.artifacts.filter(item => item.kind === 'report') ?? []
   const attachments = task?.artifacts.filter(item => item.kind === 'attachment' && item.runId === artifact?.runId) ?? []
   const independentVersion = selection.versionId ?? artifact?.versionId
+  const renderedText = renderedReportText && renderedReportText.versionId === artifact?.versionId ? renderedReportText.text : ''
+  const craftAnnotations = annotations.filter(annotation => selectorStatus(renderedText, annotation.selector) === 'exact').map(toCraftAnnotation)
   const previewTitle = task ? task.goal || task.sourceUrl || `工作 ${task.id.slice(0, 8)}` : '正在读取工作…'
   return <aside className="work-preview" aria-labelledby="work-preview-title">
     <PreviewHeader className="min-h-[62px] py-[10px] px-[13px] gap-[11px] border-b border-border" height={62}
@@ -391,10 +432,11 @@ function WorkPreview({ selection, onSelect, onClose, onFillComposer }: { selecti
           </p>}
         </section>
         {!!reports.length && <div className="work-preview-toolbar"><nav className="work-preview-versions" aria-label="报告版本">
-            {reports.map((item, index) => <button key={item.versionId} type="button" aria-pressed={artifact?.versionId === item.versionId}
+            {reports.map((item, index) => <Button key={item.versionId} type="button" variant="ghost" size="sm"
+              className="work-preview-version-button" aria-pressed={artifact?.versionId === item.versionId}
               onClick={() => onSelect({ taskId: task.id, versionId: item.versionId })}>
               第 {reports.length - index} 版 <small>{new Date(item.createdAt).toLocaleString('zh-CN')}</small>
-            </button>)}
+            </Button>)}
           </nav>{artifact && <a href={`/api/artifacts/${artifact.versionId}/download`}>下载 .md</a>}</div>}
         {versionError && <p className="error work-preview-version-error" role="alert">{versionError}</p>}
         {!versionError && !artifact && <p className="muted">这项工作尚无可读报告。</p>}
@@ -409,40 +451,46 @@ function WorkPreview({ selection, onSelect, onClose, onFillComposer }: { selecti
             messageId={artifact.versionId}
             documentRef={reportRoot}
             documentAriaLabel="报告正文，可用鼠标选择文字添加批注"
-            onDocumentMouseUp={selectReportText}
-            renderMarkdown={content => <ReportMarkdown markdown={content} />}
+            renderMarkdown={content => <AnnotatableMarkdownDocument
+              content={content}
+              messageId={artifact.versionId}
+              sessionId={task.id}
+              annotations={craftAnnotations}
+              renderMarkdown={markdown => <ReportMarkdown markdown={markdown} />}
+              onAddAnnotation={addCraftAnnotation}
+              onUpdateAnnotation={updateCraftAnnotation}
+              onRemoveAnnotation={removeCraftAnnotation}
+              onDraftChange={persistCraftDraft}
+              onDraftClear={clearCraftDraft}
+              restoreDraft={restoredDraft ? { selection: toCraftSelection(restoredDraft.selector), note: restoredDraft.note,
+                persistedAnnotationId: restoredDraft.persistedAnnotationId } : null}
+              openSelectionRequest={keyboardSelectionRequest}
+            />}
             beforeContent={<>
               <div className="work-preview-review-tools"><p className="review-hint">选中文字即可批注。批注保存在当前浏览器，并固定到此报告版本。</p>
-                <button type="button" className="secondary" onClick={openKeyboardSelection}>键盘选择引用</button></div>
+                <Button type="button" variant="outline" size="sm" onClick={openKeyboardSelection}>键盘选择引用</Button></div>
               {keyboardReportText !== null && <section className="review-selection" aria-label="键盘选择报告引用">
                 <strong>选择报告文字</strong>
-                <label>报告纯文本<textarea ref={keyboardSelection} readOnly rows={8} value={keyboardReportText}
+                <label>报告纯文本<Textarea ref={keyboardSelection} readOnly rows={8} value={keyboardReportText}
                   onKeyDown={event => {
                     if (event.key !== 'Enter' || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey || event.nativeEvent.isComposing) return
                     event.preventDefault()
                     selectKeyboardReportText()
                   }} /></label>
                 <p className="review-hint">用 Shift + 方向键扩选，按 Enter 或使用下方按钮确认。</p>
-                <div><button type="button" onClick={selectKeyboardReportText}>为所选文字写批注</button>
-                  <button type="button" className="secondary" onClick={() => setKeyboardReportText(null)}>关闭</button></div>
+                <div><Button type="button" size="sm" onClick={selectKeyboardReportText}>为所选文字写批注</Button>
+                  <Button type="button" variant="outline" size="sm" onClick={() => setKeyboardReportText(null)}>关闭</Button></div>
               </section>}
             </>}
             afterContent={<>
-              {pendingSelection && <form className="review-selection" onSubmit={addAnnotation}>
-                <strong>为所选文字添加批注</strong>
-                <blockquote>{pendingSelection.exact}</blockquote>
-                <label>意见<textarea autoFocus rows={3} maxLength={2000} required value={note} onChange={event => changeAnnotationNote(event.target.value)} /></label>
-                <div><button type="submit" disabled={!note.trim()}>保存批注</button>
-                  <button type="button" className="secondary" onClick={cancelAnnotation}>取消</button></div>
-              </form>}
               {!!annotations.length && <section className="review-annotations" aria-label="未发送批注">
-                <header><h3>未发送批注（{annotations.length}）</h3><button type="button" onClick={summarizeAnnotations}>汇总到聊天框</button></header>
+                <header><h3>未发送批注（{annotations.length}）</h3><Button type="button" size="sm" onClick={summarizeAnnotations}>汇总到聊天框</Button></header>
                 {annotations.map((annotation, index) => <article key={annotation.id}>
                   <div><strong>批注 {index + 1}</strong><small>{selectorStatus(
                     renderedReportText?.versionId === artifact.versionId ? renderedReportText.text : '', annotation.selector) === 'exact'
                     ? '原文位置已确认' : '原文位置无法确认，保留引用'}</small></div>
                   <blockquote>{annotation.quote}</blockquote><p>{annotation.note}</p>
-                  <button type="button" className="secondary" onClick={() => removeAnnotation(annotation.id)}>删除</button>
+                  <Button type="button" className="review-annotation-delete" variant="outline" size="sm" onClick={() => removeAnnotation(annotation.id)}>删除</Button>
                 </article>)}
               </section>}
               {annotationError && <p className="error" role="alert">{annotationError}</p>}

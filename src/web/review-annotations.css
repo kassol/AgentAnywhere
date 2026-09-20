@@ -24,7 +24,6 @@
   margin-top: 24px;
 }
 
-.work-preview-report + .review-selection,
 .work-preview-report + .review-annotations,
 .review-selection + .review-annotations {
   margin-top: 26px;
@@ -37,7 +36,6 @@
   font-weight: 650;
 }
 
-.review-selection blockquote,
 .review-annotations blockquote {
   margin: 0;
   padding: 9px 10px;
@@ -58,11 +56,9 @@
   font-weight: 650;
 }
 
-.review-selection textarea {
+.review-selection [data-slot='textarea'] {
   width: 100%;
-  padding: 9px 10px;
   resize: vertical;
-  border-radius: 7px;
   line-height: 1.5;
 }
 
@@ -76,39 +72,6 @@
 
 .review-selection > div {
   justify-content: flex-end;
-}
-
-.review-selection button,
-.review-annotations button {
-  min-height: 32px;
-  padding: 0 10px;
-  border: 0;
-  border-radius: 7px;
-  background: var(--accent);
-  color: var(--accent-foreground);
-  cursor: pointer;
-  font-size: 10px;
-  font-weight: 650;
-}
-
-.review-selection button.secondary,
-.review-annotations button.secondary {
-  margin: 0;
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--muted);
-}
-
-.review-selection button.secondary:hover,
-.review-annotations button.secondary:hover {
-  border-color: var(--border-strong);
-  color: var(--foreground);
-}
-
-.review-selection button:disabled,
-.review-annotations button:disabled {
-  cursor: default;
-  opacity: .55;
 }
 
 .review-annotations > article {
@@ -143,13 +106,10 @@
   white-space: pre-wrap;
 }
 
-.review-annotations > article > button {
+.review-annotations > article > .review-annotation-delete {
   position: absolute;
   right: 0;
   bottom: 10px;
-  min-height: 26px;
-  padding: 0 7px;
-  border: 0;
 }
 
 .review-version-conflict {
@@ -180,10 +140,6 @@
   gap: 8px;
 }
 
-.review-version-conflict button.secondary {
-  margin: 0;
-}
-
 @media (max-width: 680px) {
   .review-selection > div,
   .review-annotations > header,
@@ -193,9 +149,9 @@
     flex-direction: column;
   }
 
-  .review-selection button,
-  .review-annotations > header button,
-  .review-version-conflict button {
+  .review-selection [data-craft-button],
+  .review-annotations > header [data-craft-button],
+  .review-version-conflict [data-craft-button] {
     width: 100%;
     min-height: 44px;
   }
@@ -204,7 +160,7 @@
     padding-right: 0;
   }
 
-  .review-annotations > article > button {
+  .review-annotations > article > .review-annotation-delete {
     position: static;
     width: fit-content;
     min-height: 38px;

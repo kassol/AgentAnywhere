@@ -1,3 +1,6 @@
+import type { TextAnnotationSelection } from './craft/components/annotations/annotation-core'
+import type { AnnotationV1 } from './craft/components/annotations/types'
+
 export type TextQuoteSelector = {
   type: 'text-quote'
   exact: string
@@ -20,7 +23,7 @@ export type ReportAnnotation = {
 
 export type ReviewAnnotationSnapshot = { id: string; updatedAt: number; quote: string }
 export type ReviewContext = { taskId: string; versionId: string; annotations?: ReviewAnnotationSnapshot[]; annotationIds?: string[] }
-export type ReportAnnotationDraft = { selector: TextQuoteSelector; note: string }
+export type ReportAnnotationDraft = { selector: TextQuoteSelector; note: string; persistedAnnotationId?: string }
 type StorageLike = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
@@ -87,8 +90,10 @@ export function readReportAnnotationDraft(taskId: string, versionId: string, sto
   try {
     const value = JSON.parse(storage.getItem(annotationDraftStorageKey(taskId, versionId)) ?? 'null') as Record<string, unknown> | null
     return value && validSelector(value.selector) && typeof value.note === 'string' && value.note.length <= 2000
+      && (value.persistedAnnotationId === undefined || uuid.test(String(value.persistedAnnotationId)))
       && value.selector.exact.trim().length > 0 && value.selector.exact.length <= 4000
-      ? { selector: value.selector, note: value.note } : null
+      ? { selector: value.selector, note: value.note,
+          ...(value.persistedAnnotationId ? { persistedAnnotationId: String(value.persistedAnnotationId) } : {}) } : null
   } catch { return null }
 }
 
@@ -107,21 +112,6 @@ export function createTextSelector(text: string, start: number, end: number): Te
     suffix: text.slice(end, end + 32), start, end }
 }
 
-export function captureTextSelection(root: HTMLElement, selection: Selection | null = getSelection()): TextQuoteSelector | null {
-  if (!selection || selection.rangeCount !== 1 || selection.isCollapsed) return null
-  const range = selection.getRangeAt(0)
-  const inside = (node: Node) => node === root || root.contains(node)
-  if (!inside(range.startContainer) || !inside(range.endContainer)) return null
-  const before = range.cloneRange()
-  before.selectNodeContents(root)
-  before.setEnd(range.startContainer, range.startOffset)
-  const text = root.textContent ?? ''
-  const start = before.toString().length
-  const exact = range.toString()
-  if (!exact.trim() || text.slice(start, start + exact.length) !== exact) return null
-  return createTextSelector(text, start, start + exact.length)
-}
-
 export function captureTextControlSelection(text: string, start: number | null, end: number | null): TextQuoteSelector | null {
   if (start === null || end === null || end <= start || !text.slice(start, end).trim()) return null
   return createTextSelector(text, start, end)
@@ -129,6 +119,46 @@ export function captureTextControlSelection(text: string, start: number | null, 
 
 export function selectorStatus(text: string, selector: TextQuoteSelector): 'exact' | 'stale' {
   return text.slice(selector.start, selector.end) === selector.exact ? 'exact' : 'stale'
+}
+
+export function toCraftSelection(selector: TextQuoteSelector): TextAnnotationSelection {
+  return { start: selector.start, end: selector.end, selectedText: selector.exact, prefix: selector.prefix, suffix: selector.suffix }
+}
+
+export function fromCraftSelection(selection: TextAnnotationSelection): TextQuoteSelector {
+  return { type: 'text-quote', exact: selection.selectedText, prefix: selection.prefix, suffix: selection.suffix,
+    start: selection.start, end: selection.end }
+}
+
+export function toCraftAnnotation(annotation: ReportAnnotation): AnnotationV1 {
+  return {
+    id: annotation.id,
+    schemaVersion: 1,
+    createdAt: annotation.createdAt,
+    updatedAt: annotation.updatedAt,
+    intent: 'comment',
+    body: [{ type: 'highlight' }, { type: 'note', text: annotation.note, format: 'plain' }],
+    target: { source: { sessionId: annotation.taskId, messageId: annotation.versionId }, selectors: [
+      { type: 'text-position', start: annotation.selector.start, end: annotation.selector.end },
+      { type: 'text-quote', exact: annotation.selector.exact, prefix: annotation.selector.prefix, suffix: annotation.selector.suffix },
+    ] },
+    style: { color: 'yellow' },
+    meta: { taskId: annotation.taskId, versionId: annotation.versionId,
+      followUp: { text: annotation.note, updatedAt: annotation.updatedAt } },
+  }
+}
+
+export function fromCraftAnnotation(taskId: string, versionId: string, annotation: AnnotationV1): ReportAnnotation | null {
+  const position = annotation.target.selectors.find(selector => selector.type === 'text-position')
+  const quote = annotation.target.selectors.find(selector => selector.type === 'text-quote')
+  const note = annotation.body.find(body => body.type === 'note')
+  if (!position || position.type !== 'text-position' || !quote || quote.type !== 'text-quote' || !note || note.type !== 'note'
+    || !quote.exact.trim() || !note.text.trim()) return null
+  const selector: TextQuoteSelector = { type: 'text-quote', exact: quote.exact, prefix: quote.prefix ?? '', suffix: quote.suffix ?? '',
+    start: position.start, end: position.end }
+  if (!validSelector(selector)) return null
+  return { id: annotation.id, taskId, versionId, quote: quote.exact, note: note.text.trim(), selector,
+    createdAt: annotation.createdAt, updatedAt: annotation.updatedAt ?? annotation.createdAt }
 }
 
 function quoteMarkdown(quote: string) {
@@ -171,13 +201,20 @@ export function filterReviewContextForContent(review: ReviewContext | undefined,
 
 export function clearAcceptedAnnotations(review: ReviewContext | undefined, content: string, storage: StorageLike = localStorage) {
   const represented = filterReviewContextForContent(review, content)
-  if (!represented) return
+  if (!represented) return true
   const accepted = new Map((represented.annotations ?? []).map(annotation => [annotation.id, annotation.updatedAt]))
   const current = readReportAnnotations(represented.taskId, represented.versionId, storage)
-  const removed = current.filter(annotation => accepted.get(annotation.id) === annotation.updatedAt).map(annotation => annotation.id)
-  const remaining = current.filter(annotation => !removed.includes(annotation.id))
-  writeReportAnnotations(represented.taskId, represented.versionId, remaining, storage)
+  const removed = current.filter(annotation => accepted.get(annotation.id) === annotation.updatedAt)
+  const removedIds = new Set(removed.map(annotation => annotation.id))
+  const remaining = current.filter(annotation => !removedIds.has(annotation.id))
+  const draft = readReportAnnotationDraft(represented.taskId, represented.versionId, storage)
+  const draftMatchesRemoved = draft?.persistedAnnotationId && removed.some(annotation => annotation.id === draft.persistedAnnotationId
+    && annotation.quote === draft.selector.exact && annotation.note === draft.note
+    && annotation.selector.start === draft.selector.start && annotation.selector.end === draft.selector.end)
+  if (draftMatchesRemoved && !writeReportAnnotationDraft(represented.taskId, represented.versionId, null, storage)) return false
+  if (!writeReportAnnotations(represented.taskId, represented.versionId, remaining, storage)) return false
   notifyAcceptedAnnotations(represented.taskId, represented.versionId, represented.annotations ?? [])
+  return true
 }
 
 export function latestSucceededReportVersion(artifacts: { kind: string; runStatus: string; versionId: string }[]) {
