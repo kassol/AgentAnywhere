@@ -8,6 +8,15 @@
         "value": "inter",
         "createdAt": "2026-09-18T16:14:18.525Z",
         "reason": "user confirmed: 保留现有 Inter 字体，仅忽略此字体提示"
+      },
+      {
+        "rule": "side-tab",
+        "value": "*",
+        "files": [
+          "src/web/review-annotations.css"
+        ],
+        "createdAt": "2026-09-20T00:46:25.012Z",
+        "reason": "assistant review: 此文件唯一单侧边线用于 blockquote 标识原文引用，属于报告批注的语义区分，未用于卡片强调。"
       }
     ]
   }
