@@ -8,11 +8,11 @@ const interactionId = '33333333-3333-4333-8333-333333333333'
 const versionId = '44444444-4444-4444-8444-444444444444'
 
 function task(status: string): RelatedTask {
-  return { id: taskId, goal: '调研主题', status, href: `/tasks/${taskId}`, runs: [{ id: runId, status }], reports: [] }
+  return { id: taskId, title: '调研主题', titleEdited: false, goal: '调研主题', status, href: `/tasks/${taskId}`, runs: [{ id: runId, status }], reports: [] }
 }
 
 function card(overrides: Partial<StatusCard> = {}): StatusCard {
-  return { id: `run:${runId}`, kind: 'failed', taskId, runId, goal: '调研主题', runStatus: 'failed',
+  return { id: `run:${runId}`, kind: 'failed', taskId, runId, title: '调研主题', titleEdited: false, goal: '调研主题', runStatus: 'failed',
     model: { id: 'source-model', protocol: 'responses', contextWindow: 128_000 }, href: `/tasks/${taskId}`, reports: [], ...overrides }
 }
 

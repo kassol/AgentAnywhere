@@ -3,6 +3,7 @@ import type { ServerWebSocket } from 'bun'
 import { createModelConnectionStore } from './model-connection'
 import { createWorkStore, WorkArtifactError, WorkConflictError, WorkInputError } from './work'
 import { createStewardService, StewardConflictError, StewardInputError } from './steward'
+import { TitleInputError } from './title'
 
 function modelPath(protocol: 'chat-completions' | 'responses') {
   return protocol === 'chat-completions' ? 'chat/completions' : 'responses'
@@ -255,6 +256,20 @@ export async function startServer(config: Config) {
         }
       }
       const stewardDetailMatch = /^\/api\/steward\/threads\/([0-9a-f-]{36})$/i.exec(path)
+      if (stewardDetailMatch && request.method === 'PATCH') {
+        if (!uuidValue.test(stewardDetailMatch[1])) return json({ error: 'Not found' }, 404)
+        if (!sameOrigin(request)) return json({ error: 'Forbidden' }, 403)
+        const body = await readLimited(request, 1024)
+        if (body === null) return json({ error: '请求内容过大' }, 413)
+        try {
+          const thread = await steward?.updateTitle(stewardDetailMatch[1], JSON.parse(body))
+          return thread ? json(thread) : json({ error: 'Not found' }, 404)
+        } catch (error) {
+          if (error instanceof SyntaxError) return json({ error: 'JSON 格式无效' }, 400)
+          if (error instanceof TitleInputError) return json({ error: error.message }, 400)
+          return json({ error: '修改标题失败' }, 500)
+        }
+      }
       if (stewardDetailMatch && request.method === 'GET') {
         if (!uuidValue.test(stewardDetailMatch[1])) return json({ error: 'Not found' }, 404)
         const thread = await steward?.detail(stewardDetailMatch[1])
@@ -400,6 +415,21 @@ export async function startServer(config: Config) {
         if (!Number.isSafeInteger(after) || after < 0) return json({ error: '事件游标无效' }, 400)
         const events = await work?.events(path.split('/')[3], after)
         return events ? json(events) : json({ error: 'Not found' }, 404)
+      }
+      const taskDetailMatch = /^\/api\/tasks\/([0-9a-f-]{36})$/i.exec(path)
+      if (taskDetailMatch && request.method === 'PATCH') {
+        if (!uuidValue.test(taskDetailMatch[1])) return json({ error: 'Not found' }, 404)
+        if (!sameOrigin(request)) return json({ error: 'Forbidden' }, 403)
+        const body = await readLimited(request, 1024)
+        if (body === null) return json({ error: '请求内容过大' }, 413)
+        try {
+          const task = await work?.updateTitle(taskDetailMatch[1], JSON.parse(body))
+          return task ? json(task) : json({ error: 'Not found' }, 404)
+        } catch (error) {
+          if (error instanceof SyntaxError) return json({ error: 'JSON 格式无效' }, 400)
+          if (error instanceof TitleInputError) return json({ error: error.message }, 400)
+          return json({ error: '修改标题失败' }, 500)
+        }
       }
       if (path.startsWith('/api/tasks/') && request.method === 'GET') {
         const id = path.slice('/api/tasks/'.length)

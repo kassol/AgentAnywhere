@@ -14,10 +14,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Textarea } from './craft/components/Textarea'
 import { UserMessageBubble } from './craft/components/UserMessageBubble'
 import { WorkStatusBadge, workStatusLabel } from './WorkStatus'
+import { TitleEditor } from './TitleEditor'
 import './work.css'
 
 type Model = { id: string; protocol: 'chat-completions' | 'responses' }
-type Task = { id: string; goal: string; sourceUrl: string | null; status: string; createdAt: string }
+type Task = { id: string; title: string; titleEdited: boolean; goal: string; sourceUrl: string | null; status: string; createdAt: string }
 type Artifact = { id: string; kind: 'report' | 'attachment'; name: string; versionId: string; runId: string; runStatus: string; sha256: string; sizeBytes: number; createdAt: string }
 type Detail = Task & { run: { id: string; status: string; model: Model; cleanupState: string; failure: string | null; startedAt: string | null; finishedAt: string | null; previousReportVersionId: string | null; retryOfRunId: string | null; modelCalls: number; modelCallLimit: number; activeMs: number; activeLimitMs: number; budgetReason: string | null }; runs: { id: string; status: string; createdAt: string; previousReportVersionId: string | null; retryOfRunId: string | null }[]; interaction: { id: string; kind: 'question' | 'limit'; question: string; status: string; answer: string | null } | null; thread: { id: string; messages: { role: 'user'; content: string; status: 'pending' | 'applied' | 'carried' }[] }; artifacts: Artifact[] }
 type RunEvent = ActivityEvent & { epoch: number }
@@ -269,7 +270,7 @@ export function Work() {
     {detail && <section className="work-detail">
       <header className="work-detail-header">
         <div className="work-detail-heading"><WorkStatusBadge status={detail.run.status} className="justify-self-start" />
-          <h2>{detail.goal || detail.sourceUrl}</h2>
+          <TitleEditor<Detail> title={detail.title} endpoint={`/api/tasks/${detail.id}`} onSaved={setDetail} />
           {detail.sourceUrl && <a className="work-source" href={detail.sourceUrl} target="_blank" rel="noopener noreferrer">{detail.sourceUrl}</a>}
         </div>
         {activeStatuses.includes(detail.run.status) && <Button variant="destructive" size="sm" className="work-danger-button" type="button" disabled={busy} onClick={cancel}>取消工作</Button>}
@@ -347,7 +348,7 @@ export function Work() {
       {tasks === null ? (!error && <div className="work-loading muted"><LoadingIndicator label="正在加载工作…" /></div>) : tasks.length === 0 ?
         <EmptyStateCard title="还没有工作" description="创建后会显示在这里。" /> :
         <ul className="task-list">{tasks.map(task => <li key={task.id}><EntityRow href={`/tasks/${task.id}`}
-          icon={<BriefcaseBusiness />} title={task.goal || task.sourceUrl} subtitle={new Date(task.createdAt).toLocaleString('zh-CN')}
+          icon={<BriefcaseBusiness />} title={task.title} subtitle={new Date(task.createdAt).toLocaleString('zh-CN')}
           badges={<WorkStatusBadge status={task.status} />} trailing={<ArrowRight aria-hidden="true" />} /></li>)}</ul>}
     </section>
   </div>

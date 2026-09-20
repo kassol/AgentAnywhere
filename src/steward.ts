@@ -7,12 +7,13 @@ import { streamSimple as streamCompletions } from '@earendil-works/pi-ai/api/ope
 import { streamSimple as streamResponses } from '@earendil-works/pi-ai/api/openai-responses'
 import { lockStewardTurnBudget, stewardBudgetFailure, stewardOperationBudget } from './steward-budget'
 import { WorkConflictError, WorkInputError } from './work'
+import { parseTitle } from './title'
 
 type Protocol = 'chat-completions' | 'responses'
 type SelectedModel = { id: string; protocol: Protocol; contextWindow?: number; maxTokens?: number; input?: ('text' | 'image')[]; reasoning?: boolean; tools?: boolean; sources?: Record<string, { source: string; updatedAt: string }>; researchReadiness?: { status: string; reasons: string[]; verification: string } }
 type ModelConfig = { endpoint?: string; credentialRef?: string | null; models?: SelectedModel[]; stewardModel?: { modelId: string; protocol: Protocol } | null; researchModelPool?: string[] }
 type Credential = { endpoint: string; apiKey: string }
-type WorkCard = { id: string; goal: string; status: string; href: string; runs: unknown[];
+type WorkCard = { id: string; title: string; titleEdited: boolean; goal: string; status: string; href: string; runs: unknown[];
   interaction: { id: string; kind: 'question' | 'limit'; question: string; status: string; runId: string; epoch: number } | null;
   reports: { versionId: string; href: string; contentHref: string; downloadHref: string }[] }
 type WorkAccess = {
@@ -207,6 +208,7 @@ export async function createStewardService(databaseUrl: string, resolveCredentia
     id uuid PRIMARY KEY, owner_id text NOT NULL, request_id uuid NOT NULL UNIQUE, request_hash text NOT NULL,
     title text NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
   )`
+  await db`ALTER TABLE steward_threads ADD COLUMN IF NOT EXISTS title_edited boolean NOT NULL DEFAULT false`
   await db`CREATE TABLE IF NOT EXISTS steward_turns (
     id uuid PRIMARY KEY, turn_seq bigserial NOT NULL UNIQUE, thread_id uuid NOT NULL REFERENCES steward_threads(id), request_id uuid NOT NULL UNIQUE,
     request_hash text NOT NULL, status text NOT NULL, model_snapshot jsonb NOT NULL, credential_ref text NOT NULL,
@@ -328,14 +330,14 @@ export async function createStewardService(databaseUrl: string, resolveCredentia
       SELECT id, ${crypto.randomUUID()}, 'turn.interrupted', '{"status":"interrupted"}'::jsonb FROM interrupted`
 
   async function list() {
-    return db`SELECT id, title, created_at AS "createdAt", updated_at AS "updatedAt",
+    return db`SELECT id, title, title_edited AS "titleEdited", created_at AS "createdAt", updated_at AS "updatedAt",
       (SELECT status FROM steward_turns WHERE thread_id=t.id ORDER BY turn_seq DESC LIMIT 1) AS status
       FROM steward_threads t WHERE owner_id='owner' ORDER BY updated_at DESC, id DESC`
   }
 
   async function detail(id: string) {
     const value = await db.begin(async sql => {
-      const [thread] = await sql`SELECT id, title, created_at AS "createdAt", updated_at AS "updatedAt"
+      const [thread] = await sql`SELECT id, title, title_edited AS "titleEdited", created_at AS "createdAt", updated_at AS "updatedAt"
         FROM steward_threads WHERE id=${id} AND owner_id='owner'`
       if (!thread) return null
       const messages = await sql`SELECT m.id, m.turn_id AS "turnId", m.role, m.content, m.status, m.created_at AS "createdAt"
@@ -437,7 +439,13 @@ export async function createStewardService(databaseUrl: string, resolveCredentia
       if (!previous || previous.requestHash !== requestHash) throw new StewardConflictError('requestId 已用于其他请求')
       return { id: previous.id, created: false }
     })
-    return { thread: result.created ? { id: result.id, title: '新对话', messages: [], summaries: [], turns: [], relatedTasks: [], createdAt: new Date(), updatedAt: new Date() } : await detail(result.id), created: result.created }
+    return { thread: result.created ? { id: result.id, title: '新对话', titleEdited: false, messages: [], summaries: [], turns: [], relatedTasks: [], createdAt: new Date(), updatedAt: new Date() } : await detail(result.id), created: result.created }
+  }
+
+  async function updateTitle(id: string, body: unknown) {
+    const title = parseTitle(body)
+    const [updated] = await db`UPDATE steward_threads SET title=${title}, title_edited=true, updated_at=now() WHERE id=${id} AND owner_id='owner' RETURNING id`
+    return updated ? detail(id) : null
   }
 
   async function snapshot(config: ModelConfig) {
@@ -1757,5 +1765,5 @@ export async function createStewardService(databaseUrl: string, resolveCredentia
     return closing
   }
 
-  return { list, detail, create, submit, events, stop, start, close }
+  return { list, detail, updateTitle, create, submit, events, stop, start, close }
 }

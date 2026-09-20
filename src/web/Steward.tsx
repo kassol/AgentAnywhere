@@ -13,14 +13,15 @@ import { StewardReceipts, type ControlOperation, type InteractionOperation, type
 import { useReviewComposerBridge } from './WorkPreview'
 import { EntityRow } from './craft/components/EntityRow'
 import { InteractionStatusBadge, WorkStatusBadge } from './WorkStatus'
+import { TitleEditor } from './TitleEditor'
 
 type Message = { id: string; turnId: string; role: 'user' | 'assistant'; content: string; status: string }
 type Summary = { id: string; content: string; fromTurnNumber: number; throughTurnNumber: number; coveredTurns: number }
 type Turn = { id: string; requestId: string; status: string; modelCalls: number; modelCallLimit: number; activeMs: number; activeLimitMs: number; budgetReason?: string; failure?: string }
-export type RelatedTask = { id: string; goal: string; status: string; href: string; runs: { id: string; status: string }[]; reports: { versionId: string; href: string }[] }
+export type RelatedTask = { id: string; title: string; titleEdited: boolean; goal: string; status: string; href: string; runs: { id: string; status: string }[]; reports: { versionId: string; href: string }[] }
 export type RetryModel = { id: string; protocol: 'chat-completions' | 'responses'; contextWindow?: number; researchReadiness?: { status: string } }
-export type StatusCard = { id: string; kind: 'completed' | 'failed' | 'interaction'; taskId: string; runId: string; goal: string; runStatus: string; model: RetryModel; failure?: string; href: string; reports: { versionId: string; href: string }[]; interaction?: { id: string; kind: 'question' | 'limit'; question: string; status: string; answer?: string } }
-type Detail = { id: string; title: string; messages: Message[]; summaries: Summary[]; turns: Turn[]; relatedTasks: RelatedTask[]; statusCards: StatusCard[]; researchOperations: ResearchOperation[];
+export type StatusCard = { id: string; kind: 'completed' | 'failed' | 'interaction'; taskId: string; runId: string; title: string; titleEdited: boolean; goal: string; runStatus: string; model: RetryModel; failure?: string; href: string; reports: { versionId: string; href: string }[]; interaction?: { id: string; kind: 'question' | 'limit'; question: string; status: string; answer?: string } }
+type Detail = { id: string; title: string; titleEdited: boolean; messages: Message[]; summaries: Summary[]; turns: Turn[]; relatedTasks: RelatedTask[]; statusCards: StatusCard[]; researchOperations: ResearchOperation[];
   controlOperations: ControlOperation[]; interactionOperations: InteractionOperation[]; retryOperations: RetryOperation[]; revisionOperations: RevisionOperation[] }
 const statusLabel: Record<string, string> = {
   queued: '排队中', provisioning: '准备环境', running: '回复中', streaming: '生成中', stopping: '停止中', stopped: '已停止',
@@ -271,6 +272,7 @@ export function Steward({ fillRequest, onFillRequestHandled }: { fillRequest?: {
   return (
     <div className="steward-layout">
       <section className="conversation" aria-label="管家对话">
+        {detail && <div className="px-6 pt-4"><TitleEditor<Detail> title={detail.title} endpoint={`/api/steward/threads/${detail.id}`} onSaved={setDetail} /></div>}
         <StableScroll storageKey={`agentanywhere:steward-scroll:${routeId ?? 'new'}`} revision={scrollRevision} className="conversation-messages">
           {routeId && !detail
             ? <div className="steward-empty"><LoadingIndicator label="正在加载对话…" /></div>
@@ -321,7 +323,7 @@ export function Steward({ fillRequest, onFillRequestHandled }: { fillRequest?: {
           })}
           {!!detail?.relatedTasks.length && <section className="steward-work-section" aria-label="关联工作"><h3>关联工作</h3><ul className="steward-work-list">{detail.relatedTasks.map(task => <li key={task.id}>
             <EntityRow href={task.href} className="steward-work-row overflow-hidden rounded-[8px] border border-border bg-background"
-              icon={<BriefcaseBusiness />} title={task.goal} badges={<WorkStatusBadge status={task.status} />}
+              icon={<BriefcaseBusiness />} title={task.title} badges={<WorkStatusBadge status={task.status} />}
               trailing={<span className="font-mono text-[10px] text-muted-foreground" title={task.id}>Task {task.id.slice(0, 8)}</span>}>
               <div className="steward-work-content">
                 {!!task.reports.length && <div className="steward-work-reports">{task.reports.map(report =>
@@ -332,7 +334,7 @@ export function Steward({ fillRequest, onFillRequestHandled }: { fillRequest?: {
           </li>)}</ul></section>}
           {!!detail?.statusCards.length && <section className="steward-work-section" aria-label="工作状态卡"><h3>工作状态</h3><ul className="steward-work-list">{detail.statusCards.map(card => <li key={card.id}>
             <EntityRow href={card.href} className="steward-work-row overflow-hidden rounded-[8px] border border-border bg-background"
-              icon={card.interaction ? <ListChecks /> : <BriefcaseBusiness />} title={card.goal}
+              icon={card.interaction ? <ListChecks /> : <BriefcaseBusiness />} title={card.title}
               subtitle={card.interaction ? `${card.interaction.kind === 'limit' ? '额度等待' : '提问'}：${card.interaction.question}` : card.failure}
               badges={card.interaction ? <InteractionStatusBadge status={card.interaction.status} /> : <WorkStatusBadge status={card.runStatus} />}
               trailing={<span className="font-mono text-[10px] text-muted-foreground" title={`${card.taskId} · ${card.runId}`}>Run {card.runId.slice(0, 8)}</span>}>

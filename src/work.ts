@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { SQL } from 'bun'
 import type { ModelSelection, Protocol } from './model-connection'
 import { lockStewardTurnBudget, stewardBudgetFailure, stewardOperationBudget } from './steward-budget'
+import { parseTitle, titleSummary } from './title'
 
 type RunConnection = { endpoint: string; hasCredential: boolean; credentialRef: string | null; models: ModelSelection[] }
 type CreateRequest = { requestId: string; goal: string; sourceUrl: string | null; modelId: string; protocol: Protocol | null }
@@ -54,6 +55,8 @@ export async function createWorkStore(databaseUrl: string, artifactDir = join(pr
     request_hash text NOT NULL, goal text NOT NULL, source_url text,
     status text NOT NULL, created_at timestamptz NOT NULL DEFAULT now()
   )`
+  await db`ALTER TABLE work_tasks ADD COLUMN IF NOT EXISTS title text`
+  await db`ALTER TABLE work_tasks ADD COLUMN IF NOT EXISTS title_edited boolean NOT NULL DEFAULT false`
   await db`CREATE TABLE IF NOT EXISTS work_threads (
     id uuid PRIMARY KEY, task_id uuid NOT NULL UNIQUE REFERENCES work_tasks(id)
   )`
@@ -140,7 +143,7 @@ export async function createWorkStore(databaseUrl: string, artifactDir = join(pr
   }
 
   async function detail(id: string) {
-    const [row] = await db`SELECT t.id, t.goal, t.source_url AS "sourceUrl", t.status, t.created_at AS "createdAt",
+    const [row] = await db`SELECT t.id, t.title, t.title_edited AS "titleEdited", t.goal, t.source_url AS "sourceUrl", t.status, t.created_at AS "createdAt",
       r.id AS "runId", r.status AS "runStatus", r.model_snapshot AS "model", r.epoch,
       r.cleanup_state AS "cleanupState", r.failure, r.started_at AS "startedAt", r.finished_at AS "finishedAt",
       r.previous_report_version_id AS "previousReportVersionId", r.retry_of_run_id AS "retryOfRunId",
@@ -158,7 +161,8 @@ export async function createWorkStore(databaseUrl: string, artifactDir = join(pr
       v.sha256, v.size_bytes AS "sizeBytes", v.mime_type AS "mimeType", v.created_at AS "createdAt"
       FROM work_artifacts a JOIN work_artifact_versions v ON v.artifact_id = a.id JOIN work_runs r ON r.id=v.run_id
       WHERE a.task_id = ${id} ORDER BY v.created_at DESC, v.id DESC`
-    return { id: row.id, goal: row.goal, sourceUrl: row.sourceUrl, status: row.status, createdAt: row.createdAt,
+    return { id: row.id, title: row.title ?? titleSummary(row.goal, row.sourceUrl), titleEdited: row.titleEdited,
+      goal: row.goal, sourceUrl: row.sourceUrl, status: row.status, createdAt: row.createdAt,
       run: { id: row.runId, status: row.runStatus, model: typeof row.model === 'string' ? JSON.parse(row.model) : row.model,
         epoch: row.epoch, cleanupState: row.cleanupState, failure: row.failure, startedAt: row.startedAt, finishedAt: row.finishedAt,
         previousReportVersionId: row.previousReportVersionId, retryOfRunId: row.retryOfRunId,
@@ -188,7 +192,8 @@ export async function createWorkStore(databaseUrl: string, artifactDir = join(pr
 
   function workCards(rows: any[]) {
     return rows.map(row => ({
-      id: row.id, goal: row.goal, sourceUrl: row.sourceUrl, status: row.status, createdAt: row.createdAt, href: `/tasks/${row.id}`,
+      id: row.id, title: row.title ?? titleSummary(row.goal, row.sourceUrl), titleEdited: row.titleEdited,
+      goal: row.goal, sourceUrl: row.sourceUrl, status: row.status, createdAt: row.createdAt, href: `/tasks/${row.id}`,
       runs: typeof row.runs === 'string' ? JSON.parse(row.runs) : row.runs,
       interaction: typeof row.interaction === 'string' ? JSON.parse(row.interaction) : row.interaction,
       reports: reportLinks(row.id, row.reports),
@@ -203,7 +208,7 @@ export async function createWorkStore(databaseUrl: string, artifactDir = join(pr
 
   async function stewardCatalog(cursor = 0, query = '') {
     const pattern = `%${query.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_')}%`
-    const rows = await db`SELECT t.id, t.goal, t.source_url AS "sourceUrl", t.status, t.created_at AS "createdAt",
+    const rows = await db`SELECT t.id, t.title, t.title_edited AS "titleEdited", t.goal, t.source_url AS "sourceUrl", t.status, t.created_at AS "createdAt",
       COALESCE((SELECT jsonb_agg(jsonb_build_object('id', r.id, 'status', r.status, 'createdAt', r.created_at, 'finishedAt', r.finished_at) ORDER BY r.created_at, r.id)
         FROM work_runs r WHERE r.task_id=t.id), '[]'::jsonb) AS runs,
       (SELECT jsonb_build_object('id', i.id, 'kind', i.kind, 'question', i.question, 'status', i.status,
@@ -221,7 +226,7 @@ export async function createWorkStore(databaseUrl: string, artifactDir = join(pr
 
   async function stewardMetadata(taskIds: string[]) {
     if (!taskIds.length) return []
-    const rows = await db`SELECT t.id, t.goal, t.source_url AS "sourceUrl", t.status, t.created_at AS "createdAt",
+    const rows = await db`SELECT t.id, t.title, t.title_edited AS "titleEdited", t.goal, t.source_url AS "sourceUrl", t.status, t.created_at AS "createdAt",
       COALESCE((SELECT jsonb_agg(jsonb_build_object('id', r.id, 'status', r.status, 'createdAt', r.created_at, 'finishedAt', r.finished_at) ORDER BY r.created_at, r.id)
         FROM work_runs r WHERE r.task_id=t.id), '[]'::jsonb) AS runs,
       (SELECT jsonb_build_object('id', i.id, 'kind', i.kind, 'question', i.question, 'status', i.status,
@@ -243,7 +248,7 @@ export async function createWorkStore(databaseUrl: string, artifactDir = join(pr
     const selected = ids.join(',')
     const [runs, interactions] = await Promise.all([
       db`SELECT r.id AS "runId", r.status AS "runStatus", r.failure, r.model_snapshot AS model, r.created_at AS "createdAt", r.finished_at AS "finishedAt",
-          t.id AS "taskId", t.goal,
+          t.id AS "taskId", t.title, t.title_edited AS "titleEdited", t.goal,
           COALESCE((SELECT jsonb_agg(jsonb_build_object('versionId', v.id, 'runId', v.run_id, 'runStatus', r.status, 'createdAt', v.created_at) ORDER BY v.created_at DESC, v.id DESC)
             FROM work_artifacts a JOIN work_artifact_versions v ON v.artifact_id=a.id
             WHERE a.task_id=t.id AND a.kind='report' AND v.run_id=r.id), '[]'::jsonb) AS reports
@@ -253,7 +258,7 @@ export async function createWorkStore(databaseUrl: string, artifactDir = join(pr
         ORDER BY r.created_at, r.id`,
       db`SELECT i.id AS "interactionId", i.kind AS "interactionKind", i.question, i.status AS "interactionStatus", i.answer,
           i.created_at AS "createdAt", i.answered_at AS "answeredAt", r.id AS "runId", r.status AS "runStatus",
-          r.model_snapshot AS model, t.id AS "taskId", t.goal,
+          r.model_snapshot AS model, t.id AS "taskId", t.title, t.title_edited AS "titleEdited", t.goal,
           COALESCE((SELECT jsonb_agg(jsonb_build_object('versionId', v.id, 'runId', v.run_id, 'runStatus', r.status, 'createdAt', v.created_at) ORDER BY v.created_at DESC, v.id DESC)
             FROM work_artifacts a JOIN work_artifact_versions v ON v.artifact_id=a.id
             WHERE a.task_id=t.id AND a.kind='report' AND v.run_id=r.id), '[]'::jsonb) AS reports
@@ -264,12 +269,14 @@ export async function createWorkStore(databaseUrl: string, artifactDir = join(pr
     return [
       ...runs.map((row: any) => ({
         id: `run:${row.runId}`, kind: row.runStatus === 'succeeded' ? 'completed' : 'failed', taskId: row.taskId,
-        runId: row.runId, goal: row.goal, runStatus: row.runStatus, failure: row.failure,
+        runId: row.runId, title: row.title ?? titleSummary(row.goal), titleEdited: row.titleEdited,
+        goal: row.goal, runStatus: row.runStatus, failure: row.failure,
         model: typeof row.model === 'string' ? JSON.parse(row.model) : row.model, createdAt: row.createdAt,
         finishedAt: row.finishedAt, href: `/tasks/${row.taskId}`, reports: reportLinks(row.taskId, row.reports),
       })),
       ...interactions.map((row: any) => ({
-        id: `interaction:${row.interactionId}`, kind: 'interaction', taskId: row.taskId, runId: row.runId, goal: row.goal,
+        id: `interaction:${row.interactionId}`, kind: 'interaction', taskId: row.taskId, runId: row.runId,
+        title: row.title ?? titleSummary(row.goal), titleEdited: row.titleEdited, goal: row.goal,
         runStatus: row.runStatus, model: typeof row.model === 'string' ? JSON.parse(row.model) : row.model,
         createdAt: row.createdAt, href: `/tasks/${row.taskId}`, reports: reportLinks(row.taskId, row.reports),
         interaction: { id: row.interactionId, kind: row.interactionKind, question: row.question,
@@ -280,10 +287,12 @@ export async function createWorkStore(databaseUrl: string, artifactDir = join(pr
   }
 
   async function pendingInteractions() {
-    return db`SELECT i.id, i.kind, i.question, i.created_at AS "createdAt", r.id AS "runId", r.status AS "runStatus",
-      t.id AS "taskId", t.goal, t.status AS "taskStatus", ('/tasks/' || t.id::text) AS href
+    const rows = await db`SELECT i.id, i.kind, i.question, i.created_at AS "createdAt", r.id AS "runId", r.status AS "runStatus",
+      t.id AS "taskId", t.title, t.source_url AS "sourceUrl",
+      t.title_edited AS "titleEdited", t.goal, t.status AS "taskStatus", ('/tasks/' || t.id::text) AS href
       FROM work_interactions i JOIN work_runs r ON r.id=i.run_id JOIN work_tasks t ON t.id=r.task_id
       WHERE t.owner_id='owner' AND i.status='pending' ORDER BY i.created_at, i.id`
+    return rows.map((row: any) => ({ ...row, title: row.title ?? titleSummary(row.goal, row.sourceUrl) }))
   }
 
   async function stewardRead(taskIds: string[], versionIds: string[], artifactDir: string) {
@@ -850,8 +859,15 @@ export async function createWorkStore(databaseUrl: string, artifactDir = join(pr
   }
 
   async function list() {
-    return db`SELECT id, goal, source_url AS "sourceUrl", status, created_at AS "createdAt"
+    const rows = await db`SELECT id, title, title_edited AS "titleEdited", goal, source_url AS "sourceUrl", status, created_at AS "createdAt"
       FROM work_tasks WHERE owner_id = 'owner' ORDER BY created_at DESC, id DESC`
+    return rows.map((row: any) => ({ ...row, title: row.title ?? titleSummary(row.goal, row.sourceUrl) }))
+  }
+
+  async function updateTitle(id: string, body: unknown) {
+    const title = parseTitle(body)
+    const [updated] = await db`UPDATE work_tasks SET title=${title}, title_edited=true WHERE id=${id} AND owner_id='owner' RETURNING id`
+    return updated ? detail(id) : null
   }
 
   async function create(body: unknown, connection: RunConnection) {
@@ -1132,5 +1148,5 @@ export async function createWorkStore(databaseUrl: string, artifactDir = join(pr
 
   async function close() { await db.close() }
 
-  return { list, detail, events, create, continueTask, retryTask, appendRunMessage, resolveInteraction, pendingInteractions, pendingRunMessages, acknowledgeRunMessage, cancel, isRunStopped, artifactVersion, readArtifact, stewardCatalog, stewardMetadata, stewardStatusCards, stewardRead, stewardRetryContext, stewardModelStats, createFromSteward, freezeStewardControl, applyStewardControl, freezeStewardInteraction, applyStewardInteraction, freezeStewardRetry, applyStewardRetry, freezeStewardRevision, applyStewardRevision, requestCleanupRetry, resolveRunModelConnection, authorizeModelProxy, reserveModelAttempt, recordModelUsage, close }
+  return { list, detail, updateTitle, events, create, continueTask, retryTask, appendRunMessage, resolveInteraction, pendingInteractions, pendingRunMessages, acknowledgeRunMessage, cancel, isRunStopped, artifactVersion, readArtifact, stewardCatalog, stewardMetadata, stewardStatusCards, stewardRead, stewardRetryContext, stewardModelStats, createFromSteward, freezeStewardControl, applyStewardControl, freezeStewardInteraction, applyStewardInteraction, freezeStewardRetry, applyStewardRetry, freezeStewardRevision, applyStewardRevision, requestCleanupRetry, resolveRunModelConnection, authorizeModelProxy, reserveModelAttempt, recordModelUsage, close }
 }
