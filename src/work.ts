@@ -242,7 +242,7 @@ export async function createWorkStore(databaseUrl: string, artifactDir = join(pr
     if (!ids.length) return []
     const selected = ids.join(',')
     const [runs, interactions] = await Promise.all([
-      db`SELECT r.id AS "runId", r.status AS "runStatus", r.failure, r.created_at AS "createdAt", r.finished_at AS "finishedAt",
+      db`SELECT r.id AS "runId", r.status AS "runStatus", r.failure, r.model_snapshot AS model, r.created_at AS "createdAt", r.finished_at AS "finishedAt",
           t.id AS "taskId", t.goal,
           COALESCE((SELECT jsonb_agg(jsonb_build_object('versionId', v.id, 'runId', v.run_id, 'runStatus', r.status, 'createdAt', v.created_at) ORDER BY v.created_at DESC, v.id DESC)
             FROM work_artifacts a JOIN work_artifact_versions v ON v.artifact_id=a.id
@@ -253,7 +253,7 @@ export async function createWorkStore(databaseUrl: string, artifactDir = join(pr
         ORDER BY r.created_at, r.id`,
       db`SELECT i.id AS "interactionId", i.kind AS "interactionKind", i.question, i.status AS "interactionStatus", i.answer,
           i.created_at AS "createdAt", i.answered_at AS "answeredAt", r.id AS "runId", r.status AS "runStatus",
-          t.id AS "taskId", t.goal,
+          r.model_snapshot AS model, t.id AS "taskId", t.goal,
           COALESCE((SELECT jsonb_agg(jsonb_build_object('versionId', v.id, 'runId', v.run_id, 'runStatus', r.status, 'createdAt', v.created_at) ORDER BY v.created_at DESC, v.id DESC)
             FROM work_artifacts a JOIN work_artifact_versions v ON v.artifact_id=a.id
             WHERE a.task_id=t.id AND a.kind='report' AND v.run_id=r.id), '[]'::jsonb) AS reports
@@ -264,12 +264,14 @@ export async function createWorkStore(databaseUrl: string, artifactDir = join(pr
     return [
       ...runs.map((row: any) => ({
         id: `run:${row.runId}`, kind: row.runStatus === 'succeeded' ? 'completed' : 'failed', taskId: row.taskId,
-        runId: row.runId, goal: row.goal, runStatus: row.runStatus, failure: row.failure, createdAt: row.createdAt,
+        runId: row.runId, goal: row.goal, runStatus: row.runStatus, failure: row.failure,
+        model: typeof row.model === 'string' ? JSON.parse(row.model) : row.model, createdAt: row.createdAt,
         finishedAt: row.finishedAt, href: `/tasks/${row.taskId}`, reports: reportLinks(row.taskId, row.reports),
       })),
       ...interactions.map((row: any) => ({
         id: `interaction:${row.interactionId}`, kind: 'interaction', taskId: row.taskId, runId: row.runId, goal: row.goal,
-        runStatus: row.runStatus, createdAt: row.createdAt, href: `/tasks/${row.taskId}`, reports: reportLinks(row.taskId, row.reports),
+        runStatus: row.runStatus, model: typeof row.model === 'string' ? JSON.parse(row.model) : row.model,
+        createdAt: row.createdAt, href: `/tasks/${row.taskId}`, reports: reportLinks(row.taskId, row.reports),
         interaction: { id: row.interactionId, kind: row.interactionKind, question: row.question,
           status: row.interactionStatus, answer: row.answer, answeredAt: row.answeredAt },
       })),

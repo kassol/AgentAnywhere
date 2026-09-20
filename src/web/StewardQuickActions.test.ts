@@ -12,7 +12,8 @@ function task(status: string): RelatedTask {
 }
 
 function card(overrides: Partial<StatusCard> = {}): StatusCard {
-  return { id: `run:${runId}`, kind: 'failed', taskId, runId, goal: '调研主题', runStatus: 'failed', href: `/tasks/${taskId}`, reports: [], ...overrides }
+  return { id: `run:${runId}`, kind: 'failed', taskId, runId, goal: '调研主题', runStatus: 'failed',
+    model: { id: 'source-model', protocol: 'responses', contextWindow: 128_000 }, href: `/tasks/${taskId}`, reports: [], ...overrides }
 }
 
 describe('steward quick action mapping', () => {
@@ -44,7 +45,15 @@ describe('steward quick action mapping', () => {
     }), runId)
     expect(limit.map(quickActionCommand)).toEqual([`继续工作 ${taskId}`, `结束工作 ${taskId}`, `取消工作 ${taskId}`])
 
-    expect(statusCardQuickActions(card(), runId).map(quickActionCommand)).toEqual([`同模型重试工作 ${taskId}`])
+    const retryModels = [
+      { id: 'smaller', protocol: 'responses' as const, contextWindow: 64_000, researchReadiness: { status: 'ready-to-try' } },
+      { id: 'replacement', protocol: 'responses' as const, contextWindow: 128_000, researchReadiness: { status: 'ready-to-try' } },
+      { id: 'wrong-protocol', protocol: 'chat-completions' as const, contextWindow: 128_000, researchReadiness: { status: 'ready-to-try' } },
+    ]
+    expect(statusCardQuickActions(card(), runId, retryModels).map(quickActionCommand)).toEqual([
+      `同模型重试工作 ${taskId}`,
+      `把工作 ${taskId} 改用模型：replacement 重试`,
+    ])
     expect(statusCardQuickActions(card(), '99999999-9999-4999-8999-999999999999')).toEqual([])
     expect(statusCardQuickActions(card({ kind: 'completed', runStatus: 'succeeded', reports: [{ versionId, href: `/tasks/${taskId}?version=${versionId}` }] })).map(quickActionCommand))
       .toEqual([`请修改工作 ${taskId} 的报告 ${versionId}：`])

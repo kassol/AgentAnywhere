@@ -9,7 +9,8 @@ type Message = { id: string; turnId: string; role: 'user' | 'assistant'; content
 type Summary = { id: string; content: string; fromTurnNumber: number; throughTurnNumber: number; coveredTurns: number }
 type Turn = { id: string; requestId: string; status: string; modelCalls: number; modelCallLimit: number; activeMs: number; activeLimitMs: number; budgetReason?: string; failure?: string }
 export type RelatedTask = { id: string; goal: string; status: string; href: string; runs: { id: string; status: string }[]; reports: { versionId: string; href: string }[] }
-export type StatusCard = { id: string; kind: 'completed' | 'failed' | 'interaction'; taskId: string; runId: string; goal: string; runStatus: string; failure?: string; href: string; reports: { versionId: string; href: string }[]; interaction?: { id: string; kind: 'question' | 'limit'; question: string; status: string; answer?: string } }
+export type RetryModel = { id: string; protocol: 'chat-completions' | 'responses'; contextWindow?: number; researchReadiness?: { status: string } }
+export type StatusCard = { id: string; kind: 'completed' | 'failed' | 'interaction'; taskId: string; runId: string; goal: string; runStatus: string; model: RetryModel; failure?: string; href: string; reports: { versionId: string; href: string }[]; interaction?: { id: string; kind: 'question' | 'limit'; question: string; status: string; answer?: string } }
 type Detail = { id: string; title: string; messages: Message[]; summaries: Summary[]; turns: Turn[]; relatedTasks: RelatedTask[]; statusCards: StatusCard[]; researchOperations: ResearchOperation[];
   controlOperations: ControlOperation[]; interactionOperations: InteractionOperation[]; retryOperations: RetryOperation[]; revisionOperations: RevisionOperation[] }
 const statusLabel: Record<string, string> = {
@@ -39,7 +40,7 @@ export function relatedTaskQuickActions(task: RelatedTask): QuickAction[] {
   return []
 }
 
-export function statusCardQuickActions(card: StatusCard, latestRunId?: string): QuickAction[] {
+export function statusCardQuickActions(card: StatusCard, latestRunId?: string, replacementModels: RetryModel[] = []): QuickAction[] {
   if (card.interaction?.status === 'pending') {
     if (latestRunId !== card.runId) return []
     const answer: QuickAction[] = card.interaction.kind === 'limit'
@@ -50,9 +51,16 @@ export function statusCardQuickActions(card: StatusCard, latestRunId?: string): 
       : [{ kind: 'answer', taskId: card.taskId, interactionId: card.interaction.id }]
     return [...answer, { kind: 'cancel', taskId: card.taskId, runId: card.runId }]
   }
-  if (['failed', 'lost'].includes(card.runStatus)) return latestRunId === card.runId
-    ? [{ kind: 'same-retry', taskId: card.taskId, sourceRunId: card.runId }]
-    : []
+  if (['failed', 'lost'].includes(card.runStatus)) {
+    if (latestRunId !== card.runId) return []
+    const replacements = replacementModels.filter(model => model.id !== card.model.id && model.protocol === card.model.protocol
+      && model.researchReadiness?.status === 'ready-to-try' && typeof card.model.contextWindow === 'number'
+      && typeof model.contextWindow === 'number' && model.contextWindow >= card.model.contextWindow)
+    return [
+      { kind: 'same-retry', taskId: card.taskId, sourceRunId: card.runId },
+      ...replacements.map(model => ({ kind: 'replacement-retry' as const, taskId: card.taskId, sourceRunId: card.runId, modelId: model.id })),
+    ]
+  }
   const report = card.runStatus === 'succeeded' ? card.reports[0] : undefined
   return report ? [{ kind: 'revision', taskId: card.taskId, versionId: report.versionId }] : []
 }
@@ -64,6 +72,7 @@ export function Steward({ fillRequest, onFillRequestHandled }: { fillRequest?: {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [events, setEvents] = useState<ActivityEvent[]>([])
+  const [replacementModels, setReplacementModels] = useState<RetryModel[]>([])
   const cursor = useRef(0)
   const composerRef = useRef(composer)
 
@@ -126,6 +135,16 @@ export function Steward({ fillRequest, onFillRequestHandled }: { fillRequest?: {
     const timer = setInterval(refresh, 500)
     return () => clearInterval(timer)
   }, [routeId])
+
+  useEffect(() => {
+    fetch('/api/model-connection').then(async response => {
+      if (response.status === 401) return location.assign('/login')
+      if (!response.ok) return
+      const value = await response.json() as { models: RetryModel[]; researchModelPool: string[] }
+      const selected = new Set(value.researchModelPool)
+      setReplacementModels(value.models.filter(model => selected.has(model.id)))
+    }).catch(() => { /* same-model retry remains available while settings are unavailable */ })
+  }, [])
 
   async function submit() {
     const prepared = prepareComposerSubmission(composerRef.current)
@@ -231,7 +250,7 @@ export function Steward({ fillRequest, onFillRequestHandled }: { fillRequest?: {
               : statusLabel[card.runStatus] ?? card.runStatus}
             {card.reports.map(report => <span key={report.versionId}> · <a href={report.href}>成果 {report.versionId.slice(0, 8)}</a></span>)}
             {card.interaction?.answer && <><br /><small>回答：{card.interaction.answer}</small></>}
-            <QuickActions actions={statusCardQuickActions(card, detail.relatedTasks.find(task => task.id === card.taskId)?.runs.at(-1)?.id)}
+            <QuickActions actions={statusCardQuickActions(card, detail.relatedTasks.find(task => task.id === card.taskId)?.runs.at(-1)?.id, replacementModels)}
               onFill={fillCommand} disabled={busy} />
           </li>)}</ul></section>}
         </StableScroll>
