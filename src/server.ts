@@ -511,7 +511,7 @@ export async function startServer(config: Config) {
         if (token && server.upgrade(request, { data: { token } })) return undefined
         return json({ error: 'WebSocket upgrade required' }, 426)
       }
-      if ((path === '/' || path === '/tasks' || path === '/settings' || /^\/tasks\/[0-9a-f-]{36}$/i.test(path) || /^\/steward\/[0-9a-f-]{36}$/i.test(path)) && request.method === 'GET') return html()
+      if ((path === '/' || path === '/tasks' || path === '/reports' || path === '/settings' || /^\/tasks\/[0-9a-f-]{36}$/i.test(path) || /^\/steward\/[0-9a-f-]{36}$/i.test(path)) && request.method === 'GET') return html()
       return json({ error: 'Not found' }, 404)
     },
     websocket: {

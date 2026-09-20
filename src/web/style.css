@@ -182,7 +182,8 @@ input:not([data-slot="input"]), select, textarea:not([data-slot="textarea"]) { b
   .content-steward .page-header { min-height: 46px; padding: 0 12px; }
   .content-steward .page-header h1 { max-width: calc(100vw - 120px); }
   .content:not(.content-steward) > .mobile-header { margin: -22px -16px 18px; }
-  .content-report > .mobile-header { display: none; }
+  .content.content-report > .mobile-header { margin: 0; }
+  .content-report .report-page { height: calc(100% - 44px); }
   .content-report { padding: 0; }
   .content-settings > .mobile-header { margin: 0; }
   .page-header.settings-page-header { min-height: 66px; margin: 0; padding: 11px 16px; }

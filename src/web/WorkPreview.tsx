@@ -36,6 +36,7 @@ export type PreviewArtifact = {
 }
 type PreviewTask = {
   id: string
+  title: string
   goal: string
   sourceUrl: string | null
   status: string
@@ -248,7 +249,7 @@ function ReportIndex({ onSelect }: { onSelect(selection: PreviewSelection): void
       const reports = task.artifacts.filter(item => item.kind === 'report' && item.runStatus === 'succeeded')
       const latest = reports[0]
       return <button type="button" key={task.id} onClick={() => onSelect({ taskId: task.id, versionId: latest.versionId })}>
-        <FileText aria-hidden="true" /><span><strong>{task.goal || task.sourceUrl || `工作 ${task.id.slice(0, 8)}`}</strong>
+        <FileText aria-hidden="true" /><span><strong>{task.title || task.goal || task.sourceUrl || `工作 ${task.id.slice(0, 8)}`}</strong>
           <small>{reports.length} 个版本 · 最近交付 {new Date(latest.createdAt).toLocaleString('zh-CN')}</small></span><span>阅读</span>
       </button>
     })}</div>}
@@ -494,7 +495,7 @@ function WorkPreview({ selection, onSelect, onClose, onFillComposer, independent
         return
       }
       setAnnotationError('')
-      if (typeof matchMedia === 'function' && matchMedia('(max-width: 900px)').matches) {
+      if (!independent && typeof matchMedia === 'function' && matchMedia('(max-width: 900px)').matches) {
         onClose()
         requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('#steward-message')?.focus())
       }
@@ -506,7 +507,7 @@ function WorkPreview({ selection, onSelect, onClose, onFillComposer, independent
   const independentVersion = selection.versionId ?? artifact?.versionId
   const renderedText = renderedReportText && renderedReportText.versionId === artifact?.versionId ? renderedReportText.text : ''
   const craftAnnotations = annotations.filter(annotation => selectorStatus(renderedText, annotation.selector) === 'exact').map(toCraftAnnotation)
-  const previewTitle = task ? task.goal || task.sourceUrl || `工作 ${task.id.slice(0, 8)}` : '正在读取工作…'
+  const previewTitle = task ? task.title || task.goal || task.sourceUrl || `工作 ${task.id.slice(0, 8)}` : '正在读取工作…'
   const reportNumber = artifact ? reports.length - reports.findIndex(item => item.versionId === artifact.versionId) : null
   return <aside className={independent ? 'work-preview work-preview-independent' : 'work-preview'} aria-labelledby="work-preview-title">
     <PreviewHeader className="work-preview-craft-header py-[8px] px-[13px] gap-[11px] border-b border-border" height={independent ? 49 : 62}
@@ -525,7 +526,8 @@ function WorkPreview({ selection, onSelect, onClose, onFillComposer, independent
       {task && <>
         <section className="work-preview-summary" aria-label="工作摘要">
           <span className="work-preview-status" data-status={task.status}>{statusLabel[task.status] ?? task.status}</span>
-          <span className="work-preview-run">Run {task.run.id.slice(0, 8)}</span>
+          <span className="work-preview-run">当前 Run {task.run.id.slice(0, 8)}</span>
+          {artifact && <span className="work-preview-run">报告来源 Run {artifact.runId.slice(0, 8)} · {statusLabel[artifact.runStatus] ?? artifact.runStatus}</span>}
           <a href={`/tasks/${task.id}${independentVersion ? `?version=${encodeURIComponent(independentVersion)}` : ''}`}>打开工作详情</a>
           {task.run.failure && <p className="error">{task.run.failure}</p>}
           {task.interaction?.status === 'pending' && <p className="work-preview-interaction" role="status">

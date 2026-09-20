@@ -55,6 +55,8 @@ test('anonymous, login, work list, live connection and logout use one session bo
   const headers = { cookie }
   expect((await fetch(base, { headers })).status).toBe(200)
   expect((await fetch(`${base}/settings`, { headers })).status).toBe(200)
+  expect((await fetch(`${base}/reports?task=11111111-1111-4111-8111-111111111111`, { headers })).status).toBe(200)
+  expect((await fetch(`${base}/reports`, { redirect: 'manual' })).status).toBe(302)
   expect(await (await fetch(`${base}/api/tasks`, { headers })).json()).toEqual([])
   expect(await websocketStatus(cookie)).toBe(101)
   expect((await fetch(`${base}/api/unknown`, { headers })).status).toBe(404)
