@@ -16,6 +16,14 @@
   --color-border: var(--border);
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
   --color-destructive: var(--danger);
   --color-success: var(--success);
   --color-info: var(--info);
@@ -41,4 +49,33 @@
   [role="textbox"][contenteditable="true"]:focus-visible {
     outline: none;
   }
+
+  .spinner {
+    display: inline-grid;
+    width: 1em;
+    height: 1em;
+    grid-template-columns: repeat(3, 1fr);
+    gap: .08em;
+  }
+
+  .spinner-cube {
+    background-color: currentColor;
+    animation: spinner-grid 1.3s infinite ease-in-out;
+    transform: scale3d(.5, .5, 1);
+  }
+
+  .spinner-cube:nth-child(1) { animation-delay: .2s; }
+  .spinner-cube:nth-child(2) { animation-delay: .3s; }
+  .spinner-cube:nth-child(3) { animation-delay: .4s; }
+  .spinner-cube:nth-child(4) { animation-delay: .1s; }
+  .spinner-cube:nth-child(5) { animation-delay: .2s; }
+  .spinner-cube:nth-child(6) { animation-delay: .3s; }
+  .spinner-cube:nth-child(7) { animation-delay: 0s; }
+  .spinner-cube:nth-child(8) { animation-delay: .1s; }
+  .spinner-cube:nth-child(9) { animation-delay: .2s; }
+}
+
+@keyframes spinner-grid {
+  0%, 70%, 100% { transform: scale3d(.5, .5, 1); }
+  35% { transform: scale3d(0, 0, 1); }
 }

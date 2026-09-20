@@ -111,3 +111,19 @@ A 的侧栏、对话和按需预览整体结构继续保留；局部控件和交
 `src/web/craft/components/PreviewHeader.tsx` 保留上游预览头的三栏结构与 Badge，移除 Electron 窗口占位，以 `leftActions/rightActions/onClose` 接浏览器返回、下载及关闭；`DocumentFormattedMarkdownOverlay.tsx` 保留文档卡 JSX，以 `renderMarkdown` 接安全渲染，`beforeContent/afterContent` 接现有版本批注，`documentRef/onDocumentMouseUp` 保留选区入口。`WorkPreview.tsx` 仍拥有 Task/Version 加载、锁定、下载和本机批注状态。
 
 #44 已实测 React 18、Tailwind、真实 ActivityItem DTO 和版本报告 props；上述公共接口可供下游使用。#45 接 Panel/SidebarButton 与主题，#46 完整验收输入和活动，#47 组合 Task/Interaction，#48 替换批注插槽，#49 组合设置行。各票表中高风险交互由对应票继续验收；没有新增范围决定或重写例外。核心浏览器完成工具详情、报告打开/下载/Esc 返回，所有页面最终验收仍由 #50 执行。
+
+## R4-04 实际迁入：完整输入与活动
+
+固定来源：Craft Agents OSS `v0.13.3` / `e8963854c3679edcceb105a42537a06749e6cb64`，Apache-2.0。许可副本为 `licenses/CRAFT-APACHE-2.0.txt`。
+
+| 本地文件 | 固定上游源码 | 保留内容 | 必要适配与裁剪 |
+| --- | --- | --- | --- |
+| `src/web/craft/components/LoadingIndicator.tsx:1-75`、`src/web/craft/styles.css:45-76` | `packages/ui/src/components/ui/LoadingIndicator.tsx:12-140`、`packages/ui/src/styles/index.css:482-510` | `formatDuration`、九格 `Spinner`、elapsed effect、`LoadingIndicator` JSX、spinner 动画 | 删除 `react-i18next`；`Spinner` 接收明确中文 aria label。输入核对、轮次等待、流式回复和对话加载均使用该组件 |
+| `src/web/craft/components/ActionBar.tsx:1-25` | `apps/electron/src/renderer/components/chat/AuthRequestCard.tsx:77-140` 的 `AuthCardActions` | 原 flex 动作区、间距、边界、hint spacer 与文字结构 | 删除 credential 主次动作 DTO；改为 `children`，由 `QuickActions.tsx:56-76` 用原 Craft `Button` 渲染现有精确授权命令和目标身份 |
+| `src/web/craft/components/RichTextInput.tsx:47-139,141-335` | `apps/electron/src/renderer/components/ui/rich-text-input.tsx:586-716` | contenteditable 文本/光标换算、HTML 转义、纯文本粘贴与原生 undo、IME 与受控同步 | 保留本地 16000 上限；`limitTextChange` 只裁剪本次新增段，保留原后缀。composition input 同步草稿 revision，受控 effect 在组合期间不覆盖 DOM，维持“服务端接受且草稿未变才清理”契约 |
+| `src/web/craft/components/FreeFormInput.tsx:51-108` | `apps/electron/src/renderer/components/app-shell/input/FreeFormInput.tsx:1248-1417,1573-1645` | submit/键盘入口、圆角输入表面、RichTextInput、底部控制行与原 Button | 继续裁掉附件、菜单、模型与权限；不执行上游提交后立即清空。增加可见 `focus-within` 焦点环；发送核对使用 LoadingIndicator |
+| `src/web/craft/components/TurnCard.tsx:54-228` | `packages/ui/src/components/chat/TurnCard.tsx:791-1386,1653-2679,2766-2850` | 活动状态、活动详情、ResponseCard、轮次展开结构 | 原本地 `LoaderCircle` 替换为上游 Spinner/LoadingIndicator；真实参数、结果、错误和轮次状态继续由现有 ActivityEvent 适配层提供 |
+
+`src/web/ActivityFeed.tsx:133-190` 的 StableScroll 和 `src/web/Composer.tsx:17-125` 的草稿/请求身份是 AgentAnywhere 业务契约，Craft 没有可直接替换的浏览器实现，本轮保留。`src/web/StewardReceipts.tsx` 的 Task、Run、Interaction、Operation 投影同样保留，只把可执行快捷动作接入 ActionBar/Button。没有新增依赖。
+
+已删除被上述组件替代的 `src/web/quick-actions.css`，并从 `src/web/composer.css` 删除 textarea、旧发送按钮和旧控制行规则。全局 `src/web/style.css` 由 R4-03 独占；其中已失去调用方的 `.tool-activity*` 留给该票合并时删除，`.return-latest` 仍服务 StableScroll。

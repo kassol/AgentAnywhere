@@ -5,6 +5,7 @@ import { ReportMarkdown } from './Work'
 import { TurnCard, type ActivityItem } from './craft/components/TurnCard'
 import { UserMessageBubble } from './craft/components/UserMessageBubble'
 import { Button } from './craft/components/Button'
+import { LoadingIndicator } from './craft/components/LoadingIndicator'
 import { Square } from 'lucide-react'
 import { QuickActions, type QuickAction } from './QuickActions'
 import { clearAcceptedAnnotations, latestSucceededReportVersion, type ReviewContext } from './ReviewAnnotations'
@@ -268,7 +269,9 @@ export function Steward({ fillRequest, onFillRequestHandled }: { fillRequest?: {
     <div className="steward-layout">
       <section className="conversation" aria-label="管家对话">
         <StableScroll storageKey={`agentanywhere:steward-scroll:${routeId ?? 'new'}`} revision={scrollRevision} className="conversation-messages">
-          {!detail?.messages.length && <div className="steward-empty"><h2>有什么需要一起梳理？</h2><p className="muted">可以讨论，也可以直接委托一项或多项独立调研。</p></div>}
+          {routeId && !detail
+            ? <div className="steward-empty"><LoadingIndicator label="正在加载对话…" /></div>
+            : !detail?.messages.length && <div className="steward-empty"><h2>有什么需要一起梳理？</h2><p className="muted">可以讨论，也可以直接委托一项或多项独立调研。</p></div>}
           {!!detail?.summaries.length && <section aria-label="较早讨论摘要"><h3>较早讨论摘要</h3>{detail.summaries.map(summary => <article key={summary.id}>
             <small>覆盖本对话第 {summary.fromTurnNumber}–{summary.throughTurnNumber} 轮，共 {summary.coveredTurns} 轮</small>
             <ReportMarkdown markdown={summary.content} />

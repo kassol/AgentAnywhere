@@ -12,6 +12,7 @@ import * as React from 'react'
 import { ArrowUp } from 'lucide-react'
 import { cn } from '../lib/utils'
 import { Button } from './Button'
+import { LoadingIndicator } from './LoadingIndicator'
 import { RichTextInput, type RichTextInputHandle } from './RichTextInput'
 
 export interface FreeFormInputProps {
@@ -71,7 +72,7 @@ export function FreeFormInput({
 
   return <form className={cn('steward-composer', className)} onSubmit={handleSubmit}>
     <label className="composer-label" htmlFor={id}>{label}</label>
-    <div className="overflow-hidden transition-all rounded-[16px] shadow-middle bg-background">
+    <div className="overflow-hidden transition-all rounded-[16px] shadow-middle bg-background focus-within:ring-1 focus-within:ring-foreground">
       <RichTextInput
         ref={richInputRef}
         id={id}
@@ -88,8 +89,8 @@ export function FreeFormInput({
       {status && <div className="px-5 pb-1 text-xs text-muted-foreground">{status}</div>}
       <div className="relative">
         <div className="flex items-center gap-1 px-2 py-2 border-t border-border/50">
-          <span className="px-2 text-xs text-muted-foreground">Enter 发送 · Shift+Enter 换行</span>
-          <div className="composer-actions ml-auto">
+          <span className="px-2 text-xs text-muted-foreground max-[420px]:hidden">Enter 发送 · Shift+Enter 换行</span>
+          <div className="composer-actions ml-auto flex min-w-0 items-center justify-end gap-2 max-[420px]:w-full">
             {actions}
             <Button
               type="submit"
@@ -98,7 +99,7 @@ export function FreeFormInput({
               className={cn('send-btn h-7 shrink-0 rounded-full ml-2', !pending && !isProcessing && 'w-7')}
               disabled={disabled || isProcessing || (!pending && !value.trim())}
             >
-              {isProcessing ? '核对中…' : pending ? '核对并重试' : <ArrowUp aria-hidden="true" />}
+              {isProcessing ? <LoadingIndicator label="核对中…" spinnerClassName="text-[10px]" /> : pending ? '核对并重试' : <ArrowUp aria-hidden="true" />}
             </Button>
           </div>
         </div>

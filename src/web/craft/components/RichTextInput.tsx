@@ -138,6 +138,36 @@ function textToHTML(text: string): string {
     .replace(/\n/g, '<br>')
 }
 
+export function limitTextChange(previousText: string, nextText: string, cursorPosition: number, maxLength?: number) {
+  if (maxLength === undefined || nextText.length <= maxLength) {
+    return { text: nextText, cursorPosition, constrained: false }
+  }
+
+  let prefixLength = 0
+  const sharedLength = Math.min(previousText.length, nextText.length)
+  while (prefixLength < sharedLength && previousText[prefixLength] === nextText[prefixLength]) prefixLength++
+
+  let suffixLength = 0
+  while (suffixLength < sharedLength - prefixLength
+    && previousText[previousText.length - 1 - suffixLength] === nextText[nextText.length - 1 - suffixLength]) suffixLength++
+
+  const nextChangeEnd = nextText.length - suffixLength
+  const previousChangeEnd = previousText.length - suffixLength
+  const replacement = nextText.slice(prefixLength, nextChangeEnd)
+  const unchangedLength = prefixLength + (previousText.length - previousChangeEnd)
+  const allowedReplacementLength = Math.max(0, maxLength - unchangedLength)
+  const acceptedReplacement = replacement.slice(0, allowedReplacementLength)
+  const text = previousText.slice(0, prefixLength) + acceptedReplacement + previousText.slice(previousChangeEnd)
+  const removedLength = replacement.length - acceptedReplacement.length
+  const adjustedCursor = cursorPosition <= prefixLength
+    ? cursorPosition
+    : cursorPosition <= nextChangeEnd
+      ? prefixLength + Math.min(cursorPosition - prefixLength, acceptedReplacement.length)
+      : cursorPosition - removedLength
+
+  return { text, cursorPosition: Math.min(Math.max(0, adjustedCursor), text.length), constrained: true }
+}
+
 export const RichTextInput = React.forwardRef<RichTextInputHandle, RichTextInputProps>(
   function RichTextInput(
     {
@@ -198,12 +228,16 @@ export const RichTextInput = React.forwardRef<RichTextInputHandle, RichTextInput
     }), [])
 
     const handleInput = React.useCallback(() => {
-      if (isComposing.current || !divRef.current) return
-      let newText = getTextFromElement(divRef.current)
-      let cursorPosition = getCursorPosition(divRef.current, cursorPositionRef.current)
-      if (maxLength !== undefined && newText.length > maxLength) {
-        newText = newText.slice(0, maxLength)
-        cursorPosition = Math.min(cursorPosition, maxLength)
+      if (!divRef.current) return
+      // Composition input must advance the parent draft revision. Otherwise a
+      // concurrent accepted submission can clear the controlled value and the
+      // following effect can erase the browser's active IME candidate.
+      const rawText = getTextFromElement(divRef.current)
+      const rawCursorPosition = getCursorPosition(divRef.current, cursorPositionRef.current)
+      const limited = limitTextChange(lastValueRef.current, rawText, rawCursorPosition, maxLength)
+      const newText = limited.text
+      const cursorPosition = limited.cursorPosition
+      if (limited.constrained && !isComposing.current) {
         isInternalUpdate.current = true
         divRef.current.innerHTML = textToHTML(newText) || '<br>'
         setCursorPosition(divRef.current, cursorPosition)
@@ -247,7 +281,8 @@ export const RichTextInput = React.forwardRef<RichTextInputHandle, RichTextInput
     }, [onFocus])
 
     React.useEffect(() => {
-      if (!divRef.current || isInternalUpdate.current || lastValueRef.current === safeValue) return
+      // The browser owns the contenteditable DOM until compositionend.
+      if (!divRef.current || isComposing.current || isInternalUpdate.current || lastValueRef.current === safeValue) return
       lastValueRef.current = safeValue
       divRef.current.innerHTML = textToHTML(safeValue) || '<br>'
       if (pendingCursorRef.current !== null || document.activeElement === divRef.current) {

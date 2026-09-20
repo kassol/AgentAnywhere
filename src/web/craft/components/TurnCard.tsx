@@ -11,8 +11,9 @@
  */
 import * as React from 'react'
 import { AnimatePresence, motion } from 'motion/react'
-import { CheckCircle2, ChevronRight, Circle, LoaderCircle, XCircle } from 'lucide-react'
+import { CheckCircle2, ChevronRight, Circle, XCircle } from 'lucide-react'
 import { cn } from '../lib/utils'
+import { LoadingIndicator, Spinner } from './LoadingIndicator'
 
 export type ActivityStatus = 'pending' | 'running' | 'completed' | 'error'
 export type ActivityType = 'tool' | 'thinking' | 'intermediate' | 'status'
@@ -52,15 +53,11 @@ export interface TurnCardProps {
   renderMarkdown: (content: string) => React.ReactNode
 }
 
-function Spinner({ className }: { className?: string }) {
-  return <LoaderCircle aria-hidden="true" className={cn('animate-spin', className)} />
-}
-
 export function ActivityStatusIcon({ status }: { status: ActivityStatus }) {
   const renderIcon = () => {
     switch (status) {
       case 'pending': return <Circle className="h-3.5 w-3.5 shrink-0 text-muted-foreground/50" />
-      case 'running': return <div className="h-3.5 w-3.5 flex items-center justify-center shrink-0"><Spinner className="h-3 w-3" /></div>
+      case 'running': return <div className="h-3.5 w-3.5 flex items-center justify-center shrink-0"><Spinner className="text-[11px]" /></div>
       case 'completed': return <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-success" />
       case 'error': return <XCircle className="h-3.5 w-3.5 shrink-0 text-destructive" />
     }
@@ -135,7 +132,7 @@ export function ResponseCard({ text, isStreaming, renderMarkdown }: ResponseCont
       <div className="relative">{renderMarkdown(displayedText)}</div>
     </div>
     {isStreaming && <div className="px-4 py-2 border-t border-border/30 flex items-center bg-foreground/2 text-xs">
-      <div className="flex items-center gap-2 text-muted-foreground"><Spinner className="h-3 w-3" /><span>生成中…</span></div>
+      <LoadingIndicator label="生成中…" spinnerClassName="text-[10px]" />
     </div>}
   </div>
 }
@@ -226,7 +223,7 @@ export const TurnCard = React.memo(function TurnCard({
         </motion.div>}
       </AnimatePresence>
     </div>}
-    {!hasActivities && isStreaming && !response && <div className="flex items-center gap-2 px-3 py-1.5 text-muted-foreground text-xs"><Spinner className="h-3 w-3" /><span>处理中…</span></div>}
+    {!hasActivities && isStreaming && !response && <LoadingIndicator label="处理中…" className="px-3 py-1.5 text-xs" spinnerClassName="text-[10px]" />}
     {response && <div className={cn('select-text', hasActivities && 'mt-2')}><ResponseCard {...response} renderMarkdown={renderMarkdown} /></div>}
   </div>
 })
