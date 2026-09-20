@@ -78,7 +78,7 @@ A 的侧栏、对话和按需预览整体结构继续保留；局部控件和交
 
 ## R4-02 实际迁入：输入与轮次
 
-以下项目已在 #44 迁入并参与实际页面渲染。报告预览的实际迁入结果由同票报告部分补充。
+以下项目已在 #44 迁入并参与实际页面渲染。核心真实链路证据见 `docs/evidence/r4-02.md`。
 
 | 本地组件 | 保留的固定上游源码 | 实际适配与删除 |
 | --- | --- | --- |
@@ -105,3 +105,9 @@ A 的侧栏、对话和按需预览整体结构继续保留；局部控件和交
 | #50 验收发布 | 上述全部 | 旧链接、旧数据、草稿兼容与清理 | 源码参与渲染、旧实现清理、全页面 ego-browser、正式环境与回滚 |
 
 本票没有核心未决问题。构建和运行兼容性明确由 #44 前置验证；局部失败只阻塞对应组件，若失败要求放弃已有上游组件，才升级为产品所有者决定的重写例外。
+
+## R4-02 报告与下游接口确认
+
+`src/web/craft/components/PreviewHeader.tsx` 保留上游预览头的三栏结构与 Badge，移除 Electron 窗口占位，以 `leftActions/rightActions/onClose` 接浏览器返回、下载及关闭；`DocumentFormattedMarkdownOverlay.tsx` 保留文档卡 JSX，以 `renderMarkdown` 接安全渲染，`beforeContent/afterContent` 接现有版本批注，`documentRef/onDocumentMouseUp` 保留选区入口。`WorkPreview.tsx` 仍拥有 Task/Version 加载、锁定、下载和本机批注状态。
+
+#44 已实测 React 18、Tailwind、真实 ActivityItem DTO 和版本报告 props；上述公共接口可供下游使用。#45 接 Panel/SidebarButton 与主题，#46 完整验收输入和活动，#47 组合 Task/Interaction，#48 替换批注插槽，#49 组合设置行。各票表中高风险交互由对应票继续验收；没有新增范围决定或重写例外。核心浏览器完成工具详情、报告打开/下载/Esc 返回，所有页面最终验收仍由 #50 执行。
