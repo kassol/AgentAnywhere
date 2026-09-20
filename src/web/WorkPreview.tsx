@@ -5,8 +5,9 @@
  * Copyright 2026 Craft Docs Ltd. Licensed under Apache-2.0.
  */
 import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
-import { ChevronLeft, FileText } from 'lucide-react'
+import { ArrowDownToLine, ChevronLeft, FileText } from 'lucide-react'
 import { ReportMarkdown, selectReportVersion } from './Work'
+import { changeComposerDraft, confirmComposerReplacement, readComposerState, writeComposerState } from './Composer'
 import { buildReviewCommand, captureTextControlSelection, fromCraftAnnotation, fromCraftSelection, readReportAnnotationDraft, readReportAnnotations, selectorStatus,
   toCraftAnnotation, toCraftSelection,
   writeReportAnnotationDraft, writeReportAnnotations,
@@ -201,8 +202,19 @@ export function ReportPage() {
     openedFromIndex.current = false
   }
 
+  function fillComposer(payload: ReviewComposerPayload) {
+    const state = readComposerState(null)
+    if (!confirmComposerReplacement(state, payload.content)) return false
+    const next = changeComposerDraft(state, payload.content, payload.review)
+    writeComposerState(null, next)
+    const stored = readComposerState(null)
+    if (stored.draft.content !== next.draft.content || JSON.stringify(stored.draft.review) !== JSON.stringify(next.draft.review)) return false
+    location.assign('/')
+    return true
+  }
+
   return <div className="report-page">{selection
-    ? <WorkPreview selection={selection} onSelect={select} onClose={close} onFillComposer={() => false} independent />
+    ? <WorkPreview selection={selection} onSelect={select} onClose={close} onFillComposer={fillComposer} independent />
     : <ReportIndex onSelect={select} />}
   </div>
 }
@@ -477,7 +489,10 @@ function WorkPreview({ selection, onSelect, onClose, onFillComposer, independent
     try {
       const built = buildReviewCommand(selection.taskId, artifact.versionId, annotations)
       if (built.content.length > 16000) throw new Error('汇总内容超过消息长度上限，请减少单次提交的批注。')
-      if (!onFillComposer(built)) return
+      if (!onFillComposer(built)) {
+        setAnnotationError('未替换聊天框草稿；批注已保留。')
+        return
+      }
       setAnnotationError('')
       if (typeof matchMedia === 'function' && matchMedia('(max-width: 900px)').matches) {
         onClose()
@@ -492,14 +507,17 @@ function WorkPreview({ selection, onSelect, onClose, onFillComposer, independent
   const renderedText = renderedReportText && renderedReportText.versionId === artifact?.versionId ? renderedReportText.text : ''
   const craftAnnotations = annotations.filter(annotation => selectorStatus(renderedText, annotation.selector) === 'exact').map(toCraftAnnotation)
   const previewTitle = task ? task.goal || task.sourceUrl || `工作 ${task.id.slice(0, 8)}` : '正在读取工作…'
+  const reportNumber = artifact ? reports.length - reports.findIndex(item => item.versionId === artifact.versionId) : null
   return <aside className={independent ? 'work-preview work-preview-independent' : 'work-preview'} aria-labelledby="work-preview-title">
     <PreviewHeader className="work-preview-craft-header py-[8px] px-[13px] gap-[11px] border-b border-border" height={independent ? 49 : 62}
       style={{ position: 'sticky', zIndex: 2, top: 0, background: 'var(--panel)' }} onClose={onClose}
       leftActions={<Button ref={closeButton} type="button" variant="ghost" size="sm" className="work-preview-back" onClick={onClose}>
-        <ChevronLeft aria-hidden="true" />返回对话
-      </Button>}>
-      <PreviewHeaderBadge label="报告" variant="read" />
-      <PreviewHeaderBadge id="work-preview-title" label={previewTitle} title={previewTitle} shrinkable />
+        <ChevronLeft aria-hidden="true" />{independent ? '报告' : '返回对话'}
+      </Button>}
+      rightActions={artifact && <Button asChild type="button" variant="ghost" size="sm"><a href={`/api/artifacts/${artifact.versionId}/download`}><ArrowDownToLine aria-hidden="true" />下载</a></Button>}>
+      {independent
+        ? <PreviewHeaderBadge id="work-preview-title" icon={FileText} label={`${previewTitle}${reportNumber ? ` · 第 ${reportNumber} 版` : ''}`} title={previewTitle} shrinkable />
+        : <><PreviewHeaderBadge label="报告" variant="read" /><PreviewHeaderBadge id="work-preview-title" label={previewTitle} title={previewTitle} shrinkable /></>}
     </PreviewHeader>
     <div ref={scroll} className="work-preview-scroll" onScroll={rememberScroll}>
       {task === undefined && <p className="muted" role="status">正在加载工作详情…</p>}
@@ -520,7 +538,7 @@ function WorkPreview({ selection, onSelect, onClose, onFillComposer, independent
               onClick={() => onSelect({ taskId: task.id, versionId: item.versionId })}>
               第 {reports.length - index} 版 <small>{new Date(item.createdAt).toLocaleString('zh-CN')}</small>
             </Button>)}
-          </nav>{artifact && <a href={`/api/artifacts/${artifact.versionId}/download`}>下载 .md</a>}</div>}
+          </nav></div>}
         {versionError && <p className="error work-preview-version-error" role="alert">{versionError}</p>}
         {!versionError && !artifact && <p className="muted">这项工作尚无可读报告。</p>}
         {artifact && <>

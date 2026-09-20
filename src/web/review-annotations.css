@@ -122,6 +122,25 @@
   background: color-mix(in srgb, var(--danger) 6%, var(--panel));
 }
 
+.work-preview .review-annotations {
+  position: absolute;
+  z-index: 4;
+  right: 18px;
+  bottom: 24px;
+  width: min(370px, calc(100% - 36px));
+  max-width: 370px;
+  max-height: 58%;
+  margin: 0;
+  padding: 13px;
+  overflow-y: auto;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--background) 96%, transparent);
+  box-shadow: 0 12px 46px var(--shadow);
+}
+
+.work-preview .review-annotations > article:last-child { padding-bottom: 2px; }
+
 .review-version-conflict > strong {
   font-size: 11px;
 }
@@ -141,6 +160,13 @@
 }
 
 @media (max-width: 680px) {
+  .work-preview .review-annotations {
+    right: 10px;
+    bottom: 10px;
+    width: calc(100% - 20px);
+    max-width: none;
+    max-height: 48%;
+  }
   .review-selection > div,
   .review-annotations > header,
   .review-annotations > article > div,
