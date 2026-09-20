@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { EmptyStateCard } from './EmptyStateCard'
+import { buildToolActivities, readActivityPages, StableScroll, ToolActivityList, type ActivityEvent } from './ActivityFeed'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
@@ -7,7 +8,7 @@ type Model = { id: string; protocol: 'chat-completions' | 'responses' }
 type Task = { id: string; goal: string; sourceUrl: string | null; status: string; createdAt: string }
 type Artifact = { id: string; kind: 'report' | 'attachment'; name: string; versionId: string; runId: string; runStatus: string; sha256: string; sizeBytes: number; createdAt: string }
 type Detail = Task & { run: { id: string; status: string; model: Model; cleanupState: string; failure: string | null; startedAt: string | null; finishedAt: string | null; previousReportVersionId: string | null; retryOfRunId: string | null; modelCalls: number; modelCallLimit: number; activeMs: number; activeLimitMs: number; budgetReason: string | null }; runs: { id: string; status: string; createdAt: string; previousReportVersionId: string | null; retryOfRunId: string | null }[]; interaction: { id: string; kind: 'question' | 'limit'; question: string; status: string; answer: string | null } | null; thread: { id: string; messages: { role: 'user'; content: string; status: 'pending' | 'applied' | 'carried' }[] }; artifacts: Artifact[] }
-type RunEvent = { serverSeq: number; epoch: number; type: string; payload: Record<string, any>; occurredAt: string }
+type RunEvent = ActivityEvent & { epoch: number }
 const statusLabel: Record<string, string> = { queued: '待执行', provisioning: '准备环境', running: '执行中', waiting: '等待回答', cancelling: '正在取消', cancelled: '已取消', succeeded: '已完成', failed: '失败', lost: '执行中断', save_failed: '成果保存失败' }
 const safeLink = (url: string) => {
   if (/^\/tasks\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(url)
@@ -68,13 +69,10 @@ export function Work() {
         else {
           if (currentRun.current !== value.run.id) { currentRun.current = value.run.id; cursor.current = 0; setEvents([]) }
           setDetail(value)
-          const additions = await read<RunEvent[]>(await fetch(`${path}/events?after=${cursor.current}`))
+          const loaded = await readActivityPages(cursor.current, after => fetch(`${path}/events?after=${after}`).then(response => read<RunEvent[]>(response)))
           if (disposed) return
-          const fresh = additions.filter(event => event.serverSeq > cursor.current)
-          if (fresh.length) {
-            cursor.current = fresh[fresh.length - 1].serverSeq
-            setEvents(previous => [...previous, ...fresh])
-          }
+          cursor.current = loaded.cursor
+          if (loaded.events.length) setEvents(previous => [...previous, ...loaded.events])
         }
       } finally { loading = false }
     }
@@ -100,22 +98,19 @@ export function Work() {
     return () => { disposed = true }
   }, [currentVersion])
 
-  const activity: { id: string; kind: 'message' | 'tool'; text: string; done: boolean }[] = []
-  let draft = ''
+  const messagesByEpoch = new Map<number, { id: string; text: string; done: boolean }[]>()
+  const drafts = new Map<number, string>()
   for (const event of events) {
-    if (event.type === 'message.delta') draft += String(event.payload.delta ?? '')
+    if (event.type === 'message.delta') drafts.set(event.epoch, (drafts.get(event.epoch) ?? '') + String(event.payload.delta ?? ''))
     if (event.type === 'message.completed') {
-      const text = String(event.payload.content || draft)
-      if (text) activity.push({ id: String(event.serverSeq), kind: 'message', text, done: true })
-      draft = ''
-    }
-    if (event.type === 'tool.started') activity.push({ id: `${event.epoch}:${event.payload.toolCallId}`, kind: 'tool', text: `${event.payload.name}(${JSON.stringify(event.payload.args)})`, done: false })
-    if (event.type === 'tool.completed') {
-      const item = activity.find(item => item.kind === 'tool' && item.id === `${event.epoch}:${event.payload.toolCallId}`)
-      if (item) { item.text += ` → ${String(event.payload.result ?? '')}`; item.done = true }
+      const text = String(event.payload.content || drafts.get(event.epoch) || '')
+      if (text) messagesByEpoch.set(event.epoch, [...(messagesByEpoch.get(event.epoch) ?? []), { id: String(event.serverSeq), text, done: true }])
+      drafts.delete(event.epoch)
     }
   }
-  if (draft) activity.push({ id: 'stream', kind: 'message', text: draft, done: false })
+  for (const [epoch, text] of drafts) if (text) messagesByEpoch.set(epoch, [...(messagesByEpoch.get(epoch) ?? []), { id: `stream:${epoch}`, text, done: false }])
+  const toolActivities = buildToolActivities(events)
+  const activityEpochs = [...new Set([...messagesByEpoch.keys(), ...toolActivities.map(item => Number(item.scopeId))])].filter(Number.isFinite).sort((a, b) => a - b)
   const usageByCall = new Map<string, Record<string, any>>()
   for (const event of events) if (event.type === 'usage') usageByCall.set(String(event.payload.callId ?? event.serverSeq), event.payload)
   const usage = [...usageByCall.values()]
@@ -266,7 +261,15 @@ export function Work() {
         <label>协议<select value={protocol} onChange={event => setProtocol(event.target.value)}><option value="default">使用模型默认协议</option><option value="chat-completions">Chat Completions</option><option value="responses">Responses</option></select></label>
         <button disabled={busy || !continuation.trim() || !modelId} type="submit">{busy ? '正在保存…' : '创建新 Run'}</button>
       </form>}
-      {activity.map(item => <p className="work-message" key={item.id}>{item.kind === 'tool' ? '工具：' : 'Agent：'}{item.text}{!item.done && '…'}</p>)}
+      {!!activityEpochs.length && <section className="work-activity" aria-label="执行活动"><h3>执行活动</h3>
+        <StableScroll storageKey={`agentanywhere:work-scroll:${detail.run.id}`} revision={events.at(-1)?.serverSeq ?? 0} className="work-activity-scroll">
+          {activityEpochs.map(epoch => <section className="work-activity-epoch" key={epoch} aria-labelledby={`epoch-${epoch}`}>
+            <h4 id={`epoch-${epoch}`}>执行阶段 {epoch}</h4>
+            <ToolActivityList activities={toolActivities.filter(item => item.scopeId === String(epoch))} />
+            {messagesByEpoch.get(epoch)?.map(item => <article className="work-agent-message" key={item.id}><strong>Agent</strong><ReportMarkdown markdown={item.text} />{!item.done && <small>生成中</small>}</article>)}
+          </section>)}
+        </StableScroll>
+      </section>}
       <p className="muted">用量：输入 {tokens('inputTokens') ?? '未知'} / 输出 {tokens('outputTokens') ?? '未知'} token</p>
       <p className="muted">实际费用：未知</p>
       <p className="muted">耗时：{detail.run.startedAt && detail.run.finishedAt ? `${Math.round((Date.parse(detail.run.finishedAt) - Date.parse(detail.run.startedAt)) / 1000)} 秒` : '未知'}</p>

@@ -561,6 +561,15 @@ test('a clear steward delegation creates independent work with a persisted model
       { status: 'accepted', modelId: 'research-a', protocol: 'responses', reason: '工具能力资料完整', verification: 'unverified' },
       { status: 'accepted', modelId: 'research-a', protocol: 'responses', reason: '同类任务沿用已授权候选', verification: 'unverified' },
     ])
+    expect(detail.researchOperations.every((operation: any) => operation.turnId === detail.turns[0].id)).toBe(true)
+    const activity = await (await send(`/api/steward/threads/${thread.id}/events`)).json()
+    const toolStarts = activity.filter((event: any) => event.type === 'tool.started')
+    const toolCompletions = activity.filter((event: any) => event.type === 'tool.completed')
+    expect(toolStarts.length).toBeGreaterThanOrEqual(3)
+    expect(toolCompletions.map((event: any) => event.payload.toolCallId).sort())
+      .toEqual(toolStarts.map((event: any) => event.payload.toolCallId).sort())
+    expect(toolCompletions.every((event: any) => event.turnId === detail.turns[0].id
+      && Array.isArray(event.payload.result?.content) && event.payload.isError === false && event.payload.error === null)).toBe(true)
     const tasks = await (await send('/api/tasks')).json()
     expect(tasks.filter((task: any) => ['独立调研甲', '独立调研乙'].includes(task.goal))).toHaveLength(2)
 

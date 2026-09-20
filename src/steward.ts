@@ -340,29 +340,29 @@ export async function createStewardService(databaseUrl: string, resolveCredentia
           AND covered.turn_seq BETWEEN s.from_turn_seq AND s.through_turn_seq) AS "coveredTurns",
         s.created_at AS "createdAt" FROM steward_summaries s WHERE s.thread_id=${id} ORDER BY s.through_turn_seq DESC LIMIT 1`
       const links = await sql`SELECT task_id AS id FROM steward_thread_tasks WHERE thread_id=${id} ORDER BY created_at, task_id`
-      const researchOperations = await sql`SELECT o.operation_id AS "operationId", o.status, o.task_id AS "taskId", o.run_id AS "runId",
+      const researchOperations = await sql`SELECT o.turn_id AS "turnId", o.operation_id AS "operationId", o.status, o.task_id AS "taskId", o.run_id AS "runId",
         o.goal, o.source_url AS "sourceUrl", o.model_snapshot->>'id' AS "modelId", o.model_snapshot->>'protocol' AS protocol,
         o.reason, o.evidence, o.failure, o.created_at AS "createdAt", o.finished_at AS "finishedAt"
         FROM steward_research_operations o JOIN steward_turns r ON r.id=o.turn_id
         WHERE r.thread_id=${id} ORDER BY r.turn_seq, o.ordinal`
-      const controlOperations = await sql`SELECT o.operation_id AS "operationId", o.kind, o.status, o.task_id AS "taskId", o.run_id AS "runId",
+      const controlOperations = await sql`SELECT o.turn_id AS "turnId", o.operation_id AS "operationId", o.kind, o.status, o.task_id AS "taskId", o.run_id AS "runId",
         o.content, o.result_json AS result, o.failure,
         (SELECT m.status FROM work_messages m WHERE m.command_id=o.command_id) AS "messageStatus",
         o.created_at AS "createdAt", o.finished_at AS "finishedAt"
         FROM steward_control_operations o JOIN steward_turns r ON r.id=o.turn_id
         WHERE r.thread_id=${id} ORDER BY r.turn_seq, o.created_at`
-      const interactionOperations = await sql`SELECT o.operation_id AS "operationId", o.status, o.task_id AS "taskId", o.run_id AS "runId",
+      const interactionOperations = await sql`SELECT o.turn_id AS "turnId", o.operation_id AS "operationId", o.status, o.task_id AS "taskId", o.run_id AS "runId",
         o.run_epoch AS epoch, o.interaction_id AS "interactionId", o.interaction_kind AS "interactionKind", o.answer, o.decision,
         o.result_json AS result, o.failure, o.created_at AS "createdAt", o.finished_at AS "finishedAt"
         FROM steward_interaction_operations o JOIN steward_turns r ON r.id=o.turn_id
         WHERE r.thread_id=${id} ORDER BY r.turn_seq, o.created_at`
-      const retryOperations = await sql`SELECT o.operation_id AS "operationId", o.mode, o.status, o.task_id AS "taskId",
+      const retryOperations = await sql`SELECT o.turn_id AS "turnId", o.operation_id AS "operationId", o.mode, o.status, o.task_id AS "taskId",
         o.source_run_id AS "sourceRunId", o.run_id AS "runId", o.model_snapshot AS "modelSnapshot",
         o.result_json AS result, o.failure,
         o.created_at AS "createdAt", o.finished_at AS "finishedAt"
         FROM steward_retry_operations o JOIN steward_turns r ON r.id=o.turn_id
         WHERE r.thread_id=${id} ORDER BY r.turn_seq, o.created_at`
-      const revisionOperations = await sql`SELECT o.operation_id AS "operationId", o.status, o.task_id AS "taskId",
+      const revisionOperations = await sql`SELECT o.turn_id AS "turnId", o.operation_id AS "operationId", o.status, o.task_id AS "taskId",
         o.base_run_id AS "baseRunId", o.source_version_id AS "sourceVersionId", o.run_id AS "runId", o.content,
         o.model_snapshot->>'id' AS "modelId", o.model_snapshot->>'protocol' AS protocol, o.reason, o.evidence,
         o.result_json AS result, o.failure, o.created_at AS "createdAt", o.finished_at AS "finishedAt"
@@ -465,9 +465,10 @@ export async function createStewardService(databaseUrl: string, resolveCredentia
   }
 
   async function events(threadId: string, after: number) {
-    return db`SELECT e.server_seq AS "serverSeq", e.turn_id AS "turnId", e.type, e.payload, e.occurred_at AS "occurredAt"
+    const rows = await db`SELECT e.server_seq AS "serverSeq", e.turn_id AS "turnId", e.type, e.payload, e.occurred_at AS "occurredAt"
       FROM steward_events e JOIN steward_turns r ON r.id=e.turn_id JOIN steward_threads t ON t.id=r.thread_id
       WHERE t.id=${threadId} AND t.owner_id='owner' AND e.server_seq>${after} ORDER BY e.server_seq LIMIT 500`
+    return rows.map((row: { payload: unknown }) => ({ ...row, payload: typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload }))
   }
 
   async function reserveAttempt(turnId: string) {
@@ -1529,11 +1530,26 @@ export async function createStewardService(databaseUrl: string, resolveCredentia
       })
       let writes = Promise.resolve()
       agent.subscribe(async event => {
-        if (event.type !== 'message_update' || event.message.role !== 'assistant' || event.assistantMessageEvent.type !== 'text_delta') return
-        const delta = event.assistantMessageEvent.delta
+        let type: string
+        let payload: Record<string, unknown>
+        let delta: string | null = null
+        if (event.type === 'message_update' && event.message.role === 'assistant' && event.assistantMessageEvent.type === 'text_delta') {
+          type = 'assistant.delta'
+          delta = event.assistantMessageEvent.delta
+          payload = { delta }
+        } else if (event.type === 'tool_execution_start') {
+          type = 'tool.started'
+          payload = { toolCallId: event.toolCallId, name: event.toolName, args: event.args }
+        } else if (event.type === 'tool_execution_end') {
+          type = 'tool.completed'
+          const error = event.isError
+            ? event.result?.content?.filter((part: { type: string }) => part.type === 'text').map((part: { text?: string }) => part.text ?? '').join('') || '工具执行失败'
+            : null
+          payload = { toolCallId: event.toolCallId, name: event.toolName, result: event.result ?? null, isError: event.isError, error }
+        } else return
         writes = writes.then(() => db.begin(async sql => {
-          await sql`UPDATE steward_messages SET content=content || ${delta} WHERE id=${assistantId}`
-          await sql`INSERT INTO steward_events (turn_id, event_id, type, payload) VALUES (${turn.id}, ${crypto.randomUUID()}, 'assistant.delta', ${JSON.stringify({ delta })}::jsonb)`
+          if (delta !== null) await sql`UPDATE steward_messages SET content=content || ${delta} WHERE id=${assistantId}`
+          await sql`INSERT INTO steward_events (turn_id, event_id, type, payload) VALUES (${turn.id}, ${crypto.randomUUID()}, ${type}, ${JSON.stringify(payload)}::jsonb)`
         })).then(() => {})
         await writes
       })

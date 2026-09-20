@@ -1,19 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import { Composer, acceptComposerSubmission, attachComposerThread, changeComposerDraft, prepareComposerSubmission, readComposerState, rejectComposerSubmission, writeComposerState, type ComposerState, type ComposerSubmission } from './Composer'
+import { buildToolActivities, readActivityPages, StableScroll, ToolActivityList, type ActivityEvent } from './ActivityFeed'
 import { ReportMarkdown } from './Work'
+import { StewardReceipts, type ControlOperation, type InteractionOperation, type ResearchOperation, type RetryOperation, type RevisionOperation } from './StewardReceipts'
 
 type Message = { id: string; turnId: string; role: 'user' | 'assistant'; content: string; status: string }
 type Summary = { id: string; content: string; fromTurnNumber: number; throughTurnNumber: number; coveredTurns: number }
 type Turn = { id: string; requestId: string; status: string; modelCalls: number; modelCallLimit: number; activeMs: number; activeLimitMs: number; budgetReason?: string; failure?: string }
 type RelatedTask = { id: string; goal: string; status: string; href: string; reports: { versionId: string; href: string }[] }
 type StatusCard = { id: string; kind: 'completed' | 'failed' | 'interaction'; taskId: string; runId: string; goal: string; runStatus: string; failure?: string; href: string; reports: { versionId: string; href: string }[]; interaction?: { id: string; kind: 'question' | 'limit'; question: string; status: string; answer?: string } }
-type ResearchOperation = { operationId: string; status: string; taskId?: string; runId?: string; goal: string; modelId: string; protocol: string; reason: string; verification: string; sources?: Record<string, { source: string }>; failure?: string }
-type ControlOperation = { operationId: string; kind: 'steer' | 'cancel'; status: string; taskId?: string; runId?: string; content?: string; messageStatus?: 'pending' | 'applied' | 'carried'; failure?: string }
-type InteractionOperation = { operationId: string; status: string; taskId?: string; runId?: string; epoch?: number; interactionId?: string;
-  interactionKind?: 'question' | 'limit'; answer?: string; decision?: 'continue' | 'finish'; failure?: string }
-type RetryOperation = { operationId: string; mode: 'same' | 'replacement'; status: string; taskId?: string; sourceRunId?: string; runId?: string;
-  modelId?: string; protocol?: string; failure?: string }
-type RevisionOperation = { operationId: string; status: string; taskId?: string; sourceVersionId?: string; runId?: string; content: string; modelId: string; protocol: string; reason: string; verification: string; sources?: Record<string, { source: string }>; failure?: string }
 type Detail = { id: string; title: string; messages: Message[]; summaries: Summary[]; turns: Turn[]; relatedTasks: RelatedTask[]; statusCards: StatusCard[]; researchOperations: ResearchOperation[];
   controlOperations: ControlOperation[]; interactionOperations: InteractionOperation[]; retryOperations: RetryOperation[]; revisionOperations: RevisionOperation[] }
 const statusLabel: Record<string, string> = {
@@ -23,13 +18,9 @@ const statusLabel: Record<string, string> = {
   planned: '待派发', accepted: '已接收', unexecuted: '未执行', pending: '待回答', answered: '已回答',
 }
 
-function controlStatus(operation: ControlOperation) {
-  if (operation.status === 'intent') return '待明确目标'
-  if (operation.status === 'planned') return '待执行'
-  if (operation.kind !== 'steer' || operation.status !== 'accepted') return statusLabel[operation.status] ?? operation.status
-  if (operation.messageStatus === 'applied') return '已应用'
-  if (operation.messageStatus === 'carried') return '已纳入后续执行'
-  return '已接收，等待安全时机'
+function limitMessage(turn: Turn) {
+  const limit = turn.budgetReason === 'time' ? ' 5 分钟' : turn.budgetReason === 'creates' ? ' 3 项工作创建' : ' 8 次模型请求'
+  return `本轮已达到${limit}上限。发送新消息可开始下一轮。`
 }
 
 export function Steward() {
@@ -38,6 +29,7 @@ export function Steward() {
   const [composer, setComposer] = useState<ComposerState>(() => readComposerState(routeId))
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [events, setEvents] = useState<ActivityEvent[]>([])
   const cursor = useRef(0)
   const composerRef = useRef(composer)
 
@@ -70,6 +62,7 @@ export function Steward() {
     composerRef.current = restored
     setComposer(restored)
     setDetail(null)
+    setEvents([])
     if (!routeId) {
       if (restored.pending?.threadId) void loadDetail(restored.pending.threadId)
       return
@@ -79,10 +72,12 @@ export function Steward() {
       if (refreshing) return
       refreshing = true
       try {
-        const response = await fetch(`/api/steward/threads/${routeId}/events?after=${cursor.current}`)
-        if (!response.ok) return
-        const events = await response.json() as { serverSeq: number }[]
-        if (events.length) cursor.current = events.at(-1)!.serverSeq
+        const loaded = await readActivityPages(cursor.current, async after => {
+          const response = await fetch(`/api/steward/threads/${routeId}/events?after=${after}`)
+          return response.ok ? await response.json() as ActivityEvent[] : []
+        })
+        cursor.current = loaded.cursor
+        if (loaded.events.length) setEvents(previous => [...previous, ...loaded.events])
         await loadDetail(routeId!)
       } catch { /* retain the last view until the connection recovers */ }
       finally { refreshing = false }
@@ -148,79 +143,37 @@ export function Steward() {
     else if (routeId) await loadDetail(routeId)
   }
 
-  function resumeButton(operationId: string, status: string, action: '调研' | '追加' | '取消' | '回答' | '重试' | '改稿', recoverable = true) {
-    if (!recoverable || !['accepted', 'unexecuted'].includes(status)) return null
-    const command = `继续${action}回执 ${operationId}`
-    return <button type="button" className="secondary" aria-label={command} onClick={() => {
-      storeComposer(changeComposerDraft(composerRef.current, command))
-    }}>填入继续命令</button>
-  }
-
-  const current = detail?.turns.at(-1)
   const activeTurns = detail?.turns.filter(turn => ['queued', 'running', 'stopping'].includes(turn.status)) ?? []
+  const toolActivities = buildToolActivities(events)
+  const scrollRevision = `${detail?.messages.length ?? 0}:${events.at(-1)?.serverSeq ?? 0}:${detail?.turns.at(-1)?.status ?? ''}`
   return (
     <div className="steward-layout">
       <section className="conversation" aria-label="管家对话">
-        <div className="conversation-messages" aria-live="polite">
+        <StableScroll storageKey={`agentanywhere:steward-scroll:${routeId ?? 'new'}`} revision={scrollRevision} className="conversation-messages">
           {!detail?.messages.length && <div className="steward-empty"><h2>有什么需要一起梳理？</h2><p className="muted">可以讨论，也可以直接委托一项或多项独立调研。</p></div>}
           {!!detail?.summaries.length && <section aria-label="较早讨论摘要"><h3>较早讨论摘要</h3>{detail.summaries.map(summary => <article key={summary.id}>
             <small>覆盖本对话第 {summary.fromTurnNumber}–{summary.throughTurnNumber} 轮，共 {summary.coveredTurns} 轮</small>
             <ReportMarkdown markdown={summary.content} />
           </article>)}</section>}
-          {detail?.messages.map(message => <article key={message.id} className={`conversation-message ${message.role}`}>
-            <strong>{message.role === 'user' ? '你' : '管家'}</strong>
-            {message.role === 'assistant' ? <ReportMarkdown markdown={message.content || '…'} /> : <p>{message.content}</p>}
-            {message.role === 'assistant' && message.status !== 'completed' && <small>{statusLabel[message.status] ?? message.status}</small>}
-          </article>)}
-          {current?.failure && <p className="error" role="alert">{current.failure}</p>}
-          {current?.status === 'limited' && <p className="error" role="status">本轮已达到{current.budgetReason === 'time' ? ' 5 分钟' : current.budgetReason === 'creates' ? ' 3 项工作创建' : ' 8 次模型请求'}上限。发送新消息可开始下一轮。</p>}
-          {!!detail?.researchOperations.length && <section aria-label="调研派发"><h3>调研派发</h3><ul>{detail.researchOperations.map(operation => {
-            const sourceLabels = [...new Set(Object.values(operation.sources ?? {}).map(source => source.source))]
-            return <li key={operation.operationId}>
-              {operation.taskId ? <a href={`/tasks/${operation.taskId}`}>{operation.goal}</a> : <span>{operation.goal}</span>}
-              {' · '}{statusLabel[operation.status] ?? operation.status}{' · '}{operation.modelId}（{operation.protocol}）
-              {' · '}{operation.verification === 'verified' ? '已有成功报告记录' : '尚未实测'}
-              {sourceLabels.length > 0 && <> · 依据：{sourceLabels.join('、')}</>}
-              <br /><small>选择理由：{operation.reason}{operation.runId ? ` · Run ${operation.runId.slice(0, 8)}` : ''}{operation.failure ? ` · ${operation.failure}` : ''}</small>
-              {' '}{resumeButton(operation.operationId, operation.status, '调研')}
-            </li>
-          })}</ul></section>}
-          {!!detail?.controlOperations.length && <section aria-label="工作控制"><h3>工作控制</h3><ul>{detail.controlOperations.map(operation => <li key={operation.operationId}>
-            {operation.taskId ? <a href={`/tasks/${operation.taskId}`}>{operation.kind === 'steer' ? '追加要求' : '取消工作'}</a> : <span>{operation.kind === 'steer' ? '追加要求' : '取消工作'}</span>}
-            {' · '}{controlStatus(operation)}
-            {operation.runId ? ` · Run ${operation.runId.slice(0, 8)}` : ''}
-            {operation.content ? <><br /><small>{operation.content}</small></> : null}
-            {operation.failure ? <><br /><small>{operation.failure}</small></> : null}
-            {' '}{resumeButton(operation.operationId, operation.status, operation.kind === 'steer' ? '追加' : '取消', Boolean(operation.taskId && operation.runId))}
-          </li>)}</ul></section>}
-          {!!detail?.interactionOperations.length && <section aria-label="工作回答"><h3>工作回答</h3><ul>{detail.interactionOperations.map(operation => <li key={operation.operationId}>
-            {operation.taskId ? <a href={`/tasks/${operation.taskId}`}>{operation.interactionKind === 'limit' ? '额度决定' : '回答问题'}</a>
-              : <span>{operation.interactionKind === 'limit' ? '额度决定' : '回答问题'}</span>}
-            {' · '}{statusLabel[operation.status] ?? (operation.status === 'intent' ? '待明确目标' : operation.status)}
-            {operation.runId ? ` · Run ${operation.runId.slice(0, 8)}` : ''}{operation.epoch === undefined ? '' : ` · epoch ${operation.epoch}`}
-            {operation.answer ? <><br /><small>{operation.answer}</small></> : operation.decision ? <><br /><small>{operation.decision === 'continue' ? '继续工作' : '结束工作'}</small></> : null}
-            {operation.failure ? <><br /><small>{operation.failure}</small></> : null}
-            {' '}{resumeButton(operation.operationId, operation.status, '回答', Boolean(operation.taskId && operation.runId && operation.interactionId && operation.epoch !== null && operation.epoch !== undefined))}
-          </li>)}</ul></section>}
-          {!!detail?.retryOperations.length && <section aria-label="工作重试"><h3>工作重试</h3><ul>{detail.retryOperations.map(operation => <li key={operation.operationId}>
-            {operation.taskId ? <a href={`/tasks/${operation.taskId}`}>{operation.mode === 'same' ? '同模型重试' : '替代模型重试'}</a>
-              : <span>{operation.mode === 'same' ? '同模型重试' : '替代模型重试'}</span>}
-            {' · '}{statusLabel[operation.status] ?? (operation.status === 'intent' ? '待明确目标' : operation.status)}
-            {operation.modelId ? ` · ${operation.modelId}${operation.protocol ? `（${operation.protocol}）` : ''}` : ''}
-            {operation.sourceRunId ? ` · 原 Run ${operation.sourceRunId.slice(0, 8)}` : ''}
-            {operation.runId ? ` · 新 Run ${operation.runId.slice(0, 8)}` : ''}
-            {operation.failure ? <><br /><small>{operation.failure}</small></> : null}
-            {' '}{resumeButton(operation.operationId, operation.status, '重试', Boolean(operation.taskId && operation.sourceRunId && operation.modelId))}
-          </li>)}</ul></section>}
-          {!!detail?.revisionOperations.length && <section aria-label="报告改稿"><h3>报告改稿</h3><ul>{detail.revisionOperations.map(operation => <li key={operation.operationId}>
-            {operation.taskId ? <a href={`/tasks/${operation.taskId}`}>报告改稿</a> : <span>报告改稿</span>}
-            {' · '}{statusLabel[operation.status] ?? operation.status}{' · '}{operation.modelId}（{operation.protocol}）
-            {' · '}{operation.verification === 'verified' ? '已有成功报告记录' : '尚未实测'}
-            {operation.sourceVersionId && operation.taskId ? <> · <a href={`/tasks/${operation.taskId}?version=${operation.sourceVersionId}`}>源成果 {operation.sourceVersionId.slice(0, 8)}</a></> : null}
-            {operation.runId ? ` · 新 Run ${operation.runId.slice(0, 8)}` : ''}
-            <br /><small>修改要求：{operation.content} · 选择理由：{operation.reason}{operation.failure ? ` · ${operation.failure}` : ''}</small>
-            {' '}{resumeButton(operation.operationId, operation.status, '改稿', Boolean(operation.taskId && operation.sourceVersionId && operation.modelId))}
-          </li>)}</ul></section>}
+          {detail?.turns.map((turn, index) => {
+            const messages = detail.messages.filter(message => message.turnId === turn.id)
+            return <section className="steward-turn" key={turn.id} aria-labelledby={`steward-turn-${turn.id}`}>
+              <header><h3 id={`steward-turn-${turn.id}`}>第 {index + 1} 轮</h3><small>{statusLabel[turn.status] ?? turn.status}</small></header>
+              {messages.filter(message => message.role === 'user').map(message => <article key={message.id} className="conversation-message user">
+                <strong>你</strong><p>{message.content}</p>
+              </article>)}
+              <ToolActivityList activities={toolActivities.filter(activity => activity.scopeId === turn.id)} />
+              <StewardReceipts turnId={turn.id} research={detail.researchOperations} controls={detail.controlOperations}
+                interactions={detail.interactionOperations} retries={detail.retryOperations} revisions={detail.revisionOperations}
+                onResume={(operationId, action) => storeComposer(changeComposerDraft(composerRef.current, `继续${action}回执 ${operationId}`))} />
+              {messages.filter(message => message.role === 'assistant').map(message => <article key={message.id} className="conversation-message assistant">
+                <strong>管家</strong><ReportMarkdown markdown={message.content || '…'} />
+                {message.status !== 'completed' && <small>{statusLabel[message.status] ?? message.status}</small>}
+              </article>)}
+              {turn.failure && <p className="error" role="alert">{turn.failure}</p>}
+              {turn.status === 'limited' && <p className="error" role="status">{limitMessage(turn)}</p>}
+            </section>
+          })}
           {!!detail?.relatedTasks.length && <section aria-label="关联工作"><h3>关联工作</h3><ul>{detail.relatedTasks.map(task => <li key={task.id}>
             <a href={task.href}>{task.goal}</a> <span>{statusLabel[task.status] ?? task.status}</span>
             {task.reports.map(report => <span key={report.versionId}> · <a href={report.href}>成果 {report.versionId.slice(0, 8)}</a></span>)}
@@ -233,7 +186,7 @@ export function Steward() {
             {card.reports.map(report => <span key={report.versionId}> · <a href={report.href}>成果 {report.versionId.slice(0, 8)}</a></span>)}
             {card.interaction?.answer && <><br /><small>回答：{card.interaction.answer}</small></>}
           </li>)}</ul></section>}
-        </div>
+        </StableScroll>
         <Composer state={composer} busy={busy} error={error} onChange={content => storeComposer(changeComposerDraft(composerRef.current, content))}
           onSubmit={() => void submit()} actions={activeTurns.map((turn, index) => <button key={turn.id} type="button" className="secondary" onClick={() => void stop(turn.id)}>
               {turn.status === 'queued' ? `撤回排队${activeTurns.length > 1 ? ` ${index + 1}` : ''}` : '停止本轮'}
