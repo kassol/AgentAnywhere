@@ -12,6 +12,22 @@ function hold(response, data) {
   response.on('close', () => waiting.delete(response))
 }
 const send = (response, data) => response.write(`data: ${JSON.stringify(data)}\n\n`)
+const isTitleRequest = body => body.max_tokens === 64 || body.max_completion_tokens === 64 || body.max_output_tokens === 64
+function titleResponse(body, response, responses) {
+  response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' })
+  if (responses) {
+    const item = { id: 'msg_title', type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: '自动标题', annotations: [] }] }
+    send(response, { type: 'response.output_item.added', output_index: 0, item: { ...item, content: [] } })
+    send(response, { type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: '自动标题' })
+    send(response, { type: 'response.output_item.done', output_index: 0, item })
+    send(response, { type: 'response.completed', response: { id: 'resp_title', status: 'completed', output: [item], usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 } } })
+    return response.end()
+  }
+  const common = { id: 'title', object: 'chat.completion.chunk', created: 1, model: body.model }
+  send(response, { ...common, choices: [{ index: 0, delta: { role: 'assistant', content: '自动标题' }, finish_reason: null }] })
+  send(response, { ...common, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 } })
+  return response.end('data: [DONE]\n\n')
+}
 const report = '# Fixture report\n\nSource: [Example](https://example.com/source).\n\n<script>window.reportXss = true</script>\n\n[Unsafe](javascript:alert(1))\n'
 const reportArgs = JSON.stringify({ markdown: report, attachments: [{ name: 'notes.txt', content: 'fixture attachment\n' }] })
 const emptyAttachmentArgs = JSON.stringify({ markdown: report, attachments: [{ name: 'empty.txt', content: '' }] })
@@ -235,6 +251,7 @@ http.createServer(async (request, response) => {
   request.setEncoding('utf8')
   for await (const chunk of request) raw += chunk
   const body = JSON.parse(raw)
+  if (isTitleRequest(body)) return titleResponse(body, response, responses)
   const beforeFrozenApply = body.model === 'fixture-steward-interaction-before-chat'
     ? 'apply_frozen_interaction_answer'
     : body.model === 'fixture-steward-retry-before-chat' ? 'apply_frozen_retry' : null
