@@ -48,7 +48,7 @@ export function DocumentFormattedMarkdownOverlay({
   useEffect(() => {
     if (!isOpen) return
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
+      if (event.key === 'Escape' && !event.isComposing && event.keyCode !== 229 && !event.defaultPrevented) onClose()
     }
     addEventListener('keydown', closeOnEscape)
     return () => removeEventListener('keydown', closeOnEscape)
