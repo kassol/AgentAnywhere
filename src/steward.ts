@@ -1342,6 +1342,17 @@ export async function createStewardService(databaseUrl: string, resolveCredentia
         return { content: [{ type: 'text', text: JSON.stringify({ operationIds: resumed, rejected }) }], details: {}, terminate: true }
       }, replay: 'safe', executionMode: 'sequential',
     }] : []
+    const forceRevisionFreeze = Boolean(workAccess && explicitRevision(turn.content))
+    let plannerRequests = 0
+    const plannerStreamFn = (activeModel: Model<any>, context: any, options: any) => {
+      const forceTool = forceRevisionFreeze && plannerRequests++ === 0
+      const toolChoice = forceTool
+        ? turn.protocol === 'chat-completions'
+          ? { type: 'function', function: { name: 'freeze_report_revision' } }
+          : { type: 'function', name: 'freeze_report_revision' }
+        : 'auto'
+      return streamFn(activeModel, context, { ...options, toolChoice })
+    }
     const planner = new Agent({
       initialState: { systemPrompt: `${plannerPrompt}\n可信结构化回执：${JSON.stringify({
         associatedTasks: associatedCards.map(card => ({ id: card.id, status: card.status, href: card.href, reports: card.reports,
@@ -1349,7 +1360,7 @@ export async function createStewardService(databaseUrl: string, resolveCredentia
         recentCandidates: recentCandidates.map(card => ({ id: card.id, status: card.status, href: card.href, reports: card.reports })),
         researchModels: turn.model.researchModels ?? [], researchUnavailable: turn.model.researchUnavailable ?? [], resumableResearch, resumableControl, resumableRevision, resumableInteraction, resumableRetry,
       })}`, model, tools: plannerTools, messages: [], thinkingLevel: model.reasoning ? 'medium' : 'off' },
-      streamFn, toolExecution: 'sequential', beforeToolCall,
+      streamFn: plannerStreamFn, toolExecution: 'sequential', beforeToolCall,
     })
     let timer: ReturnType<typeof setTimeout> | null = null
     let heartbeat: ReturnType<typeof setInterval> | null = null
