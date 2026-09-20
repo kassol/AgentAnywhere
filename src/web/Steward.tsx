@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { Composer, acceptComposerSubmission, attachComposerThread, changeComposerDraft, prepareComposerSubmission, readComposerState, rejectComposerSubmission, writeComposerState, type ComposerState, type ComposerSubmission } from './Composer'
 import { ReportMarkdown } from './Work'
 
-type Thread = { id: string; title: string; status?: string }
 type Message = { id: string; turnId: string; role: 'user' | 'assistant'; content: string; status: string }
 type Summary = { id: string; content: string; fromTurnNumber: number; throughTurnNumber: number; coveredTurns: number }
-type Turn = { id: string; status: string; modelCalls: number; modelCallLimit: number; activeMs: number; activeLimitMs: number; budgetReason?: string; failure?: string }
+type Turn = { id: string; requestId: string; status: string; modelCalls: number; modelCallLimit: number; activeMs: number; activeLimitMs: number; budgetReason?: string; failure?: string }
 type RelatedTask = { id: string; goal: string; status: string; href: string; reports: { versionId: string; href: string }[] }
 type StatusCard = { id: string; kind: 'completed' | 'failed' | 'interaction'; taskId: string; runId: string; goal: string; runStatus: string; failure?: string; href: string; reports: { versionId: string; href: string }[]; interaction?: { id: string; kind: 'question' | 'limit'; question: string; status: string; answer?: string } }
 type ResearchOperation = { operationId: string; status: string; taskId?: string; runId?: string; goal: string; modelId: string; protocol: string; reason: string; verification: string; sources?: Record<string, { source: string }>; failure?: string }
@@ -14,7 +14,7 @@ type InteractionOperation = { operationId: string; status: string; taskId?: stri
 type RetryOperation = { operationId: string; mode: 'same' | 'replacement'; status: string; taskId?: string; sourceRunId?: string; runId?: string;
   modelId?: string; protocol?: string; failure?: string }
 type RevisionOperation = { operationId: string; status: string; taskId?: string; sourceVersionId?: string; runId?: string; content: string; modelId: string; protocol: string; reason: string; verification: string; sources?: Record<string, { source: string }>; failure?: string }
-type Detail = Thread & { messages: Message[]; summaries: Summary[]; turns: Turn[]; relatedTasks: RelatedTask[]; statusCards: StatusCard[]; researchOperations: ResearchOperation[];
+type Detail = { id: string; title: string; messages: Message[]; summaries: Summary[]; turns: Turn[]; relatedTasks: RelatedTask[]; statusCards: StatusCard[]; researchOperations: ResearchOperation[];
   controlOperations: ControlOperation[]; interactionOperations: InteractionOperation[]; retryOperations: RetryOperation[]; revisionOperations: RevisionOperation[] }
 const statusLabel: Record<string, string> = {
   queued: '排队中', provisioning: '准备环境', running: '回复中', streaming: '生成中', stopping: '停止中', stopped: '已停止',
@@ -34,30 +34,46 @@ function controlStatus(operation: ControlOperation) {
 
 export function Steward() {
   const routeId = /^\/steward\/([0-9a-f-]{36})$/i.exec(location.pathname)?.[1] ?? null
-  const [threads, setThreads] = useState<Thread[]>([])
   const [detail, setDetail] = useState<Detail | null>(null)
-  const [content, setContent] = useState('')
+  const [composer, setComposer] = useState<ComposerState>(() => readComposerState(routeId))
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const cursor = useRef(0)
-  const pending = useRef<{ content: string; threadRequestId: string; turnRequestId: string } | null>(null)
+  const composerRef = useRef(composer)
 
-  async function loadThreads() {
-    const response = await fetch('/api/steward/threads')
-    if (response.ok) setThreads(await response.json())
+  function storeComposer(next: ComposerState, id = routeId) {
+    composerRef.current = next
+    setComposer(next)
+    writeComposerState(id, next)
   }
 
   async function loadDetail(id: string) {
     const response = await fetch(`/api/steward/threads/${id}`)
-    if (response.ok) setDetail(await response.json())
+    if (!response.ok) return
+    const next = await response.json() as Detail
+    if (routeId) setDetail(next)
+    const pending = composerRef.current.pending
+    if (pending && next.turns.some(turn => turn.requestId === pending.turnRequestId)) {
+      const accepted = acceptComposerSubmission(composerRef.current, pending)
+      if (!routeId) {
+        writeComposerState(null, { draft: { content: '', revision: 0 } })
+        writeComposerState(id, accepted)
+        location.assign(`/steward/${id}`)
+      } else storeComposer(accepted, id)
+      setError('')
+    }
   }
 
-  useEffect(() => { void loadThreads() }, [])
   useEffect(() => {
     cursor.current = 0
-    pending.current = null
+    const restored = readComposerState(routeId)
+    composerRef.current = restored
+    setComposer(restored)
     setDetail(null)
-    if (!routeId) return
+    if (!routeId) {
+      if (restored.pending?.threadId) void loadDetail(restored.pending.threadId)
+      return
+    }
     let refreshing = false
     async function refresh() {
       if (refreshing) return
@@ -68,7 +84,6 @@ export function Steward() {
         const events = await response.json() as { serverSeq: number }[]
         if (events.length) cursor.current = events.at(-1)!.serverSeq
         await loadDetail(routeId!)
-        if (events.length) await loadThreads()
       } catch { /* retain the last view until the connection recovers */ }
       finally { refreshing = false }
     }
@@ -77,33 +92,53 @@ export function Steward() {
     return () => clearInterval(timer)
   }, [routeId])
 
-  async function submit(event: FormEvent) {
-    event.preventDefault()
-    const message = content.trim()
-    if (!message) return
+  async function submit() {
+    const prepared = prepareComposerSubmission(composerRef.current)
+    if (!prepared?.pending) return
+    storeComposer(prepared)
+    let request = prepared.pending
     setBusy(true)
     setError('')
+    let outcomeUnknown = true
     try {
-      const request = pending.current?.content === message ? pending.current : {
-        content: message, threadRequestId: crypto.randomUUID(), turnRequestId: crypto.randomUUID(),
-      }
-      pending.current = request
-      let id = routeId
+      let id = routeId ?? request.threadId ?? null
       if (!id) {
         const created = await fetch('/api/steward/threads', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ requestId: request.threadRequestId }) })
-        if (!created.ok) throw new Error((await created.json()).error ?? '创建对话失败')
-        id = (await created.json()).id
+        if (!created.ok) {
+          if (created.status >= 400 && created.status < 500) {
+            outcomeUnknown = false
+            storeComposer(rejectComposerSubmission(composerRef.current, request))
+          }
+          throw new Error((await created.json()).error ?? '创建对话失败')
+        }
+        const createdThread = await created.json() as { id?: unknown }
+        if (typeof createdThread.id !== 'string') throw new Error('创建对话失败')
+        id = createdThread.id
+        const attached = attachComposerThread(composerRef.current, request, createdThread.id)
+        storeComposer(attached)
+        request = attached.pending!
       }
       if (!id) throw new Error('创建对话失败')
       const response = await fetch(`/api/steward/threads/${id}/turns`, {
-        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ requestId: request.turnRequestId, content: message }),
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ requestId: request.turnRequestId, content: request.content }),
       })
-      if (!response.ok) throw new Error((await response.json()).error ?? '发送失败')
-      pending.current = null
-      setContent('')
-      if (!routeId) location.assign(`/steward/${id}`)
-      else await loadDetail(id)
-    } catch (caught) { setError(caught instanceof Error ? caught.message : '发送失败') }
+      if (!response.ok) {
+        if (response.status >= 400 && response.status < 500) {
+          outcomeUnknown = false
+          storeComposer(rejectComposerSubmission(composerRef.current, request))
+        }
+        throw new Error((await response.json()).error ?? '发送失败')
+      }
+      const accepted = acceptComposerSubmission(composerRef.current, request)
+      if (!routeId) {
+        writeComposerState(null, { draft: { content: '', revision: 0 } })
+        writeComposerState(id, accepted)
+        location.assign(`/steward/${id}`)
+      } else {
+        storeComposer(accepted, id)
+        await loadDetail(id)
+      }
+    } catch (caught) { setError(`${caught instanceof Error ? caught.message : '发送失败'}；${outcomeUnknown ? '结果尚未确认，请核对并重试。' : '草稿已保留，请更正后重试。'}`) }
     finally { setBusy(false) }
   }
 
@@ -117,8 +152,7 @@ export function Steward() {
     if (!recoverable || !['accepted', 'unexecuted'].includes(status)) return null
     const command = `继续${action}回执 ${operationId}`
     return <button type="button" className="secondary" aria-label={command} onClick={() => {
-      pending.current = null
-      setContent(command)
+      storeComposer(changeComposerDraft(composerRef.current, command))
     }}>填入继续命令</button>
   }
 
@@ -126,12 +160,6 @@ export function Steward() {
   const activeTurns = detail?.turns.filter(turn => ['queued', 'running', 'stopping'].includes(turn.status)) ?? []
   return (
     <div className="steward-layout">
-      <aside className="conversation-list">
-        <a className="new-conversation" href="/">新对话</a>
-        {threads.map(thread => <a key={thread.id} href={`/steward/${thread.id}`} aria-current={thread.id === routeId ? 'page' : undefined}>
-          <span>{thread.title}</span><small>{thread.status ? statusLabel[thread.status] ?? thread.status : '尚未开始'}</small>
-        </a>)}
-      </aside>
       <section className="conversation" aria-label="管家对话">
         <div className="conversation-messages" aria-live="polite">
           {!detail?.messages.length && <div className="steward-empty"><h2>有什么需要一起梳理？</h2><p className="muted">可以讨论，也可以直接委托一项或多项独立调研。</p></div>}
@@ -206,18 +234,10 @@ export function Steward() {
             {card.interaction?.answer && <><br /><small>回答：{card.interaction.answer}</small></>}
           </li>)}</ul></section>}
         </div>
-        <form className="steward-composer" onSubmit={submit}>
-          <label htmlFor="steward-message">消息</label>
-          <textarea id="steward-message" value={content} onChange={event => {
-            if (pending.current && event.target.value.trim() !== pending.current.content) pending.current = null
-            setContent(event.target.value)
-          }} maxLength={16000} rows={3} disabled={busy} placeholder="输入消息…" />
-          <div><button type="submit" disabled={busy || !content.trim()}>{busy ? '发送中…' : '发送'}</button>
-            {activeTurns.map((turn, index) => <button key={turn.id} type="button" className="secondary" onClick={() => void stop(turn.id)}>
+        <Composer state={composer} busy={busy} error={error} onChange={content => storeComposer(changeComposerDraft(composerRef.current, content))}
+          onSubmit={() => void submit()} actions={activeTurns.map((turn, index) => <button key={turn.id} type="button" className="secondary" onClick={() => void stop(turn.id)}>
               {turn.status === 'queued' ? `撤回排队${activeTurns.length > 1 ? ` ${index + 1}` : ''}` : '停止本轮'}
-            </button>)}</div>
-        </form>
-        {error && <p className="error" role="alert">{error}</p>}
+            </button>)} />
       </section>
     </div>
   )

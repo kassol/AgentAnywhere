@@ -326,7 +326,7 @@ export async function createStewardService(databaseUrl: string, resolveCredentia
       const messages = await sql`SELECT m.id, m.turn_id AS "turnId", m.role, m.content, m.status, m.created_at AS "createdAt"
         FROM steward_messages m JOIN steward_turns r ON r.id=m.turn_id WHERE m.thread_id=${id}
         ORDER BY r.turn_seq, CASE m.role WHEN 'user' THEN 0 ELSE 1 END, m.created_at, m.id`
-      const turns = await sql`SELECT id, status, model_calls AS "modelCalls", model_call_limit AS "modelCallLimit",
+      const turns = await sql`SELECT id, request_id AS "requestId", status, model_calls AS "modelCalls", model_call_limit AS "modelCallLimit",
         active_ms + CASE WHEN active THEN COALESCE(GREATEST(0, EXTRACT(EPOCH FROM (now()-active_since))*1000)::bigint,0) ELSE 0 END AS "activeMs",
         active_limit_ms AS "activeLimitMs", budget_reason AS "budgetReason", failure,
         created_at AS "createdAt", started_at AS "startedAt", finished_at AS "finishedAt"
