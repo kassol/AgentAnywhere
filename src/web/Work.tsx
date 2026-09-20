@@ -120,7 +120,7 @@ export function Work() {
       } finally { loading = false }
     }
     void refresh().catch(error => setError(error.message))
-    const timer = detailId ? setInterval(() => void refresh().catch(error => setError(error.message)), 1000) : undefined
+    const timer = setInterval(() => void refresh().catch(error => setError(error.message)), 1000)
     fetch('/api/model-connection').then(response => read<{ models: Model[]; defaultModel: string | null }>(response)).then(value => {
       setModels(value.models)
       setModelId(value.defaultModel ?? value.models[0]?.id ?? '')
