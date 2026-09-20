@@ -1,7 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { Composer, acceptComposerSubmission, attachComposerThread, changeComposerDraft, confirmComposerReplacement, prepareComposerSubmission, readComposerState, rejectComposerSubmission, startComposerSubmission, writeComposerState, type ComposerState, type ComposerSubmission } from './Composer'
-import { buildToolActivities, readActivityPages, StableScroll, ToolActivityList, type ActivityEvent } from './ActivityFeed'
+import { buildToolActivities, readActivityPages, StableScroll, summarizeToolActivity, type ActivityEvent } from './ActivityFeed'
 import { ReportMarkdown } from './Work'
+import { TurnCard, type ActivityItem } from './craft/components/TurnCard'
+import { UserMessageBubble } from './craft/components/UserMessageBubble'
+import { Button } from './craft/components/Button'
+import { Square } from 'lucide-react'
 import { QuickActions, type QuickAction } from './QuickActions'
 import { clearAcceptedAnnotations, latestSucceededReportVersion, type ReviewContext } from './ReviewAnnotations'
 import { StewardReceipts, type ControlOperation, type InteractionOperation, type ResearchOperation, type RetryOperation, type RevisionOperation } from './StewardReceipts'
@@ -96,7 +100,7 @@ export function Steward({ fillRequest, onFillRequestHandled }: { fillRequest?: {
     if (!confirmComposerReplacement(composerRef.current, payload.content)) return false
     storeComposer(changeComposerDraft(composerRef.current, payload.content, payload.review))
     setReviewConflict(null)
-    requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('#steward-message')?.focus())
+    requestAnimationFrame(() => document.querySelector<HTMLElement>('#steward-message')?.focus())
     return true
   }), [reviewBridge, routeId])
 
@@ -251,7 +255,7 @@ export function Steward({ fillRequest, onFillRequestHandled }: { fillRequest?: {
     if (!confirmComposerReplacement(composerRef.current, command)) return
     storeComposer(fillQuickCommand(composerRef.current, command))
     setReviewConflict(null)
-    requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('#steward-message')?.focus())
+    requestAnimationFrame(() => document.querySelector<HTMLElement>('#steward-message')?.focus())
   }
 
   const activeTurns = detail?.turns.filter(turn => ['queued', 'running', 'stopping'].includes(turn.status)) ?? []
@@ -271,19 +275,40 @@ export function Steward({ fillRequest, onFillRequestHandled }: { fillRequest?: {
           </article>)}</section>}
           {detail?.turns.map((turn, index) => {
             const messages = detail.messages.filter(message => message.turnId === turn.id)
+            const assistantMessages = messages.filter(message => message.role === 'assistant')
+            const activities: ActivityItem[] = toolActivities.filter(activity => activity.scopeId === turn.id).map(activity => ({
+              id: activity.id,
+              type: 'tool',
+              status: activity.status,
+              toolName: activity.name,
+              displayName: activity.name,
+              toolInput: activity.args,
+              result: activity.result,
+              error: activity.error,
+              summary: summarizeToolActivity(activity),
+              timestamp: Date.parse(activity.occurredAt) || 0,
+            }))
+            const active = ['queued', 'running', 'stopping'].includes(turn.status)
+            const responseStreaming = active && assistantMessages.some(message => ['queued', 'running', 'streaming'].includes(message.status))
             return <section className="steward-turn" key={turn.id} aria-labelledby={`steward-turn-${turn.id}`}>
               <header><h3 id={`steward-turn-${turn.id}`}>第 {index + 1} 轮</h3><small>{statusLabel[turn.status] ?? turn.status}</small></header>
-              {messages.filter(message => message.role === 'user').map(message => <article key={message.id} className="conversation-message user">
-                <strong>你</strong><p>{message.content}</p>
-              </article>)}
-              <ToolActivityList activities={toolActivities.filter(activity => activity.scopeId === turn.id)} />
+              {messages.filter(message => message.role === 'user').map(message => <UserMessageBubble
+                key={message.id} content={message.content} isQueued={message.status === 'queued'}
+              />)}
+              <TurnCard
+                turnId={turn.id}
+                activities={activities}
+                response={assistantMessages.length ? {
+                  text: assistantMessages.map(message => message.content).filter(Boolean).join('\n\n') || '…',
+                  isStreaming: responseStreaming,
+                } : undefined}
+                isStreaming={active}
+                isComplete={turn.status === 'completed'}
+                renderMarkdown={content => <ReportMarkdown markdown={content} />}
+              />
               <StewardReceipts turnId={turn.id} research={detail.researchOperations} controls={detail.controlOperations}
                 interactions={detail.interactionOperations} retries={detail.retryOperations} revisions={detail.revisionOperations}
                 onFill={fillCommand} disabled={busy} />
-              {messages.filter(message => message.role === 'assistant').map(message => <article key={message.id} className="conversation-message assistant">
-                <strong>管家</strong><ReportMarkdown markdown={message.content || '…'} />
-                {message.status !== 'completed' && <small>{statusLabel[message.status] ?? message.status}</small>}
-              </article>)}
               {turn.failure && <p className="error" role="alert">{turn.failure}</p>}
               {turn.status === 'limited' && <p className="error" role="status">{limitMessage(turn)}</p>}
             </section>
@@ -307,9 +332,13 @@ export function Steward({ fillRequest, onFillRequestHandled }: { fillRequest?: {
           </li>)}</ul></section>}
         </StableScroll>
         <Composer state={composer} busy={busy} error={error} onChange={content => storeComposer(changeComposerDraft(composerRef.current, content))}
-          onSubmit={() => void submit()} actions={activeTurns.map((turn, index) => <button key={turn.id} type="button" className="secondary" onClick={() => void stop(turn.id)}>
-              {turn.status === 'queued' ? `撤回排队${activeTurns.length > 1 ? ` ${index + 1}` : ''}` : '停止本轮'}
-            </button>)} />
+          onSubmit={() => void submit()} actions={activeTurns.map((turn, index) => {
+            const label = turn.status === 'queued' ? `撤回排队${activeTurns.length > 1 ? ` ${index + 1}` : ''}` : `停止本轮${activeTurns.length > 1 ? ` ${index + 1}` : ''}`
+            return <Button key={turn.id} type="button" size="icon" variant="secondary" aria-label={label} title={label}
+              className="h-7 w-7 rounded-full shrink-0 hover:bg-foreground/15 active:bg-foreground/20" onClick={() => void stop(turn.id)}>
+              <Square className="h-3 w-3 fill-current" />
+            </Button>
+          })} />
         {reviewConflict && <div className="review-version-conflict" role="alertdialog" aria-labelledby="review-version-conflict-title">
           <strong id="review-version-conflict-title">这项工作已有新版报告</strong>
           <p>批注固定在版本 {reviewConflict.versionId}；当前最新版本为 {reviewConflict.latestVersionId}。继续后仍修改原版本。</p>

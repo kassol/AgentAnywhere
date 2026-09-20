@@ -3,8 +3,9 @@
  * Craft Agents OSS FreeFormInput.tsx at e8963854c3679edcceb105a42537a06749e6cb64.
  * Copyright 2026 Craft Docs Ltd. Licensed under Apache-2.0.
  */
-import type { FormEvent, KeyboardEvent, ReactNode } from 'react'
+import type { KeyboardEvent, ReactNode } from 'react'
 import { filterReviewContextForContent, isReviewContext, type ReviewContext } from './ReviewAnnotations'
+import { FreeFormInput } from './craft/components/FreeFormInput'
 import './composer.css'
 
 export type ComposerReviewContext = ReviewContext
@@ -90,7 +91,7 @@ export function rejectComposerSubmission(state: ComposerState, rejected: Compose
   return { draft: state.draft, ...(state.threadId ? { threadId: state.threadId } : {}) }
 }
 
-export function shouldSubmitComposerKey(event: Pick<KeyboardEvent<HTMLTextAreaElement>, 'key' | 'shiftKey' | 'metaKey' | 'ctrlKey'> & { isComposing: boolean; keyCode?: number }) {
+export function shouldSubmitComposerKey(event: Pick<KeyboardEvent<HTMLElement>, 'key' | 'shiftKey' | 'metaKey' | 'ctrlKey'> & { isComposing: boolean; keyCode?: number }) {
   return event.key === 'Enter' && event.keyCode !== 229 && !event.shiftKey && !event.metaKey && !event.ctrlKey && !event.isComposing
 }
 
@@ -102,32 +103,26 @@ export function Composer({ state, busy, error, actions, onChange, onSubmit }: {
   onChange(content: string): void
   onSubmit(): void
 }) {
-  function submit(event: FormEvent) {
-    event.preventDefault()
-    if (busy) return
-    onSubmit()
-  }
-
   return <>
-    <form className="steward-composer" onSubmit={submit}>
-      <label className="composer-label" htmlFor="steward-message">给管家发消息</label>
-      <textarea id="steward-message" value={state.draft.content} onChange={event => onChange(event.target.value)}
-        onKeyDown={event => {
-          if (busy || !shouldSubmitComposerKey({ key: event.key, shiftKey: event.shiftKey, metaKey: event.metaKey,
-            ctrlKey: event.ctrlKey, keyCode: event.nativeEvent.keyCode, isComposing: event.nativeEvent.isComposing })) return
-          event.preventDefault()
-          event.currentTarget.form?.requestSubmit()
-        }} maxLength={16000} rows={3} placeholder="给管家发消息…" />
-      {state.pending && <small role="status">发送结果待核对；重试会使用同一请求，不会重复创建轮次。</small>}
-      <div className="composer-bar">
-        <span>Enter 发送 · Shift+Enter 换行</span>
-        <div className="composer-actions">{actions}<button type="submit" className={busy || state.pending ? 'composer-retry' : 'composer-send'}
-          aria-label={busy ? '正在核对发送结果' : state.pending ? '核对并重试发送' : '发送消息'}
-          disabled={busy || (!state.pending && !state.draft.content.trim())}>
-          {busy ? '核对中…' : state.pending ? '核对并重试' : <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 19V5" /><path d="m6 11 6-6 6 6" /></svg>}
-        </button></div>
-      </div>
-    </form>
+    <FreeFormInput
+      label="给管家发消息"
+      value={state.draft.content}
+      onChange={onChange}
+      onSubmit={onSubmit}
+      shouldSubmitKey={event => shouldSubmitComposerKey({
+        key: event.key,
+        shiftKey: event.shiftKey,
+        metaKey: event.metaKey,
+        ctrlKey: event.ctrlKey,
+        keyCode: event.nativeEvent.keyCode,
+        isComposing: event.nativeEvent.isComposing,
+      })}
+      isProcessing={busy}
+      pending={Boolean(state.pending)}
+      maxLength={16000}
+      actions={actions}
+      status={state.pending && <small role="status">发送结果待核对；重试会使用同一请求，不会重复创建轮次。</small>}
+    />
     {error && <p className="error" role="alert">{error}</p>}
   </>
 }

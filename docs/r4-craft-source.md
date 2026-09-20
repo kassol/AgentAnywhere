@@ -76,6 +76,22 @@ A 的侧栏、对话和按需预览整体结构继续保留；局部控件和交
 
 不引入完整 `@craft-agent/ui`，其包清单同时依赖 Craft Core/Shared、多种 Markdown、PDF、diff、shader、Jotai、Radix 和国际化（`packages/ui/package.json:21-58`）。按组件复制可保留原源码，同时避免无关产品功能。`@craft-agent/core` 的 `AnnotationV1`、消息和工具类型只在本地适配层复刻最小展示形状；服务端事实仍以 AgentAnywhere DTO 为准。
 
+## R4-02 实际迁入：输入与轮次
+
+以下项目已在 #44 迁入并参与实际页面渲染。报告预览的实际迁入结果由同票报告部分补充。
+
+| 本地组件 | 保留的固定上游源码 | 实际适配与删除 |
+| --- | --- | --- |
+| `src/web/craft/components/Button.tsx:1-49` | `apps/electron/src/renderer/components/ui/button.tsx:1-57` 的 `buttonVariants`、Radix Slot、CVA variant/size 与 `data-slot` JSX | import 改为相对路径；颜色 token 接现有主题；因本地不加载 Tailwind preflight，显式补 `border-0`。旧全局 CSS 已排除 `[data-slot="button"]`，避免覆盖原组件颜色、尺寸和焦点样式 |
+| `src/web/craft/components/RichTextInput.tsx:14-302` | `rich-text-input.tsx:32-85,173-363,500-716,775-822` 的 IME guard、公开 handle、contenteditable 纯文本模型、光标换算、HTML 转义、`execCommand('insertText')` 原生撤销路径、受控值同步和原 JSX | 删除 mention badge、图标预载、长文本附件化、轮换占位；新增 `maxLength` 并在组合结束/输入时截到 16000；补 `aria-label` 接本地中文标签 |
+| `src/web/craft/components/FreeFormInput.tsx:17-108` | `FreeFormInput.tsx:1248-1417,1572-1784,2400-2491` 的 `submitMessage`、表单、圆角输入容器、RichTextInput、底部控制行和 Button/ArrowUp 发送区 | 删除 Electron 附件、模型、权限、slash/mention/label、工作目录；发送键沿用现有 Enter/Shift+Enter/IME 契约。上游 `:1277-1283` 的立即清空被明确移除，`Composer.tsx:77-87,107-125` 继续只在服务端接受且草稿版本未变时清空 |
+| `src/web/craft/components/TurnCard.tsx:17-231` | `packages/ui/src/components/chat/TurnCard.tsx:238-359,791-1030,1653-1684,2450-2679,2766-3254` 的 Activity/Response 类型、状态图标、活动行、300ms 回复节流、540px 回复卡、轮次展开和 Motion 结构 | 删除 Task 子代理分组、plan、branch、diff、Electron 详情窗和 Craft 批注；浏览器原生 `details` 承接详情窗，保留真实参数、错误和完整结果。完成/失败标题按真实 Activity 状态生成，终止轮次不保持流式旋转 |
+| `src/web/craft/components/UserMessageBubble.tsx:12-32` | `UserMessageBubble.tsx:305-519` 的右对齐容器、80% 气泡、圆角/间距与 queued 状态结构 | 删除附件、badge 与 Markdown；本地用户消息继续按字面纯文本显示，避免改变既有输入语义 |
+
+接入点：`Composer.tsx:94-125` 把现有草稿状态传给 FreeFormInput；`ActivityFeed.tsx:112-131` 把持久工具事件映射给 ActivityRow；`Steward.tsx:276-311` 按真实 `turnId` 组合 UserMessageBubble、ActivityItem、TurnCard 和安全 `ReportMarkdown`，`:334-341` 使用原 Button 停止对应真实轮次。Tailwind v4 插件位于 `vite.config.ts:1-8`，局部 theme/utilities 映射位于 `src/web/craft/styles.css:1-35`；未启用 preflight，A 外壳继续使用原 CSS。
+
+实际安装版本与固定上游一致：`@tailwindcss/vite 4.1.18`、`tailwindcss 4.1.18`、`clsx 2.1.1`、`tailwind-merge 3.4.0`、`class-variance-authority 0.7.1`、`@radix-ui/react-slot 1.2.4`、`lucide-react 0.561.0`、`motion 12.23.26`。未引入 Electron、Craft Core/Shared、i18next、diff 或批注运行时。
+
 ## 后续任务清单
 
 | 任务 | 可直接使用的 Craft 组件 | 本地适配层 | 进入任务前仍需验证 |

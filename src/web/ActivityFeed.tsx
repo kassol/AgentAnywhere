@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, useState, type ReactNode, type UIEvent } from 'react'
+import { ActivityRow, type ActivityItem } from './craft/components/TurnCard'
 
 export type ActivityEvent = {
   serverSeq: number
@@ -111,21 +112,21 @@ function storeScroll(storageKey: string, top: number, following: boolean) {
 export function ToolActivityList({ activities }: { activities: ToolActivity[] }) {
   if (!activities.length) return null
   return <div className="tool-activities">
-    {activities.map(activity => <details className={`tool-activity tool-activity-${activity.status}`} key={activity.id}>
-      <summary>
-        <span className="tool-activity-status" aria-hidden="true">{activity.status === 'running' ? '·' : activity.status === 'error' ? '!' : '✓'}</span>
-        <span><strong>{activity.name}</strong><small>{summarizeToolActivity(activity)}</small></span>
-        <span className="tool-activity-expand">详情</span>
-      </summary>
-      <div className="tool-activity-detail">
-        <h4>参数</h4>
-        <pre>{activity.args === undefined ? '未记录' : JSON.stringify(activity.args, null, 2)}</pre>
-        {activity.error && <><h4>错误</h4><pre>{activity.error}</pre></>}
-        <h4>完整结果</h4>
-        <pre>{activity.result === undefined || activity.result === '' ? (activity.status === 'running' ? '等待结果' : '无文本结果')
-          : typeof activity.result === 'string' ? activity.result : JSON.stringify(activity.result, null, 2)}</pre>
-      </div>
-    </details>)}
+    {activities.map(activity => {
+      const item: ActivityItem = {
+        id: activity.id,
+        type: 'tool',
+        status: activity.status,
+        toolName: activity.name,
+        displayName: activity.name,
+        toolInput: activity.args,
+        result: activity.result,
+        error: activity.error,
+        summary: summarizeToolActivity(activity),
+        timestamp: Date.parse(activity.occurredAt) || 0,
+      }
+      return <ActivityRow activity={item} key={activity.id} />
+    })}
   </div>
 }
 

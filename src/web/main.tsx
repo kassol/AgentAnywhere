@@ -1,4 +1,5 @@
 import './craft-theme.css'
+import './craft/styles.css'
 import './style.css'
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'

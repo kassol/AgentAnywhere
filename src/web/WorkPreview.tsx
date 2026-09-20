@@ -5,20 +5,19 @@
  * Copyright 2026 Craft Docs Ltd. Licensed under Apache-2.0.
  */
 import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
+import { ChevronLeft } from 'lucide-react'
 import { ReportMarkdown, selectReportVersion } from './Work'
 import { buildReviewCommand, captureTextControlSelection, captureTextSelection, readReportAnnotationDraft, readReportAnnotations, selectorStatus,
   writeReportAnnotationDraft, writeReportAnnotations,
   type ReportAnnotation, type ReviewContext, type TextQuoteSelector } from './ReviewAnnotations'
+import { Button } from './craft/components/Button'
+import { DocumentFormattedMarkdownOverlay } from './craft/components/DocumentFormattedMarkdownOverlay'
+import { PreviewHeader, PreviewHeaderBadge } from './craft/components/PreviewHeader'
 import './work-preview.css'
 import './review-annotations.css'
 
 const uuid = '[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}'
 const taskPath = new RegExp(`^/tasks/(${uuid})$`, 'i')
-
-function PreviewIcon({ name }: { name: 'back' | 'close' }) {
-  const path = name === 'back' ? <path d="m15 18-6-6 6-6" /> : <path d="M6 6l12 12M18 6 6 18" />
-  return <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">{path}</svg>
-}
 
 export type PreviewSelection = { taskId: string; versionId?: string }
 export type PreviewArtifact = {
@@ -368,12 +367,16 @@ function WorkPreview({ selection, onSelect, onClose, onFillComposer }: { selecti
   const reports = task?.artifacts.filter(item => item.kind === 'report') ?? []
   const attachments = task?.artifacts.filter(item => item.kind === 'attachment' && item.runId === artifact?.runId) ?? []
   const independentVersion = selection.versionId ?? artifact?.versionId
+  const previewTitle = task ? task.goal || task.sourceUrl || `工作 ${task.id.slice(0, 8)}` : '正在读取工作…'
   return <aside className="work-preview" aria-labelledby="work-preview-title">
-    <header className="work-preview-header">
-      <button ref={closeButton} type="button" className="work-preview-back" onClick={onClose}><PreviewIcon name="back" />返回对话</button>
-      <div><span>报告</span><h2 id="work-preview-title">{task ? task.goal || task.sourceUrl || `工作 ${task.id.slice(0, 8)}` : '正在读取工作…'}</h2></div>
-      <button type="button" className="work-preview-close" aria-label="关闭报告" onClick={onClose}><PreviewIcon name="close" /></button>
-    </header>
+    <PreviewHeader className="min-h-[62px] py-[10px] px-[13px] gap-[11px] border-b border-border" height={62}
+      style={{ position: 'sticky', zIndex: 2, top: 0, background: 'var(--panel)' }} onClose={onClose}
+      leftActions={<Button ref={closeButton} type="button" variant="ghost" size="sm" className="work-preview-back" onClick={onClose}>
+        <ChevronLeft aria-hidden="true" />返回对话
+      </Button>}>
+      <PreviewHeaderBadge label="报告" variant="read" />
+      <PreviewHeaderBadge id="work-preview-title" label={previewTitle} title={previewTitle} shrinkable />
+    </PreviewHeader>
     <div ref={scroll} className="work-preview-scroll" onScroll={rememberScroll}>
       {task === undefined && <p className="muted" role="status">正在加载工作详情…</p>}
       {taskError && <p className="error" role="alert">{taskError}</p>}
@@ -398,44 +401,53 @@ function WorkPreview({ selection, onSelect, onClose, onFillComposer }: { selecti
         {artifact && <>
           {reportError && <p className="error" role="alert">{reportError}</p>}
           {!reportError && report?.versionId !== artifact.versionId && <p className="muted" role="status">正在加载报告…</p>}
-          {report?.versionId === artifact.versionId && <>
-            <div className="work-preview-review-tools"><p className="review-hint">选中文字即可批注。批注保存在当前浏览器，并固定到此报告版本。</p>
-              <button type="button" className="secondary" onClick={openKeyboardSelection}>键盘选择引用</button></div>
-            {keyboardReportText !== null && <section className="review-selection" aria-label="键盘选择报告引用">
-              <strong>选择报告文字</strong>
-              <label>报告纯文本<textarea ref={keyboardSelection} readOnly rows={8} value={keyboardReportText}
-                onKeyDown={event => {
-                  if (event.key !== 'Enter' || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey || event.nativeEvent.isComposing) return
-                  event.preventDefault()
-                  selectKeyboardReportText()
-                }} /></label>
-              <p className="review-hint">用 Shift + 方向键扩选，按 Enter 或使用下方按钮确认。</p>
-              <div><button type="button" onClick={selectKeyboardReportText}>为所选文字写批注</button>
-                <button type="button" className="secondary" onClick={() => setKeyboardReportText(null)}>关闭</button></div>
-            </section>}
-            <article ref={reportRoot} className="work-preview-report" data-task-id={task.id} data-report-version={artifact.versionId}
-              aria-label="报告正文，可用鼠标选择文字添加批注" onMouseUp={selectReportText}>
-              <ReportMarkdown markdown={report.markdown} />
-            </article>
-            {pendingSelection && <form className="review-selection" onSubmit={addAnnotation}>
-              <strong>为所选文字添加批注</strong>
-              <blockquote>{pendingSelection.exact}</blockquote>
-              <label>意见<textarea autoFocus rows={3} maxLength={2000} required value={note} onChange={event => changeAnnotationNote(event.target.value)} /></label>
-              <div><button type="submit" disabled={!note.trim()}>保存批注</button>
-                <button type="button" className="secondary" onClick={cancelAnnotation}>取消</button></div>
-            </form>}
-            {!!annotations.length && <section className="review-annotations" aria-label="未发送批注">
-              <header><h3>未发送批注（{annotations.length}）</h3><button type="button" onClick={summarizeAnnotations}>汇总到聊天框</button></header>
-              {annotations.map((annotation, index) => <article key={annotation.id}>
-                <div><strong>批注 {index + 1}</strong><small>{selectorStatus(
-                  renderedReportText?.versionId === artifact.versionId ? renderedReportText.text : '', annotation.selector) === 'exact'
-                  ? '原文位置已确认' : '原文位置无法确认，保留引用'}</small></div>
-                <blockquote>{annotation.quote}</blockquote><p>{annotation.note}</p>
-                <button type="button" className="secondary" onClick={() => removeAnnotation(annotation.id)}>删除</button>
-              </article>)}
-            </section>}
-            {annotationError && <p className="error" role="alert">{annotationError}</p>}
-          </>}
+          {report?.versionId === artifact.versionId && <DocumentFormattedMarkdownOverlay
+            content={report.markdown}
+            isOpen
+            onClose={onClose}
+            sessionId={task.id}
+            messageId={artifact.versionId}
+            documentRef={reportRoot}
+            documentAriaLabel="报告正文，可用鼠标选择文字添加批注"
+            onDocumentMouseUp={selectReportText}
+            renderMarkdown={content => <ReportMarkdown markdown={content} />}
+            beforeContent={<>
+              <div className="work-preview-review-tools"><p className="review-hint">选中文字即可批注。批注保存在当前浏览器，并固定到此报告版本。</p>
+                <button type="button" className="secondary" onClick={openKeyboardSelection}>键盘选择引用</button></div>
+              {keyboardReportText !== null && <section className="review-selection" aria-label="键盘选择报告引用">
+                <strong>选择报告文字</strong>
+                <label>报告纯文本<textarea ref={keyboardSelection} readOnly rows={8} value={keyboardReportText}
+                  onKeyDown={event => {
+                    if (event.key !== 'Enter' || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey || event.nativeEvent.isComposing) return
+                    event.preventDefault()
+                    selectKeyboardReportText()
+                  }} /></label>
+                <p className="review-hint">用 Shift + 方向键扩选，按 Enter 或使用下方按钮确认。</p>
+                <div><button type="button" onClick={selectKeyboardReportText}>为所选文字写批注</button>
+                  <button type="button" className="secondary" onClick={() => setKeyboardReportText(null)}>关闭</button></div>
+              </section>}
+            </>}
+            afterContent={<>
+              {pendingSelection && <form className="review-selection" onSubmit={addAnnotation}>
+                <strong>为所选文字添加批注</strong>
+                <blockquote>{pendingSelection.exact}</blockquote>
+                <label>意见<textarea autoFocus rows={3} maxLength={2000} required value={note} onChange={event => changeAnnotationNote(event.target.value)} /></label>
+                <div><button type="submit" disabled={!note.trim()}>保存批注</button>
+                  <button type="button" className="secondary" onClick={cancelAnnotation}>取消</button></div>
+              </form>}
+              {!!annotations.length && <section className="review-annotations" aria-label="未发送批注">
+                <header><h3>未发送批注（{annotations.length}）</h3><button type="button" onClick={summarizeAnnotations}>汇总到聊天框</button></header>
+                {annotations.map((annotation, index) => <article key={annotation.id}>
+                  <div><strong>批注 {index + 1}</strong><small>{selectorStatus(
+                    renderedReportText?.versionId === artifact.versionId ? renderedReportText.text : '', annotation.selector) === 'exact'
+                    ? '原文位置已确认' : '原文位置无法确认，保留引用'}</small></div>
+                  <blockquote>{annotation.quote}</blockquote><p>{annotation.note}</p>
+                  <button type="button" className="secondary" onClick={() => removeAnnotation(annotation.id)}>删除</button>
+                </article>)}
+              </section>}
+              {annotationError && <p className="error" role="alert">{annotationError}</p>}
+            </>}
+          />}
           {!!attachments.length && <section className="work-preview-attachments"><h3>该版本附件</h3><ul>{attachments.map(item => <li key={item.versionId}>
             <a href={`/api/artifacts/${item.versionId}/download`}>{item.name}</a>
           </li>)}</ul></section>}

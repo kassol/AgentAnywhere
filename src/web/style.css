@@ -12,9 +12,10 @@
 html, body, #root { min-height: 100%; }
 html { scrollbar-color: var(--border-strong) transparent; }
 body { margin: 0; color: var(--foreground); background: var(--background); }
-button, input, select, textarea { font: inherit; color: inherit; }
+button, input, select, textarea { font: inherit; }
+button:not([data-slot="button"]), input, select, textarea { color: inherit; }
 button, a { -webkit-tap-highlight-color: transparent; }
-button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+button:not([data-slot="button"]):not([data-craft-button]):focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 input, select, textarea { border: 1px solid var(--border-strong); background: var(--panel); }
 ::selection { color: var(--foreground); background: color-mix(in srgb, var(--accent) 25%, transparent); }
 .icon { width: 18px; height: 18px; flex: 0 0 auto; }
@@ -100,9 +101,9 @@ input, select, textarea { border: 1px solid var(--border-strong); background: va
 .model-settings { margin-bottom: 24px; }
 .settings-controls { min-width: 0; margin: 0; padding: 0; border: 0; }
 .model-settings h3 { margin: 28px 0 10px; font-size: 15px; }
-.model-settings button, .work-form button, .steward-composer button { min-height: 32px; padding: 7px 12px; border: 0; border-radius: 8px; color: var(--accent-foreground); background: var(--accent); cursor: pointer; font-weight: 600; }
-.model-settings button.secondary, .steward-composer button.secondary { color: var(--selected-foreground); background: var(--selected); }
-.model-settings button:disabled, .work-form button:disabled, .steward-composer button:disabled { cursor: default; opacity: .5; }
+.model-settings button, .work-form button, .steward-composer button:not([data-slot="button"]) { min-height: 32px; padding: 7px 12px; border: 0; border-radius: 8px; color: var(--accent-foreground); background: var(--accent); cursor: pointer; font-weight: 600; }
+.model-settings button.secondary, .steward-composer button.secondary:not([data-slot="button"]) { color: var(--selected-foreground); background: var(--selected); }
+.model-settings button:disabled, .work-form button:disabled, .steward-composer button:disabled:not([data-slot="button"]) { cursor: default; opacity: .5; }
 .model-settings label, .work-form label { display: grid; gap: 6px; font-size: 13px; font-weight: 600; }
 .model-settings input, .model-settings select, .work-form input, .work-form select, .work-form textarea { width: 100%; min-height: 38px; padding: 8px 10px; border-radius: 8px; }
 .model-form { display: grid; gap: 14px; margin-top: 22px; }

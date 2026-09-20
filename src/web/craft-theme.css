@@ -21,6 +21,8 @@
   --border: color-mix(in srgb, var(--foreground) 10%, transparent);
   --border-strong: color-mix(in srgb, var(--foreground) 20%, transparent);
   --danger: oklch(0.52 0.2 28);
+  --success: oklch(0.52 0.14 150);
+  --info: oklch(0.55 0.13 245);
   --focus: oklch(0.66 0.16 293);
   --shadow: rgba(28, 21, 35, 0.07);
 }
@@ -41,6 +43,8 @@
   --border: color-mix(in srgb, var(--foreground) 11%, transparent);
   --border-strong: color-mix(in srgb, var(--foreground) 22%, transparent);
   --danger: oklch(0.72 0.17 28);
+  --success: oklch(0.7 0.15 150);
+  --info: oklch(0.72 0.13 245);
   --focus: oklch(0.72 0.17 293);
   --shadow: rgba(0, 0, 0, 0.24);
 }
