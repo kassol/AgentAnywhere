@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { confirmAnnotationReplacement, parseTaskPreviewHref, pinPreviewVersion, reportScrollKey, resolveReportVersion, type PreviewArtifact } from './WorkPreview'
+import { reportReturnPath, confirmAnnotationReplacement, parseTaskPreviewHref, pinPreviewVersion, reportScrollKey, resolveReportVersion, type PreviewArtifact } from './WorkPreview'
 
 const taskId = '11111111-1111-4111-8111-111111111111'
 const oldVersion = '22222222-2222-4222-8222-222222222222'
@@ -36,4 +36,14 @@ test('a new selection cannot replace an unfinished note without confirmation', (
   expect(confirmAnnotationReplacement('', () => false)).toBe(true)
   expect(confirmAnnotationReplacement('未保存意见', () => false)).toBe(false)
   expect(confirmAnnotationReplacement('未保存意见', () => true)).toBe(true)
+})
+
+
+test('report return targets retain only local work or conversation context', () => {
+  expect(reportReturnPath(`/tasks/${taskId}?version=${oldVersion}`)).toBe(`/tasks/${taskId}?version=${oldVersion}`)
+  expect(reportReturnPath(`/steward/${taskId}?previewTask=${taskId}`)).toContain(`/steward/${taskId}`)
+  expect(reportReturnPath('https://other.example/')).toBeNull()
+  expect(reportReturnPath('//other.example/')).toBeNull()
+  expect(reportReturnPath('/settings')).toBeNull()
+  expect(reportReturnPath(null)).toBeNull()
 })

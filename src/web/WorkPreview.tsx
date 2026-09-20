@@ -171,8 +171,15 @@ function reportPageSelection(): PreviewSelection | null {
   return { taskId, ...(versionId ? { versionId } : {}) }
 }
 
+export function reportReturnPath(value: string | null): string | null {
+  if (!value || !new RegExp(`^/(?:tasks|steward)/${uuid}(?:\\?[^#]*)?$`, 'i').test(value)) return null
+  return value
+}
+
 function updateReportPageUrl(selection: PreviewSelection | null, mode: 'push' | 'replace') {
   const url = new URL('/reports', location.origin)
+  const from = reportReturnPath(new URLSearchParams(location.search).get('from'))
+  if (from) url.searchParams.set('from', from)
   if (selection) {
     url.searchParams.set('task', selection.taskId)
     if (selection.versionId) url.searchParams.set('version', selection.versionId)
@@ -183,6 +190,8 @@ function updateReportPageUrl(selection: PreviewSelection | null, mode: 'push' | 
 export function ReportPage() {
   const [selection, setSelection] = useState<PreviewSelection | null>(reportPageSelection)
   const openedFromIndex = useRef(false)
+  const returnPath = reportReturnPath(new URLSearchParams(location.search).get('from'))
+  const sourceThread = returnPath?.match(new RegExp(`^/steward/(${uuid})`, 'i'))?.[1] ?? null
 
   useEffect(() => {
     const pop = () => setSelection(reportPageSelection())
@@ -198,24 +207,25 @@ export function ReportPage() {
   }
 
   function close() {
+    if (returnPath) { location.assign(returnPath); return }
     if (openedFromIndex.current) history.back()
     else { updateReportPageUrl(null, 'replace'); setSelection(null) }
     openedFromIndex.current = false
   }
 
   function fillComposer(payload: ReviewComposerPayload) {
-    const state = readComposerState(null)
+    const state = readComposerState(sourceThread)
     if (!confirmComposerReplacement(state, payload.content)) return false
     const next = changeComposerDraft(state, payload.content, payload.review)
-    writeComposerState(null, next)
-    const stored = readComposerState(null)
+    writeComposerState(sourceThread, next)
+    const stored = readComposerState(sourceThread)
     if (stored.draft.content !== next.draft.content || JSON.stringify(stored.draft.review) !== JSON.stringify(next.draft.review)) return false
-    location.assign('/')
+    location.assign(sourceThread ? `/steward/${sourceThread}` : '/')
     return true
   }
 
   return <div className="report-page">{selection
-    ? <WorkPreview selection={selection} onSelect={select} onClose={close} onFillComposer={fillComposer} independent />
+    ? <WorkPreview selection={selection} onSelect={select} onClose={close} onFillComposer={fillComposer} independent returnLabel={returnPath ? sourceThread ? '返回对话' : '返回工作' : '报告'} />
     : <ReportIndex onSelect={select} />}
   </div>
 }
@@ -256,8 +266,8 @@ function ReportIndex({ onSelect }: { onSelect(selection: PreviewSelection): void
   </section>
 }
 
-function WorkPreview({ selection, onSelect, onClose, onFillComposer, independent = false }: { selection: PreviewSelection; onSelect(selection: PreviewSelection): void;
-  onClose(): void; onFillComposer(payload: ReviewComposerPayload): boolean; independent?: boolean }) {
+function WorkPreview({ selection, onSelect, onClose, onFillComposer, independent = false, returnLabel }: { selection: PreviewSelection; onSelect(selection: PreviewSelection): void;
+  onClose(): void; onFillComposer(payload: ReviewComposerPayload): boolean; independent?: boolean; returnLabel?: string }) {
   const [task, setTask] = useState<PreviewTask | null | undefined>()
   const [taskError, setTaskError] = useState('')
   const [report, setReport] = useState<{ versionId: string; markdown: string } | null>(null)
@@ -513,9 +523,12 @@ function WorkPreview({ selection, onSelect, onClose, onFillComposer, independent
     <PreviewHeader className="work-preview-craft-header py-[8px] px-[13px] gap-[11px] border-b border-border" height={independent ? 49 : 62}
       style={{ position: 'sticky', zIndex: 2, top: 0, background: 'var(--panel)' }} onClose={onClose}
       leftActions={<Button ref={closeButton} type="button" variant="ghost" size="sm" className="work-preview-back" onClick={onClose}>
-        <ChevronLeft aria-hidden="true" />{independent ? '报告' : '返回对话'}
+        <ChevronLeft aria-hidden="true" />{independent ? returnLabel ?? '报告' : '返回对话'}
       </Button>}
-      rightActions={artifact && <Button asChild type="button" variant="ghost" size="sm"><a href={`/api/artifacts/${artifact.versionId}/download`}><ArrowDownToLine aria-hidden="true" />下载</a></Button>}>
+      rightActions={artifact && <>
+        {!independent && <Button asChild variant="ghost" size="sm"><a href={`/reports?task=${selection.taskId}&version=${artifact.versionId}&from=${encodeURIComponent(location.pathname + location.search)}`}>独立阅读</a></Button>}
+        <Button asChild type="button" variant="ghost" size="sm"><a href={`/api/artifacts/${artifact.versionId}/download`}><ArrowDownToLine aria-hidden="true" />下载</a></Button>
+      </>}>
       {independent
         ? <PreviewHeaderBadge id="work-preview-title" icon={FileText} label={`${previewTitle}${reportNumber ? ` · 第 ${reportNumber} 版` : ''}`} title={previewTitle} shrinkable />
         : <><PreviewHeaderBadge label="报告" variant="read" /><PreviewHeaderBadge id="work-preview-title" label={previewTitle} title={previewTitle} shrinkable /></>}

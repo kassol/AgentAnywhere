@@ -275,7 +275,7 @@ export function Work() {
           {detail.sourceUrl && <a className="work-source" href={detail.sourceUrl} target="_blank" rel="noopener noreferrer">{detail.sourceUrl}</a>}
         </div>
         <div className="work-detail-actions">
-          {currentVersion && <Button asChild variant="outline" size="sm"><a href={`/reports?task=${detail.id}&version=${currentVersion}`}>打开报告</a></Button>}
+          {currentVersion && <Button asChild variant="outline" size="sm"><a href={`/reports?task=${detail.id}&version=${currentVersion}&from=${encodeURIComponent(location.pathname + location.search)}`}>打开报告</a></Button>}
           {activeStatuses.includes(detail.run.status) && <Button variant="destructive" size="sm" className="work-danger-button" type="button" disabled={busy} onClick={cancel}>取消工作</Button>}
         </div>
       </header>

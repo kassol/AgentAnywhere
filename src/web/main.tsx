@@ -97,11 +97,10 @@ function Workbench() {
   const pending = location.pathname === '/pending'
   const report = location.pathname === '/reports'
   const steward = !settings && !work && !pending && !report
-  const conversationContext = steward || work || pending || report
   const [error, setError] = useState('')
   const [navigationError, setNavigationError] = useState('')
   const [pendingInteractions, setPendingInteractions] = useState<{ id: string; kind: 'question' | 'limit'; question: string; taskId: string; runId: string; goal: string; href: string }[]>([])
-  const [threads, setThreads] = useState<ConversationThread[] | null>(conversationContext ? null : [])
+  const [threads, setThreads] = useState<ConversationThread[] | null>(null)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   useEffect(() => {
     let disposed = false
@@ -109,20 +108,20 @@ function Workbench() {
       try {
         const [pendingResponse, threadsResponse] = await Promise.all([
           fetch('/api/interactions/pending'),
-          conversationContext ? fetch('/api/steward/threads') : Promise.resolve(null),
+          fetch('/api/steward/threads'),
         ])
         if (pendingResponse.status === 401 || threadsResponse?.status === 401) return location.assign('/login')
         if (pendingResponse.ok && !disposed) setPendingInteractions(await pendingResponse.json())
         if (threadsResponse && !threadsResponse.ok) throw new Error('对话列表加载失败，请稍后重试。')
         if (threadsResponse?.ok && !disposed) { setThreads(await threadsResponse.json()); setNavigationError('') }
       } catch (caught) {
-        if (!disposed && conversationContext) setNavigationError(caught instanceof Error ? caught.message : '对话列表加载失败，请稍后重试。')
+        if (!disposed) setNavigationError(caught instanceof Error ? caught.message : '对话列表加载失败，请稍后重试。')
       }
     }
     void refreshNavigation()
     const timer = setInterval(refreshNavigation, 1000)
     return () => { disposed = true; clearInterval(timer) }
-  }, [conversationContext])
+  }, [])
 
   async function logout() {
     setError('')
@@ -147,7 +146,7 @@ function Workbench() {
   const activeThread = threads?.find(thread => thread.id === activeThreadId)
 
   return (
-    <div className={conversationContext ? 'shell shell-steward' : 'shell'}>
+    <div className="shell shell-steward">
       <Panel as="aside" variant="shrink" className="sidebar" aria-label="主导航">
         <a className="brand" href="/" aria-label="AgentAnywhere 管家首页"><span className="brand-mark">A</span><span>AgentAnywhere<small>个人委托工作台</small></span></a>
         <nav className="sidebar-primary" aria-label="页面">
@@ -155,7 +154,7 @@ function Workbench() {
         </nav>
         <a className="account-summary" href="/settings"><span>K</span><div><strong>工作台所有者</strong><small>本机 · 已登录</small></div></a>
       </Panel>
-      {conversationContext && <ConversationNavigation threads={threads} activeId={activeThreadId} error={navigationError} />}
+      <ConversationNavigation threads={threads} activeId={activeThreadId} error={navigationError} />
       <Panel as="main" variant="grow" className={settings ? 'content content-settings' : steward ? 'content content-steward' : report ? 'content content-report' : pending ? 'content content-pending' : work ? 'content content-work' : 'content'}>
         <header className="mobile-header"><a className="brand-mark" href="/" aria-label="AgentAnywhere 管家首页">A</a>
           <strong>{settings ? '设置' : work ? '工作' : pending ? '待办' : report ? '报告' : '管家对话'}</strong>
@@ -163,7 +162,7 @@ function Workbench() {
             onClick={() => setMobileMenuOpen(open => !open)}>{mobileMenuOpen ? <X /> : <Menu />}</Button>
           {mobileMenuOpen && <div className="mobile-menu" role="dialog" aria-label="移动导航">
             <nav aria-label="页面">{primaryLinks.map(link => <SidebarButton key={link.id} link={link} onClick={() => setMobileMenuOpen(false)} />)}</nav>
-            {conversationContext && <ConversationNavigation threads={threads} activeId={activeThreadId} error={navigationError} />}
+            <ConversationNavigation threads={threads} activeId={activeThreadId} error={navigationError} />
           </div>}
         </header>
         {!report && <header className={settings ? 'page-header settings-page-header' : 'page-header'}><div>{!steward && !settings && <span>任务与成果</span>}
