@@ -1,3 +1,5 @@
+import './craft-theme.css'
+import './style.css'
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { ModelSettings } from './ModelSettings'
@@ -6,8 +8,6 @@ import { Steward } from './Steward'
 import { PreviewWorkspace } from './WorkPreview'
 import { QuickActions, type QuickAction } from './QuickActions'
 import { applyTheme, readTheme, saveTheme, type ThemeChoice } from './theme'
-import './craft-theme.css'
-import './style.css'
 
 type IconName = 'steward' | 'work' | 'todo' | 'settings' | 'sun'
 const threadStatusLabel: Record<string, string> = { queued: '排队中', running: '回复中', stopping: '停止中', stopped: '已停止', completed: '已完成', interrupted: '已中断', limited: '已达上限', failed: '失败' }

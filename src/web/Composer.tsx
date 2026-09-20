@@ -110,18 +110,23 @@ export function Composer({ state, busy, error, actions, onChange, onSubmit }: {
 
   return <>
     <form className="steward-composer" onSubmit={submit}>
-      <label htmlFor="steward-message">消息</label>
+      <label className="composer-label" htmlFor="steward-message">给管家发消息</label>
       <textarea id="steward-message" value={state.draft.content} onChange={event => onChange(event.target.value)}
         onKeyDown={event => {
           if (busy || !shouldSubmitComposerKey({ key: event.key, shiftKey: event.shiftKey, metaKey: event.metaKey,
             ctrlKey: event.ctrlKey, keyCode: event.nativeEvent.keyCode, isComposing: event.nativeEvent.isComposing })) return
           event.preventDefault()
           event.currentTarget.form?.requestSubmit()
-        }} maxLength={16000} rows={3} placeholder="输入消息…" />
+        }} maxLength={16000} rows={3} placeholder="给管家发消息…" />
       {state.pending && <small role="status">发送结果待核对；重试会使用同一请求，不会重复创建轮次。</small>}
-      <div><button type="submit" disabled={busy || (!state.pending && !state.draft.content.trim())}>
-        {busy ? '核对中…' : state.pending ? '核对并重试' : '发送'}
-      </button>{actions}</div>
+      <div className="composer-bar">
+        <span>Enter 发送 · Shift+Enter 换行</span>
+        <div className="composer-actions">{actions}<button type="submit" className={busy || state.pending ? 'composer-retry' : 'composer-send'}
+          aria-label={busy ? '正在核对发送结果' : state.pending ? '核对并重试发送' : '发送消息'}
+          disabled={busy || (!state.pending && !state.draft.content.trim())}>
+          {busy ? '核对中…' : state.pending ? '核对并重试' : <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 19V5" /><path d="m6 11 6-6 6 6" /></svg>}
+        </button></div>
+      </div>
     </form>
     {error && <p className="error" role="alert">{error}</p>}
   </>

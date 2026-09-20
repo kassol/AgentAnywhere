@@ -1,0 +1,9 @@
+/* Inter 4.1 by Rasmus Andersson, licensed under SIL OFL 1.1.
+ * See licenses/INTER-OFL.txt and docs/r3-craft-source.md. */
+@font-face {
+  font-family: Inter;
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('./fonts/InterVariable.woff2') format('woff2');
+}

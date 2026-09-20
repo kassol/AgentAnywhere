@@ -1,3 +1,5 @@
+@import './fonts.css';
+
 /*
  * Palette and surface treatment adapted from Craft Agents OSS renderer/index.css
  * at e8963854c3679edcceb105a42537a06749e6cb64 (v0.13.3).
@@ -9,7 +11,7 @@
   --foreground-rgb: 38, 36, 42;
   --panel: oklch(0.995 0.002 265);
   --sidebar: oklch(0.955 0.008 285);
-  --muted: color-mix(in srgb, var(--foreground) 56%, var(--background));
+  --muted: color-mix(in srgb, var(--foreground) 65%, var(--background));
   --subtle: color-mix(in srgb, var(--foreground) 5%, var(--background));
   --hover: color-mix(in srgb, var(--foreground) 7%, var(--background));
   --selected: oklch(0.925 0.028 292);
@@ -29,7 +31,7 @@
   --foreground-rgb: 237, 236, 240;
   --panel: oklch(0.18 0.014 270);
   --sidebar: oklch(0.16 0.017 275);
-  --muted: color-mix(in srgb, var(--foreground) 57%, var(--background));
+  --muted: color-mix(in srgb, var(--foreground) 65%, var(--background));
   --subtle: color-mix(in srgb, var(--foreground) 5%, var(--background));
   --hover: color-mix(in srgb, var(--foreground) 8%, var(--background));
   --selected: oklch(0.27 0.045 292);

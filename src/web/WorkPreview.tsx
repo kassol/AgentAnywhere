@@ -15,6 +15,11 @@ import './review-annotations.css'
 const uuid = '[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}'
 const taskPath = new RegExp(`^/tasks/(${uuid})$`, 'i')
 
+function PreviewIcon({ name }: { name: 'back' | 'close' }) {
+  const path = name === 'back' ? <path d="m15 18-6-6 6-6" /> : <path d="M6 6l12 12M18 6 6 18" />
+  return <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">{path}</svg>
+}
+
 export type PreviewSelection = { taskId: string; versionId?: string }
 export type PreviewArtifact = {
   kind: 'report' | 'attachment'
@@ -365,40 +370,37 @@ function WorkPreview({ selection, onSelect, onClose, onFillComposer }: { selecti
   const independentVersion = selection.versionId ?? artifact?.versionId
   return <aside className="work-preview" aria-labelledby="work-preview-title">
     <header className="work-preview-header">
-      <button ref={closeButton} type="button" className="work-preview-back" onClick={onClose}>← 返回对话</button>
-      <div><span>工作预览</span><h2 id="work-preview-title">{task ? task.goal || task.sourceUrl || `工作 ${task.id.slice(0, 8)}` : '正在读取工作…'}</h2></div>
-      <button type="button" className="work-preview-close" aria-label="关闭预览" onClick={onClose}>×</button>
+      <button ref={closeButton} type="button" className="work-preview-back" onClick={onClose}><PreviewIcon name="back" />返回对话</button>
+      <div><span>报告</span><h2 id="work-preview-title">{task ? task.goal || task.sourceUrl || `工作 ${task.id.slice(0, 8)}` : '正在读取工作…'}</h2></div>
+      <button type="button" className="work-preview-close" aria-label="关闭报告" onClick={onClose}><PreviewIcon name="close" /></button>
     </header>
     <div ref={scroll} className="work-preview-scroll" onScroll={rememberScroll}>
       {task === undefined && <p className="muted" role="status">正在加载工作详情…</p>}
       {taskError && <p className="error" role="alert">{taskError}</p>}
       {task && <>
         <section className="work-preview-summary" aria-label="工作摘要">
-          <span className="work-preview-status">{statusLabel[task.status] ?? task.status}</span>
-          <a href={`/tasks/${task.id}${independentVersion ? `?version=${encodeURIComponent(independentVersion)}` : ''}`}>独立打开工作</a>
+          <span className="work-preview-status" data-status={task.status}>{statusLabel[task.status] ?? task.status}</span>
+          <span className="work-preview-run">Run {task.run.id.slice(0, 8)}</span>
+          <a href={`/tasks/${task.id}${independentVersion ? `?version=${encodeURIComponent(independentVersion)}` : ''}`}>打开工作详情</a>
           {task.run.failure && <p className="error">{task.run.failure}</p>}
           {task.interaction?.status === 'pending' && <p className="work-preview-interaction" role="status">
             {task.interaction.kind === 'limit' ? '等待额度决定' : '等待回答'}：{task.interaction.question} <a href={`/tasks/${task.id}`}>前往处理</a>
           </p>}
         </section>
-        {!!reports.length && <nav className="work-preview-versions" aria-label="报告版本">
-          {reports.map((item, index) => <button key={item.versionId} type="button" aria-pressed={artifact?.versionId === item.versionId}
-            onClick={() => onSelect({ taskId: task.id, versionId: item.versionId })}>
-            第 {reports.length - index} 版 <small>{new Date(item.createdAt).toLocaleString('zh-CN')}</small>
-          </button>)}
-        </nav>}
+        {!!reports.length && <div className="work-preview-toolbar"><nav className="work-preview-versions" aria-label="报告版本">
+            {reports.map((item, index) => <button key={item.versionId} type="button" aria-pressed={artifact?.versionId === item.versionId}
+              onClick={() => onSelect({ taskId: task.id, versionId: item.versionId })}>
+              第 {reports.length - index} 版 <small>{new Date(item.createdAt).toLocaleString('zh-CN')}</small>
+            </button>)}
+          </nav>{artifact && <a href={`/api/artifacts/${artifact.versionId}/download`}>下载 .md</a>}</div>}
         {versionError && <p className="error work-preview-version-error" role="alert">{versionError}</p>}
         {!versionError && !artifact && <p className="muted">这项工作尚无可读报告。</p>}
         {artifact && <>
-          <div className="work-preview-report-actions">
-            <span>报告版本 {artifact.versionId.slice(0, 8)}</span>
-            <a href={`/api/artifacts/${artifact.versionId}/download`}>下载 Markdown</a>
-          </div>
           {reportError && <p className="error" role="alert">{reportError}</p>}
           {!reportError && report?.versionId !== artifact.versionId && <p className="muted" role="status">正在加载报告…</p>}
           {report?.versionId === artifact.versionId && <>
-            <p className="review-hint">鼠标选中文字后可直接批注；键盘请打开纯文本选择器。批注仅保存在当前浏览器，并固定到此报告版本。</p>
-            <button type="button" className="secondary" onClick={openKeyboardSelection}>键盘选择引用</button>
+            <div className="work-preview-review-tools"><p className="review-hint">选中文字即可批注。批注保存在当前浏览器，并固定到此报告版本。</p>
+              <button type="button" className="secondary" onClick={openKeyboardSelection}>键盘选择引用</button></div>
             {keyboardReportText !== null && <section className="review-selection" aria-label="键盘选择报告引用">
               <strong>选择报告文字</strong>
               <label>报告纯文本<textarea ref={keyboardSelection} readOnly rows={8} value={keyboardReportText}

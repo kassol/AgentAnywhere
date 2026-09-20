@@ -3,6 +3,7 @@ import { EmptyStateCard } from './EmptyStateCard'
 import { buildToolActivities, readActivityPages, StableScroll, ToolActivityList, type ActivityEvent } from './ActivityFeed'
 import Markdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import './work.css'
 
 type Model = { id: string; protocol: 'chat-completions' | 'responses' }
 type Task = { id: string; goal: string; sourceUrl: string | null; status: string; createdAt: string }
@@ -14,6 +15,13 @@ export function selectReportVersion<T extends { kind: string; versionId: string;
   return requested ? reports.find(item => item.versionId === requested) : reports.find(item => item.runStatus === 'succeeded')
 }
 const statusLabel: Record<string, string> = { queued: '待执行', provisioning: '准备环境', running: '执行中', waiting: '等待回答', cancelling: '正在取消', cancelled: '已取消', succeeded: '已完成', failed: '失败', lost: '执行中断', save_failed: '成果保存失败' }
+const activeStatuses = ['queued', 'provisioning', 'running', 'waiting']
+const finishedStatuses = ['succeeded', 'failed', 'lost', 'cancelled']
+function WorkGlyph({ name }: { name: 'work' | 'arrow' | 'back' }) {
+  const path = name === 'work' ? <><rect x="3" y="6" width="18" height="13" rx="2" /><path d="M8 6V4h8v2M3 11h18" /></>
+    : name === 'back' ? <path d="m15 18-6-6 6-6" /> : <path d="m9 18 6-6-6-6" />
+  return <svg className="work-glyph" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">{path}</svg>
+}
 const safeLink = (url: string) => {
   if (/^\/tasks\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(url)
     || /^\/tasks\/[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\?version=[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(url)
@@ -229,45 +237,52 @@ export function Work() {
     finally { setBusy(false) }
   }
 
-  if (detailId) return <>
-    <a href="/tasks">返回工作列表</a>
+  if (detailId) return <div className="work-detail-page">
+    <a className="work-back" href="/tasks"><WorkGlyph name="back" />返回工作列表</a>
     {error && <p className="error" role="alert">{error}</p>}
-    {!detail && !error && <p className="muted" role="status">正在加载工作…</p>}
+    {!detail && !error && <div className="work-loading muted" role="status">正在加载工作…</div>}
     {detail && <section className="work-detail">
-      <p className="work-status">{statusLabel[detail.run.status] ?? detail.run.status}</p>
-      {['queued', 'provisioning', 'running', 'waiting'].includes(detail.run.status) && <button type="button" disabled={busy} onClick={cancel}>取消工作</button>}
-      <h2>{detail.goal || detail.sourceUrl}</h2>
-      {detail.sourceUrl && <p><a href={detail.sourceUrl} target="_blank" rel="noopener noreferrer">{detail.sourceUrl}</a></p>}
-      <p className="muted">模型：{detail.run.model.id} · 协议：{detail.run.model.protocol}</p>
-      <p className="muted">执行额度：{detail.run.modelCalls}/{detail.run.modelCallLimit} 次模型调用，{Math.ceil(detail.run.activeMs / 60000)}/{Math.ceil(detail.run.activeLimitMs / 60000)} 分钟活跃执行。</p>
-      {detail.run.retryOfRunId && <p className="muted">从 Run {detail.run.retryOfRunId.slice(0, 8)} 手动重试。</p>}
-      {detail.runs.length > 1 && <section><h3>执行历史</h3><ul>{detail.runs.map(run => <li key={run.id}>Run {run.id.slice(0, 8)} · {statusLabel[run.status] ?? run.status}{run.retryOfRunId && ` · 重试 ${run.retryOfRunId.slice(0, 8)}`}</li>)}</ul></section>}
-      <h3>工作对话</h3>
-      {detail.interaction?.status === 'pending' && detail.interaction.kind === 'question' && <form className="work-form" onSubmit={submitAnswer}>
+      <header className="work-detail-header">
+        <div className="work-detail-heading"><span className="work-status" data-status={detail.run.status}>{statusLabel[detail.run.status] ?? detail.run.status}</span>
+          <h2>{detail.goal || detail.sourceUrl}</h2>
+          {detail.sourceUrl && <a className="work-source" href={detail.sourceUrl} target="_blank" rel="noopener noreferrer">{detail.sourceUrl}</a>}
+        </div>
+        {activeStatuses.includes(detail.run.status) && <button className="work-danger-button" type="button" disabled={busy} onClick={cancel}>取消工作</button>}
+      </header>
+      <dl className="work-metadata">
+        <div><dt>模型</dt><dd>{detail.run.model.id}</dd></div>
+        <div><dt>协议</dt><dd>{detail.run.model.protocol}</dd></div>
+        <div><dt>执行额度</dt><dd>{detail.run.modelCalls}/{detail.run.modelCallLimit} 次 · {Math.ceil(detail.run.activeMs / 60000)}/{Math.ceil(detail.run.activeLimitMs / 60000)} 分钟</dd></div>
+      </dl>
+      {detail.run.retryOfRunId && <p className="work-run-note muted">从 Run {detail.run.retryOfRunId.slice(0, 8)} 手动重试。</p>}
+      {detail.runs.length > 1 && <details className="work-history"><summary>执行历史 · {detail.runs.length} 次</summary><ul>{detail.runs.map(run => <li key={run.id}>Run {run.id.slice(0, 8)} · {statusLabel[run.status] ?? run.status}{run.retryOfRunId && ` · 重试 ${run.retryOfRunId.slice(0, 8)}`}</li>)}</ul></details>}
+      <section className="work-conversation" aria-labelledby="work-conversation-title"><header><h3 id="work-conversation-title">工作对话</h3><span>{detail.thread.messages.length} 条要求</span></header>
+      {detail.interaction?.status === 'pending' && detail.interaction.kind === 'question' && <form className="work-form work-interaction" onSubmit={submitAnswer}>
         <p className="work-message">Agent 提问：{detail.interaction.question}</p>
         <label>回答<textarea value={answer} onChange={event => setAnswer(event.target.value)} maxLength={4000} required rows={3} /></label>
         <button disabled={busy || !answer.trim() || detail.run.status !== 'waiting' || detail.run.cleanupState !== 'cleaned'} type="submit">提交回答</button>
       </form>}
-      {detail.interaction?.status === 'pending' && detail.interaction.kind === 'limit' && <div className="work-form">
+      {detail.interaction?.status === 'pending' && detail.interaction.kind === 'limit' && <div className="work-form work-interaction">
         <p className="work-message">{detail.interaction.question}</p>
-        <button type="button" disabled={busy || detail.run.cleanupState !== 'cleaned'} onClick={() => void decideLimit('continue')}>增加额度并继续</button>
-        <button type="button" disabled={busy || detail.run.cleanupState !== 'cleaned'} onClick={() => void decideLimit('finish')}>结束执行</button>
+        <div className="work-form-actions"><button type="button" disabled={busy || detail.run.cleanupState !== 'cleaned'} onClick={() => void decideLimit('continue')}>增加额度并继续</button>
+          <button type="button" className="work-secondary-button" disabled={busy || detail.run.cleanupState !== 'cleaned'} onClick={() => void decideLimit('finish')}>结束执行</button></div>
       </div>}
       {detail.interaction?.status === 'answered' && <p className="work-message">回答：{detail.interaction.answer}</p>}
-      {['failed', 'lost'].includes(detail.run.status) && detail.run.cleanupState === 'cleaned' && <button type="button" disabled={busy} onClick={() => void retry()}>手动重试（创建新 Run）</button>}
+      {['failed', 'lost'].includes(detail.run.status) && detail.run.cleanupState === 'cleaned' && <button className="work-standalone-action" type="button" disabled={busy} onClick={() => void retry()}>手动重试（创建新 Run）</button>}
       {detail.thread.messages.map((message, index) => <p className="work-message" key={index}>{message.content}{message.status === 'pending' && <span className="muted">（待处理{detail.run.status === 'running' ? '，将在下一模型步骤生效' : '，本次执行已结束，等待继续处理'}）</span>}{message.status === 'carried' && <span className="muted">（已纳入新 Run）</span>}</p>)}
-      {detail.run.status === 'running' && <form className="work-form" onSubmit={submitSteer}>
+      {detail.run.status === 'running' && <form className="work-form work-inline-form" onSubmit={submitSteer}>
         <label>追加要求<textarea value={steerContent} onChange={event => { setSteerContent(event.target.value); setSteerCommandId(crypto.randomUUID()) }} maxLength={4000} required rows={3} /></label>
         <button disabled={busy || !steerContent.trim()} type="submit">{busy ? '正在保存…' : '发送追加要求'}</button>
       </form>}
-      {['succeeded', 'failed', 'lost', 'cancelled'].includes(detail.run.status) && detail.run.cleanupState === 'cleaned' && detail.artifacts.some(item => item.kind === 'report' && item.runStatus === 'succeeded') && <form className="work-form" onSubmit={submitContinuation}>
+      {finishedStatuses.includes(detail.run.status) && detail.run.cleanupState === 'cleaned' && detail.artifacts.some(item => item.kind === 'report' && item.runStatus === 'succeeded') && <form className="work-form work-continuation" onSubmit={submitContinuation}>
         <h3>继续这项工作</h3>
         <p className="muted">将原目标、既往要求和上一版报告交给新 Run；旧报告保留。</p>
         <label>修改要求<textarea value={continuation} onChange={event => { setContinuation(event.target.value); setContinueRequestId(crypto.randomUUID()) }} maxLength={4000} required rows={3} /></label>
-        <label>模型<select value={modelId} onChange={event => setModelId(event.target.value)} required><option value="">请选择模型</option>{models.map(model => <option key={model.id} value={model.id}>{model.id}</option>)}</select></label>
-        <label>协议<select value={protocol} onChange={event => setProtocol(event.target.value)}><option value="default">使用模型默认协议</option><option value="chat-completions">Chat Completions</option><option value="responses">Responses</option></select></label>
+        <div className="work-form-grid"><label>模型<select value={modelId} onChange={event => setModelId(event.target.value)} required><option value="">请选择模型</option>{models.map(model => <option key={model.id} value={model.id}>{model.id}</option>)}</select></label>
+          <label>协议<select value={protocol} onChange={event => setProtocol(event.target.value)}><option value="default">使用模型默认协议</option><option value="chat-completions">Chat Completions</option><option value="responses">Responses</option></select></label></div>
         <button disabled={busy || !continuation.trim() || !modelId} type="submit">{busy ? '正在保存…' : '创建新 Run'}</button>
       </form>}
+      </section>
       {!!activityEpochs.length && <section className="work-activity" aria-label="执行活动"><h3>执行活动</h3>
         <StableScroll storageKey={`agentanywhere:work-scroll:${detail.run.id}`} revision={events.at(-1)?.serverSeq ?? 0} className="work-activity-scroll">
           {activityEpochs.map(epoch => <section className="work-activity-epoch" key={epoch} aria-labelledby={`epoch-${epoch}`}>
@@ -277,43 +292,45 @@ export function Work() {
           </section>)}
         </StableScroll>
       </section>}
-      <p className="muted">用量：输入 {tokens('inputTokens') ?? '未知'} / 输出 {tokens('outputTokens') ?? '未知'} token</p>
-      <p className="muted">实际费用：未知</p>
-      <p className="muted">耗时：{detail.run.startedAt && detail.run.finishedAt ? `${Math.round((Date.parse(detail.run.finishedAt) - Date.parse(detail.run.startedAt)) / 1000)} 秒` : '未知'}</p>
+      <dl className="work-usage muted"><div><dt>用量</dt><dd>输入 {tokens('inputTokens') ?? '未知'} / 输出 {tokens('outputTokens') ?? '未知'} token</dd></div><div><dt>实际费用</dt><dd>未知</dd></div><div><dt>耗时</dt><dd>{detail.run.startedAt && detail.run.finishedAt ? `${Math.round((Date.parse(detail.run.finishedAt) - Date.parse(detail.run.startedAt)) / 1000)} 秒` : '未知'}</dd></div></dl>
       {detail.run.failure && <p className="error" role="alert">{detail.run.failure}</p>}
       {(detail.run.cleanupState === 'failed' || detail.run.cleanupState === 'blocked') && <p className="error" role="alert">{detail.run.cleanupState === 'blocked' ? '成果尚未安全保存；沙箱已保留。' : '沙箱回收失败，请重试。'} <button type="button" onClick={retryCleanup}>重试保存与回收</button></p>}
       {selectedVersion && !currentVersion && <p className="error" role="alert">指定报告版本不存在或不属于当前工作。</p>}
-      {detail.artifacts.length > 0 && <section className="artifacts"><h3>成果</h3>
-        {detail.artifacts.filter(item => item.kind === 'report').map((item, index, reports) => <button type="button" key={item.versionId} onClick={() => setSelectedVersion(item.versionId)} aria-pressed={currentVersion === item.versionId}>第 {reports.length - index} 版 · {new Date(item.createdAt).toLocaleString('zh-CN')} · Run {item.runId.slice(0, 8)}{item.runStatus !== 'succeeded' && ' · 未完成'}</button>)}
-        {currentVersion && <><p><a href={`/api/artifacts/${currentVersion}/download`}>下载 Markdown 报告</a></p>
+      {detail.artifacts.length > 0 && <section className="artifacts"><header><h3>成果</h3>{currentVersion && <a href={`/api/artifacts/${currentVersion}/download`}>下载 Markdown</a>}</header>
+        <div className="artifact-versions" role="group" aria-label="报告版本">{detail.artifacts.filter(item => item.kind === 'report').map((item, index, reports) => <button type="button" key={item.versionId} onClick={() => setSelectedVersion(item.versionId)} aria-pressed={currentVersion === item.versionId}>第 {reports.length - index} 版<span>{new Date(item.createdAt).toLocaleString('zh-CN')} · Run {item.runId.slice(0, 8)}{item.runStatus !== 'succeeded' && ' · 未完成'}</span></button>)}</div>
+        {currentVersion && <>
           <div className="report-markdown">{loadedVersion === currentVersion ? <ReportMarkdown markdown={report} /> : <p role="status">正在加载报告…</p>}</div></>}
         {detail.artifacts.some(item => item.kind === 'attachment' && item.runId === detail.artifacts.find(report => report.versionId === currentVersion)?.runId) && <><h4>该版本附件</h4><ul>{detail.artifacts.filter(item => item.kind === 'attachment' && item.runId === detail.artifacts.find(report => report.versionId === currentVersion)?.runId).map(item => <li key={item.versionId}><a href={`/api/artifacts/${item.versionId}/download`}>{item.name}</a></li>)}</ul></>}
       </section>}
     </section>}
-  </>
+  </div>
 
-  return <>
-    <form className="work-form" onSubmit={submit} onChange={() => setRequestId(crypto.randomUUID())}>
-      <h2>创建工作</h2>
-      <label>目标<textarea name="goal" rows={4} maxLength={4000} placeholder="描述希望完成的工作" /></label>
-      <label>公开链接（可选）<input name="sourceUrl" type="url" placeholder="https://example.com" /></label>
-      <label>模型<select value={modelId} onChange={event => setModelId(event.target.value)} required>
-        <option value="">请选择模型</option>
-        {models.map(model => <option key={model.id} value={model.id}>{model.id}</option>)}
-      </select></label>
-      <details><summary>高级选项</summary><label>协议<select value={protocol} onChange={event => setProtocol(event.target.value)}>
-        <option value="default">使用模型默认协议</option>
-        <option value="chat-completions">Chat Completions</option>
-        <option value="responses">Responses</option>
-      </select></label></details>
-      <button disabled={busy || !modelId} type="submit">{busy ? '正在保存…' : '创建工作'}</button>
-      {!models.length && <p className="muted">请先到<a href="/settings">设置</a>选择模型。</p>}
+  return <div className="work-index">
+    <form className="work-form work-create" onSubmit={submit} onChange={() => setRequestId(crypto.randomUUID())}>
+      <header><div><h2>创建工作</h2><p>写清目标，Agent 会在隔离环境中执行并保存结果。</p></div></header>
+      <label className="work-goal-field"><span>目标</span><textarea name="goal" rows={3} maxLength={4000} placeholder="描述希望完成的工作" /></label>
+      <div className="work-create-options"><label><span>公开链接 <small>可选</small></span><input name="sourceUrl" type="url" placeholder="https://example.com" /></label>
+        <label>模型<select value={modelId} onChange={event => setModelId(event.target.value)} required>
+          <option value="">请选择模型</option>
+          {models.map(model => <option key={model.id} value={model.id}>{model.id}</option>)}
+        </select></label></div>
+      <div className="work-create-footer"><details><summary>高级选项</summary><label>协议<select value={protocol} onChange={event => setProtocol(event.target.value)}>
+          <option value="default">使用模型默认协议</option>
+          <option value="chat-completions">Chat Completions</option>
+          <option value="responses">Responses</option>
+        </select></label></details>
+        <button disabled={busy || !modelId} type="submit">{busy ? '正在保存…' : '创建工作'}</button></div>
+      {!models.length && <p className="work-form-note muted">请先到<a href="/settings">设置</a>选择模型。</p>}
     </form>
     {error && <p className="error" role="alert">{error}</p>}
-    <section className="work-list"><h2>工作列表</h2>
-      {tasks === null ? (!error && <p className="muted" role="status">正在加载工作…</p>) : tasks.length === 0 ?
+    <section className="work-list"><header><div><h2>工作列表</h2><p>按最近创建排序</p></div>{tasks && <span>{tasks.length} 项</span>}</header>
+      {tasks === null ? (!error && <div className="work-loading muted" role="status">正在加载工作…</div>) : tasks.length === 0 ?
         <EmptyStateCard title="还没有工作" description="创建后会显示在这里。" /> :
-        <ul className="task-list">{tasks.map(task => <li key={task.id}><a href={`/tasks/${task.id}`}>{task.goal || task.sourceUrl}</a><span>{statusLabel[task.status] ?? task.status}</span></li>)}</ul>}
+        <ul className="task-list">{tasks.map(task => <li key={task.id}><a href={`/tasks/${task.id}`}>
+          <span className="task-list-icon"><WorkGlyph name="work" /></span>
+          <span className="task-list-copy"><strong>{task.goal || task.sourceUrl}</strong><small>{new Date(task.createdAt).toLocaleString('zh-CN')}</small></span>
+          <span className="work-status" data-status={task.status}>{statusLabel[task.status] ?? task.status}</span><WorkGlyph name="arrow" />
+        </a></li>)}</ul>}
     </section>
-  </>
+  </div>
 }

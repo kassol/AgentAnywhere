@@ -53,6 +53,7 @@
 
   .quick-actions .quick-action {
     justify-content: space-between;
+    min-height: 44px;
     width: 100%;
   }
 }

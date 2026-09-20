@@ -7,7 +7,7 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: 20px;
-  padding: 22px;
+  padding: 20px 24px;
   border-bottom: 1px solid var(--border);
 }
 
@@ -29,7 +29,7 @@
   background: var(--selected);
   color: var(--selected-foreground);
   font-size: 11px;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .model-loading,
@@ -46,11 +46,11 @@
 }
 
 .model-section {
-  padding: 24px 22px;
+  padding: 24px;
 }
 
 .model-daily {
-  background: var(--subtle);
+  background: transparent;
 }
 
 .model-section-heading {
@@ -69,7 +69,7 @@
 .model-group-card {
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 9px;
+  border-radius: 12px;
   background: var(--panel);
 }
 
@@ -90,7 +90,7 @@
 .model-setting-row strong {
   display: block;
   font-size: 13px;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .model-setting-row select {
@@ -102,14 +102,19 @@
 }
 
 .model-settings .research-pool {
-  gap: 6px;
+  gap: 0;
   margin: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 12px;
 }
 
 .model-settings .research-pool label {
   align-items: center;
   margin: 0;
-  padding: 11px 13px;
+  padding: 12px 14px;
+  border: 0;
+  border-radius: 0;
   background: var(--panel);
 }
 
@@ -145,7 +150,7 @@
   gap: 4px;
   padding: 17px 44px 17px 22px;
   font-size: 13px;
-  font-weight: 650;
+  font-weight: 600;
 }
 
 .model-details > summary::after,
@@ -305,4 +310,22 @@
   .model-section {
     padding: 18px 16px;
   }
+}
+
+.model-settings .research-pool label + label { border-top: 1px solid var(--border); }
+.model-settings .research-pool label > span { min-width: 0; }
+.model-settings .research-pool strong { font-size: 13px; overflow-wrap: anywhere; }
+.model-settings .research-pool small { line-height: 1.6; }
+.model-settings .research-pool input { accent-color: var(--accent); width: 16px; height: 16px; }
+.model-settings-header h2 { font-size: 16px; font-weight: 600; }
+.model-section :is(input, select) { min-height: 36px; }
+.model-settings .catalog li { gap: 16px; }
+.model-settings .catalog li > span { min-width: 0; overflow-wrap: anywhere; }
+.model-settings .catalog button { flex: none; }
+.model-source, .model-message, .metadata-list { overflow-wrap: anywhere; }
+.selected-model-body > .muted { font-size: 12px; line-height: 1.65; }
+.model-setting-row > button { justify-self: end; }
+@media (max-width: 680px) {
+  .model-section :is(input, select, button), .model-save-row button { min-height: 44px; }
+  .model-settings .model-setting-row > button { justify-self: stretch; }
 }

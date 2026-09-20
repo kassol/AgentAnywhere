@@ -1,27 +1,213 @@
-.review-hint { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
-.work-preview-report ::selection { background: color-mix(in srgb, var(--selected) 72%, transparent); color: var(--foreground); }
-.review-selection, .review-annotations { display: grid; gap: 12px; padding: 14px; border: 1px solid var(--border-strong); border-radius: 9px; background: var(--panel); }
-.review-selection strong, .review-annotations h3 { margin: 0; font-size: 13px; }
-.review-selection blockquote, .review-annotations blockquote { margin: 0; padding: 9px 11px; border-left: 3px solid var(--selected-foreground); background: var(--subtle); color: var(--muted); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
-.review-selection label { display: grid; gap: 6px; font-size: 12px; font-weight: 650; }
-.review-selection textarea { width: 100%; padding: 9px 10px; resize: vertical; }
-.review-selection > div, .review-annotations > header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.review-selection button, .review-annotations button { cursor: pointer; padding: 9px 14px; border: 0; border-radius: 8px; background: var(--accent); color: var(--accent-foreground); font-weight: 600; }
-.review-selection button.secondary, .review-annotations button.secondary { margin: 0; background: var(--selected); color: var(--selected-foreground); }
-.review-selection button:disabled, .review-annotations button:disabled { cursor: default; opacity: .55; }
-.review-annotations > article { display: grid; gap: 8px; padding-top: 12px; border-top: 1px solid var(--border); }
-.review-annotations > article > div { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.review-annotations > article strong { font-size: 12px; }
-.review-annotations > article small { color: var(--muted); font-size: 10px; }
-.review-annotations > article p { margin: 0; font-size: 12px; white-space: pre-wrap; }
-.review-annotations > article button { justify-self: start; }
-.review-version-conflict { display: grid; gap: 9px; padding: 13px 15px; border: 1px solid var(--danger); border-radius: 9px; background: color-mix(in srgb, var(--danger) 7%, var(--panel)); }
-.review-version-conflict > strong { font-size: 13px; }
-.review-version-conflict p { margin: 0; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
-.review-version-conflict > div { display: flex; justify-content: flex-end; gap: 8px; }
-.review-version-conflict button.secondary { margin: 0; }
+.review-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.work-preview-report ::selection {
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+  color: var(--foreground);
+}
+
+.review-selection,
+.review-annotations {
+  display: grid;
+  gap: 11px;
+  margin-top: 18px;
+  padding: 14px 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.review-selection + .work-preview-report {
+  margin-top: 24px;
+}
+
+.work-preview-report + .review-selection,
+.work-preview-report + .review-annotations,
+.review-selection + .review-annotations {
+  margin-top: 26px;
+}
+
+.review-selection strong,
+.review-annotations h3 {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.review-selection blockquote,
+.review-annotations blockquote {
+  margin: 0;
+  padding: 9px 10px;
+  overflow-wrap: anywhere;
+  border: 0;
+  border-radius: 6px;
+  background: var(--subtle);
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.review-selection label {
+  display: grid;
+  gap: 6px;
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.review-selection textarea {
+  width: 100%;
+  padding: 9px 10px;
+  resize: vertical;
+  border-radius: 7px;
+  line-height: 1.5;
+}
+
+.review-selection > div,
+.review-annotations > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.review-selection > div {
+  justify-content: flex-end;
+}
+
+.review-selection button,
+.review-annotations button {
+  min-height: 32px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--accent);
+  color: var(--accent-foreground);
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.review-selection button.secondary,
+.review-annotations button.secondary {
+  margin: 0;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+}
+
+.review-selection button.secondary:hover,
+.review-annotations button.secondary:hover {
+  border-color: var(--border-strong);
+  color: var(--foreground);
+}
+
+.review-selection button:disabled,
+.review-annotations button:disabled {
+  cursor: default;
+  opacity: .55;
+}
+
+.review-annotations > article {
+  position: relative;
+  display: grid;
+  gap: 7px;
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+}
+
+.review-annotations > article > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.review-annotations > article strong {
+  font-size: 10px;
+}
+
+.review-annotations > article small {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.review-annotations > article p {
+  margin: 0;
+  padding-right: 60px;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.review-annotations > article > button {
+  position: absolute;
+  right: 0;
+  bottom: 10px;
+  min-height: 26px;
+  padding: 0 7px;
+  border: 0;
+}
+
+.review-version-conflict {
+  display: grid;
+  gap: 9px;
+  margin-top: 18px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--danger) 6%, var(--panel));
+}
+
+.review-version-conflict > strong {
+  font-size: 11px;
+}
+
+.review-version-conflict p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.review-version-conflict > div {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.review-version-conflict button.secondary {
+  margin: 0;
+}
 
 @media (max-width: 680px) {
-  .review-selection > div, .review-annotations > header, .review-annotations > article > div, .review-version-conflict > div { align-items: stretch; flex-direction: column; }
-  .review-selection button, .review-annotations button { width: 100%; }
+  .review-selection > div,
+  .review-annotations > header,
+  .review-annotations > article > div,
+  .review-version-conflict > div {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .review-selection button,
+  .review-annotations > header button,
+  .review-version-conflict button {
+    width: 100%;
+    min-height: 44px;
+  }
+
+  .review-annotations > article p {
+    padding-right: 0;
+  }
+
+  .review-annotations > article > button {
+    position: static;
+    width: fit-content;
+    min-height: 38px;
+    justify-self: start;
+  }
 }
