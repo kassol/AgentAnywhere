@@ -1,9 +1,10 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { ModelSettings } from './ModelSettings'
 import { Work } from './Work'
 import { Steward } from './Steward'
 import { PreviewWorkspace } from './WorkPreview'
+import { QuickActions, type QuickAction } from './QuickActions'
 import { applyTheme, readTheme, saveTheme, type ThemeChoice } from './theme'
 import './craft-theme.css'
 import './style.css'
@@ -97,8 +98,17 @@ function Workbench() {
   const work = location.pathname === '/tasks' || location.pathname.startsWith('/tasks/')
   const steward = !settings && !work
   const [error, setError] = useState('')
-  const [pendingInteractions, setPendingInteractions] = useState<{ id: string; question: string; goal: string; href: string }[]>([])
+  const [pendingInteractions, setPendingInteractions] = useState<{ id: string; kind: 'question' | 'limit'; question: string; taskId: string; runId: string; goal: string; href: string }[]>([])
   const [threads, setThreads] = useState<{ id: string; title: string; status?: string }[]>([])
+  const [fillRequest, setFillRequest] = useState<{ id: number; command: string }>()
+  const fillRequestId = useRef(0)
+
+  const pendingActions = (interaction: typeof pendingInteractions[number]): QuickAction[] => interaction.kind === 'limit'
+    ? [
+        { kind: 'limit', taskId: interaction.taskId, interactionId: interaction.id, decision: 'continue' },
+        { kind: 'limit', taskId: interaction.taskId, interactionId: interaction.id, decision: 'finish' },
+      ]
+    : [{ kind: 'answer', taskId: interaction.taskId, interactionId: interaction.id }]
 
   useEffect(() => {
     let disposed = false
@@ -142,6 +152,7 @@ function Workbench() {
         </section>}
         {!!pendingInteractions.length && <section className="pending-interactions" aria-label="全局待办"><h2>待回答</h2><ul>{pendingInteractions.map(interaction => <li key={interaction.id}>
           <a href={interaction.href}>{interaction.goal}</a><small>{interaction.question}</small>
+          {steward && <QuickActions actions={pendingActions(interaction)} onFill={command => setFillRequest({ id: ++fillRequestId.current, command })} />}
         </li>)}</ul></section>}
         <div className="account-summary"><span>本机</span><div><strong>工作台所有者</strong><small>已登录</small></div></div>
       </aside>
@@ -154,7 +165,7 @@ function Workbench() {
             <p className="muted">当前已登录。</p>
             <button type="button" className="secondary" onClick={logout}>退出登录</button>
           </section></>
-        ) : work ? <Work /> : <PreviewWorkspace><Steward /></PreviewWorkspace>}
+        ) : work ? <Work /> : <PreviewWorkspace><Steward fillRequest={fillRequest} onFillRequestHandled={() => setFillRequest(undefined)} /></PreviewWorkspace>}
       </main>
     </div>
   )

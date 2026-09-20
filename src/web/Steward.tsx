@@ -2,13 +2,14 @@ import { useEffect, useRef, useState } from 'react'
 import { Composer, acceptComposerSubmission, attachComposerThread, changeComposerDraft, prepareComposerSubmission, readComposerState, rejectComposerSubmission, writeComposerState, type ComposerState, type ComposerSubmission } from './Composer'
 import { buildToolActivities, readActivityPages, StableScroll, ToolActivityList, type ActivityEvent } from './ActivityFeed'
 import { ReportMarkdown } from './Work'
+import { QuickActions, type QuickAction } from './QuickActions'
 import { StewardReceipts, type ControlOperation, type InteractionOperation, type ResearchOperation, type RetryOperation, type RevisionOperation } from './StewardReceipts'
 
 type Message = { id: string; turnId: string; role: 'user' | 'assistant'; content: string; status: string }
 type Summary = { id: string; content: string; fromTurnNumber: number; throughTurnNumber: number; coveredTurns: number }
 type Turn = { id: string; requestId: string; status: string; modelCalls: number; modelCallLimit: number; activeMs: number; activeLimitMs: number; budgetReason?: string; failure?: string }
-type RelatedTask = { id: string; goal: string; status: string; href: string; reports: { versionId: string; href: string }[] }
-type StatusCard = { id: string; kind: 'completed' | 'failed' | 'interaction'; taskId: string; runId: string; goal: string; runStatus: string; failure?: string; href: string; reports: { versionId: string; href: string }[]; interaction?: { id: string; kind: 'question' | 'limit'; question: string; status: string; answer?: string } }
+export type RelatedTask = { id: string; goal: string; status: string; href: string; runs: { id: string; status: string }[]; reports: { versionId: string; href: string }[] }
+export type StatusCard = { id: string; kind: 'completed' | 'failed' | 'interaction'; taskId: string; runId: string; goal: string; runStatus: string; failure?: string; href: string; reports: { versionId: string; href: string }[]; interaction?: { id: string; kind: 'question' | 'limit'; question: string; status: string; answer?: string } }
 type Detail = { id: string; title: string; messages: Message[]; summaries: Summary[]; turns: Turn[]; relatedTasks: RelatedTask[]; statusCards: StatusCard[]; researchOperations: ResearchOperation[];
   controlOperations: ControlOperation[]; interactionOperations: InteractionOperation[]; retryOperations: RetryOperation[]; revisionOperations: RevisionOperation[] }
 const statusLabel: Record<string, string> = {
@@ -23,7 +24,40 @@ function limitMessage(turn: Turn) {
   return `本轮已达到${limit}上限。发送新消息可开始下一轮。`
 }
 
-export function Steward() {
+export function fillQuickCommand(state: ComposerState, command: string) {
+  return changeComposerDraft(state, command, null)
+}
+
+export function relatedTaskQuickActions(task: RelatedTask): QuickAction[] {
+  const run = task.runs.at(-1)
+  if (!run) return []
+  if (run.status === 'running') return [
+    { kind: 'append', taskId: task.id, runId: run.id },
+    { kind: 'cancel', taskId: task.id, runId: run.id },
+  ]
+  if (['queued', 'provisioning'].includes(run.status)) return [{ kind: 'cancel', taskId: task.id, runId: run.id }]
+  return []
+}
+
+export function statusCardQuickActions(card: StatusCard, latestRunId?: string): QuickAction[] {
+  if (card.interaction?.status === 'pending') {
+    if (latestRunId !== card.runId) return []
+    const answer: QuickAction[] = card.interaction.kind === 'limit'
+      ? [
+          { kind: 'limit', taskId: card.taskId, interactionId: card.interaction.id, decision: 'continue' },
+          { kind: 'limit', taskId: card.taskId, interactionId: card.interaction.id, decision: 'finish' },
+        ]
+      : [{ kind: 'answer', taskId: card.taskId, interactionId: card.interaction.id }]
+    return [...answer, { kind: 'cancel', taskId: card.taskId, runId: card.runId }]
+  }
+  if (['failed', 'lost'].includes(card.runStatus)) return latestRunId === card.runId
+    ? [{ kind: 'same-retry', taskId: card.taskId, sourceRunId: card.runId }]
+    : []
+  const report = card.runStatus === 'succeeded' ? card.reports[0] : undefined
+  return report ? [{ kind: 'revision', taskId: card.taskId, versionId: report.versionId }] : []
+}
+
+export function Steward({ fillRequest, onFillRequestHandled }: { fillRequest?: { id: number; command: string }; onFillRequestHandled?: () => void } = {}) {
   const routeId = /^\/steward\/([0-9a-f-]{36})$/i.exec(location.pathname)?.[1] ?? null
   const [detail, setDetail] = useState<Detail | null>(null)
   const [composer, setComposer] = useState<ComposerState>(() => readComposerState(routeId))
@@ -38,6 +72,12 @@ export function Steward() {
     setComposer(next)
     writeComposerState(id, next)
   }
+
+  useEffect(() => {
+    if (!fillRequest) return
+    fillCommand(fillRequest.command)
+    onFillRequestHandled?.()
+  }, [fillRequest?.id])
 
   async function loadDetail(id: string) {
     const response = await fetch(`/api/steward/threads/${id}`)
@@ -143,6 +183,11 @@ export function Steward() {
     else if (routeId) await loadDetail(routeId)
   }
 
+  function fillCommand(command: string) {
+    storeComposer(fillQuickCommand(composerRef.current, command))
+    requestAnimationFrame(() => document.querySelector<HTMLTextAreaElement>('#steward-message')?.focus())
+  }
+
   const activeTurns = detail?.turns.filter(turn => ['queued', 'running', 'stopping'].includes(turn.status)) ?? []
   const toolActivities = buildToolActivities(events)
   const scrollRevision = `${detail?.messages.length ?? 0}:${events.at(-1)?.serverSeq ?? 0}:${detail?.turns.at(-1)?.status ?? ''}`
@@ -165,7 +210,7 @@ export function Steward() {
               <ToolActivityList activities={toolActivities.filter(activity => activity.scopeId === turn.id)} />
               <StewardReceipts turnId={turn.id} research={detail.researchOperations} controls={detail.controlOperations}
                 interactions={detail.interactionOperations} retries={detail.retryOperations} revisions={detail.revisionOperations}
-                onResume={(operationId, action) => storeComposer(changeComposerDraft(composerRef.current, `继续${action}回执 ${operationId}`))} />
+                onFill={fillCommand} disabled={busy} />
               {messages.filter(message => message.role === 'assistant').map(message => <article key={message.id} className="conversation-message assistant">
                 <strong>管家</strong><ReportMarkdown markdown={message.content || '…'} />
                 {message.status !== 'completed' && <small>{statusLabel[message.status] ?? message.status}</small>}
@@ -177,6 +222,7 @@ export function Steward() {
           {!!detail?.relatedTasks.length && <section aria-label="关联工作"><h3>关联工作</h3><ul>{detail.relatedTasks.map(task => <li key={task.id}>
             <a href={task.href}>{task.goal}</a> <span>{statusLabel[task.status] ?? task.status}</span>
             {task.reports.map(report => <span key={report.versionId}> · <a href={report.href}>成果 {report.versionId.slice(0, 8)}</a></span>)}
+            <QuickActions actions={relatedTaskQuickActions(task)} onFill={fillCommand} disabled={busy} />
           </li>)}</ul></section>}
           {!!detail?.statusCards.length && <section aria-label="工作状态卡"><h3>工作状态</h3><ul>{detail.statusCards.map(card => <li key={card.id}>
             <a href={card.href}>{card.goal}</a>{' · '}
@@ -185,6 +231,8 @@ export function Steward() {
               : statusLabel[card.runStatus] ?? card.runStatus}
             {card.reports.map(report => <span key={report.versionId}> · <a href={report.href}>成果 {report.versionId.slice(0, 8)}</a></span>)}
             {card.interaction?.answer && <><br /><small>回答：{card.interaction.answer}</small></>}
+            <QuickActions actions={statusCardQuickActions(card, detail.relatedTasks.find(task => task.id === card.taskId)?.runs.at(-1)?.id)}
+              onFill={fillCommand} disabled={busy} />
           </li>)}</ul></section>}
         </StableScroll>
         <Composer state={composer} busy={busy} error={error} onChange={content => storeComposer(changeComposerDraft(composerRef.current, content))}
