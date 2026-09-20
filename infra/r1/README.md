@@ -39,7 +39,7 @@ test "$active" = 0
 
 先停止 Web 和 queue，随后再执行同一查询，关闭检查与停服之间的竞态。第二次结果不为 0 时立即从旧根恢复 Web/queue，停止迁移。第二次检查通过后，先创建 0700 的 `/opt/agentanywhere/backups`，再在 `<时间>-directory-migration/` 创建数据库、`artifacts/`、`data/`、运行配置的配对备份；使用 `pg_restore --list` 检查数据库归档，使用 `tar -tf` 检查文件归档，生成并执行 `sha256sum -c SHA256SUMS`。同时逐一执行旧备份目录已有的 `SHA256SUMS`、`final-SHA256SUMS` 和 `public-acceptance-SHA256SUMS`，任何失败都恢复旧服务并停止迁移。
 
-备份通过后，创建 0700 的 `runtime/` 和 `releases/`。使用 `cp -a` 保留原所有者与权限：只复制当前和上一健康版本到 `releases/<SHA>/`，复制旧备份到 `backups/`，复制正式 env、密码文件、Compose、deploy、`data/`、`artifacts/`、`opensandbox-data/` 和 OpenSandbox/SearXNG 配置到 `runtime/`。停止并从旧 Compose 移除五个正式容器时不得使用 `-v`；从新根以相同 Compose 项目名重建 SearXNG、OpenSandbox、PostgreSQL，再执行 `deploy.sh /opt/agentanywhere/runtime <当前 SHA>`。公网代理端口仍为 `19110`。
+备份通过后，创建 0700 的 `runtime/` 和 `releases/`。使用 `cp -a` 保留原所有者与权限：只复制当前和上一健康版本到 `releases/<SHA>/`，复制旧备份到 `backups/`，复制正式 env、密码文件、Compose、deploy、`data/`、`artifacts/`、`opensandbox-data/` 和 OpenSandbox/SearXNG 配置到 `runtime/`。停止五个正式容器后，从新根以相同 Compose 项目名执行 `up -d --force-recreate` 重建 SearXNG、OpenSandbox、PostgreSQL，再执行 `deploy.sh /opt/agentanywhere/runtime <当前 SHA>`。公网代理端口仍为 `19110`。重建前后按卷名与挂载点集合核对 SearXNG 匿名卷；不要先执行 `rm`、`down` 或 `down -v`，避免丢失旧容器的匿名卷关联。
 
 核对容器 Compose 标签和 bind mount 均指向新 `runtime/`，再完成 HTTPS/WSS、登录、搜索、真实工作、成果下载和同机其他服务验收。完整验收前保留旧根和旧镜像。失败时从新根停容器且不加 `-v`，使用旧根和原 SHA 重建；继续使用原 PostgreSQL 卷，不自动恢复数据库。完整验收后，先将旧根移入新 `backups/legacy-layout-<日期>/` 作为短期回退，再清理无引用的中间源码和镜像；旧顶级备份目录须逐个历史备份子目录执行 `diff -qr <旧子目录> <新子目录>`，全部一致后再删除。
 
