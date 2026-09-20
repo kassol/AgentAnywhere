@@ -312,9 +312,9 @@ export function Steward({ fillRequest, onFillRequestHandled }: { fillRequest?: {
                 isComplete={turn.status === 'completed'}
                 renderMarkdown={content => <ReportMarkdown markdown={content} />}
               />
-              <details className="steward-turn-details"><summary>执行详情与操作回执</summary><StewardReceipts turnId={turn.id} research={detail.researchOperations} controls={detail.controlOperations}
+              <StewardReceipts turnId={turn.id} research={detail.researchOperations} controls={detail.controlOperations}
                 interactions={detail.interactionOperations} retries={detail.retryOperations} revisions={detail.revisionOperations}
-                onFill={fillCommand} disabled={busy} /></details>
+                onFill={fillCommand} disabled={busy} />
               {turn.failure && <p className="error" role="alert">{turn.failure}</p>}
               {turn.status === 'limited' && <p className="error" role="status">{limitMessage(turn)}</p>}
             </section>
@@ -343,6 +343,9 @@ export function Steward({ fillRequest, onFillRequestHandled }: { fillRequest?: {
                       </div>)}
                     </div>)}
                     {!!task.reports.length && <div className="steward-work-reports">{task.reports.map((item, index) => <a key={item.versionId} href={item.href}>报告版本 {task.reports.length - index}</a>)}</div>}
+                    <StewardReceipts taskId={task.id} research={detail.researchOperations} controls={detail.controlOperations}
+                      interactions={detail.interactionOperations} retries={detail.retryOperations} revisions={detail.revisionOperations}
+                      onFill={fillCommand} disabled={busy} />
                     <Button asChild variant="ghost" size="sm"><a href={task.href}>查看完整工作</a></Button>
                   </details>
                 </div>

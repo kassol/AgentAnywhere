@@ -12,7 +12,8 @@ export type RetryOperation = ReceiptTurns & { operationId: string; mode: 'same' 
 export type RevisionOperation = ReceiptTurns & { operationId: string; status: string; taskId?: string; sourceVersionId?: string; runId?: string; content: string; modelId: string; protocol: string; reason: string; verification: string; sources?: Record<string, { source: string }>; failure?: string }
 
 type Props = {
-  turnId: string
+  turnId?: string
+  taskId?: string
   research: ResearchOperation[]
   controls: ControlOperation[]
   interactions: InteractionOperation[]
@@ -64,15 +65,18 @@ function ReceiptRow({ operationId, title, status, summary, detail, children }: {
   </EntityRow>
 }
 
-export function StewardReceipts({ turnId, research, controls, interactions, retries, revisions, onFill, disabled }: Props) {
-  const ownResearch = research.filter(item => receiptBelongsToTurn(item, turnId))
-  const ownControls = controls.filter(item => receiptBelongsToTurn(item, turnId))
-  const ownInteractions = interactions.filter(item => receiptBelongsToTurn(item, turnId))
-  const ownRetries = retries.filter(item => receiptBelongsToTurn(item, turnId))
-  const ownRevisions = revisions.filter(item => receiptBelongsToTurn(item, turnId))
+export function StewardReceipts({ turnId, taskId, research, controls, interactions, retries, revisions, onFill, disabled }: Props) {
+  const belongs = (item: ReceiptTurns & { taskId?: string }) => taskId
+    ? item.taskId === taskId
+    : !item.taskId && !!turnId && receiptBelongsToTurn(item, turnId)
+  const ownResearch = research.filter(belongs)
+  const ownControls = controls.filter(belongs)
+  const ownInteractions = interactions.filter(belongs)
+  const ownRetries = retries.filter(belongs)
+  const ownRevisions = revisions.filter(belongs)
   if (![ownResearch, ownControls, ownInteractions, ownRetries, ownRevisions].some(items => items.length)) return null
 
-  return <div className="turn-receipts">
+  const receipts = <div className="turn-receipts">
     {ownResearch.map(operation => {
       const sources = [...new Set(Object.values(operation.sources ?? {}).map(source => source.source))]
       return <ReceiptRow key={operation.operationId} operationId={operation.operationId} title="调研派发" status={operation.status}
@@ -105,6 +109,7 @@ export function StewardReceipts({ turnId, research, controls, interactions, retr
       <Resume {...{ operationId: operation.operationId, status: operation.status, action: '改稿', enabled: Boolean(operation.taskId && operation.sourceVersionId && operation.modelId), onFill, disabled }} />
     </ReceiptRow>)}
   </div>
+  return taskId ? receipts : <details className="steward-turn-details"><summary>未关联操作回执</summary>{receipts}</details>
 }
 
 export function receiptBelongsToTurn(operation: ReceiptTurns, turnId: string) {
