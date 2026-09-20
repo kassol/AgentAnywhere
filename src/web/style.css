@@ -142,7 +142,7 @@ input, select, textarea { border: 1px solid var(--border-strong); background: va
 .artifacts button { justify-self: start; cursor: pointer; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
 .artifacts button[aria-pressed="true"] { background: var(--selected); }
 .report-markdown, .work-preview-report { overflow-wrap: anywhere; line-height: 1.6; }
-.report-markdown a, .work-preview-report a { color: var(--selected-foreground); }
+.report-markdown a, .work-preview-report a, .conversation-message a { color: var(--selected-foreground); }
 .report-markdown pre, .work-preview-report pre { max-width: 100%; overflow: auto; padding: 12px; background: var(--subtle); border-radius: 8px; }
 
 .steward-layout { display: grid; grid-template-columns: 210px minmax(0, 720px); gap: 24px; max-width: 960px; align-items: start; }
