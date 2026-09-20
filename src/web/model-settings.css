@@ -1,0 +1,308 @@
+.settings-card.model-settings {
+  padding: 0;
+}
+
+.model-settings-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 22px;
+  border-bottom: 1px solid var(--border);
+}
+
+.model-settings-header p,
+.model-section-heading p,
+.model-setting-row p {
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.model-unsaved,
+.model-section-heading > span {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: var(--selected);
+  color: var(--selected-foreground);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.model-loading,
+.model-message {
+  margin: 0;
+  padding: 14px 22px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.model-message.error {
+  color: var(--danger);
+}
+
+.model-section {
+  padding: 24px 22px;
+}
+
+.model-daily {
+  background: var(--subtle);
+}
+
+.model-section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.model-settings .model-section-heading h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.model-group-card {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--panel);
+}
+
+.model-setting-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 42%);
+  align-items: center;
+  gap: 20px;
+  min-height: 64px;
+  padding: 12px 14px;
+}
+
+.model-setting-row + .model-setting-row {
+  border-top: 1px solid var(--border);
+}
+
+.model-setting-row label,
+.model-setting-row strong {
+  display: block;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.model-setting-row select {
+  min-width: 0;
+}
+
+.model-pool-heading {
+  margin-top: 24px;
+}
+
+.model-settings .research-pool {
+  gap: 6px;
+  margin: 0;
+}
+
+.model-settings .research-pool label {
+  align-items: center;
+  margin: 0;
+  padding: 11px 13px;
+  background: var(--panel);
+}
+
+.model-settings .research-pool label:has(input:checked) {
+  border-color: var(--border-strong);
+  background: var(--selected);
+}
+
+.model-save-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+.model-details {
+  border-top: 1px solid var(--border);
+}
+
+.model-details > summary,
+.selected-model > summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.model-details > summary::-webkit-details-marker,
+.selected-model > summary::-webkit-details-marker {
+  display: none;
+}
+
+.model-details > summary {
+  position: relative;
+  display: grid;
+  gap: 4px;
+  padding: 17px 44px 17px 22px;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.model-details > summary::after,
+.selected-model > summary::after {
+  position: absolute;
+  top: 50%;
+  right: 20px;
+  content: "+";
+  color: var(--muted);
+  font-size: 18px;
+  font-weight: 400;
+  transform: translateY(-50%);
+}
+
+.model-details[open] > summary::after,
+.selected-model[open] > summary::after {
+  content: "−";
+}
+
+.model-details > summary:hover,
+.selected-model > summary:hover {
+  background: var(--hover);
+}
+
+.model-details > summary small,
+.selected-model > summary small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.model-details-body {
+  border-top: 1px solid var(--border);
+}
+
+.model-details-body > .model-section + .model-section {
+  border-top: 1px solid var(--border);
+}
+
+.model-settings .model-form {
+  margin-top: 0;
+  padding: 14px;
+}
+
+.model-settings .model-form button {
+  justify-self: end;
+}
+
+.model-settings .model-refresh-card .secondary,
+.model-settings .catalog .secondary,
+.model-settings .manual-add .secondary,
+.model-settings .model-heading .secondary,
+.model-settings .model-test-button {
+  margin-top: 0;
+}
+
+.model-source {
+  margin: 10px 2px 0;
+  font-size: 12px;
+}
+
+.model-settings .search-label {
+  margin-top: 16px;
+}
+
+.model-settings .catalog {
+  margin: 8px 0 12px;
+  background: var(--panel);
+}
+
+.model-settings .manual-add {
+  margin-top: 12px;
+}
+
+.model-settings .default-model {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 42%);
+  align-items: center;
+  gap: 20px;
+  margin: 0 0 12px;
+  padding: 12px 14px;
+}
+
+.selected-models {
+  display: grid;
+  gap: 8px;
+}
+
+.model-settings .selected-model {
+  margin: 0;
+  padding: 0;
+  background: var(--panel);
+}
+
+.selected-model > summary {
+  position: relative;
+  padding: 13px 44px 13px 14px;
+}
+
+.selected-model > summary span,
+.selected-model > summary small {
+  display: block;
+}
+
+.selected-model > summary strong {
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.selected-model-body {
+  padding: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.model-settings .model-heading {
+  margin-bottom: 12px;
+}
+
+.model-test-button {
+  margin-top: 12px !important;
+}
+
+.model-settings .metadata-list {
+  margin-bottom: 12px;
+  font-size: 12px;
+}
+
+@media (max-width: 680px) {
+  .model-settings-header,
+  .model-section-heading {
+    flex-direction: column;
+  }
+
+  .model-setting-row,
+  .model-settings .default-model {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .model-setting-row select,
+  .model-refresh-card button {
+    width: 100%;
+  }
+
+  .model-settings .model-form button,
+  .model-save-row button {
+    width: 100%;
+  }
+}
+
+@media (max-width: 420px) {
+  .settings-card.model-settings {
+    padding: 0;
+  }
+
+  .model-settings-header,
+  .model-section {
+    padding: 18px 16px;
+  }
+}
