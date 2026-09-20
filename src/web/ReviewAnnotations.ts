@@ -122,6 +122,11 @@ export function captureTextSelection(root: HTMLElement, selection: Selection | n
   return createTextSelector(text, start, start + exact.length)
 }
 
+export function captureTextControlSelection(text: string, start: number | null, end: number | null): TextQuoteSelector | null {
+  if (start === null || end === null || end <= start || !text.slice(start, end).trim()) return null
+  return createTextSelector(text, start, end)
+}
+
 export function selectorStatus(text: string, selector: TextQuoteSelector): 'exact' | 'stale' {
   return text.slice(selector.start, selector.end) === selector.exact ? 'exact' : 'stale'
 }

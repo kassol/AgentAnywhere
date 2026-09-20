@@ -6,7 +6,7 @@
  */
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type FormEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 import { ReportMarkdown, selectReportVersion } from './Work'
-import { buildReviewCommand, captureTextSelection, readReportAnnotationDraft, readReportAnnotations, selectorStatus,
+import { buildReviewCommand, captureTextControlSelection, captureTextSelection, readReportAnnotationDraft, readReportAnnotations, selectorStatus,
   writeReportAnnotationDraft, writeReportAnnotations,
   type ReportAnnotation, type ReviewContext, type TextQuoteSelector } from './ReviewAnnotations'
 import './work-preview.css'
@@ -159,12 +159,14 @@ function WorkPreview({ selection, onSelect, onClose, onFillComposer }: { selecti
   const [reportError, setReportError] = useState('')
   const scroll = useRef<HTMLDivElement>(null)
   const reportRoot = useRef<HTMLElement>(null)
+  const keyboardSelection = useRef<HTMLTextAreaElement>(null)
   const closeButton = useRef<HTMLButtonElement>(null)
   const frame = useRef<number>()
   const [annotations, setAnnotations] = useState<ReportAnnotation[]>([])
   const [pendingSelection, setPendingSelection] = useState<TextQuoteSelector | null>(null)
   const [note, setNote] = useState('')
   const [annotationError, setAnnotationError] = useState('')
+  const [keyboardReportText, setKeyboardReportText] = useState<string | null>(null)
 
   useEffect(() => { closeButton.current?.focus() }, [])
   useEffect(() => {
@@ -241,6 +243,7 @@ function WorkPreview({ selection, onSelect, onClose, onFillComposer }: { selecti
 
   useEffect(() => {
     setAnnotationError('')
+    setKeyboardReportText(null)
     if (!artifact) { setAnnotations([]); setPendingSelection(null); setNote(''); return }
     setAnnotations(readReportAnnotations(selection.taskId, artifact.versionId))
     const draft = readReportAnnotationDraft(selection.taskId, artifact.versionId)
@@ -257,18 +260,37 @@ function WorkPreview({ selection, onSelect, onClose, onFillComposer }: { selecti
     return () => removeEventListener('agentanywhere:report-annotations-accepted', accepted)
   }, [selection.taskId, artifact?.versionId])
 
-  function selectReportText() {
-    const selector = reportRoot.current ? captureTextSelection(reportRoot.current) : null
-    if (!selector) return
+  function acceptReportSelector(selector: TextQuoteSelector) {
     if (selector.exact.length > 4000) {
       setAnnotationError('单条引用最多 4000 个字符，请缩小选区。')
-      return
+      return false
     }
-    if (pendingSelection && !confirmAnnotationReplacement(note)) return
+    if (pendingSelection && !confirmAnnotationReplacement(note)) return false
     setPendingSelection(selector)
     setNote('')
     const stored = artifact && writeReportAnnotationDraft(selection.taskId, artifact.versionId, { selector, note: '' })
     setAnnotationError(stored ? '' : '浏览器无法保存批注草稿；当前选区仍保留，请勿刷新或切换版本。')
+    return true
+  }
+
+  function selectReportText() {
+    const selector = reportRoot.current ? captureTextSelection(reportRoot.current) : null
+    if (selector) acceptReportSelector(selector)
+  }
+
+  function openKeyboardSelection() {
+    setKeyboardReportText(reportRoot.current?.textContent ?? '')
+    requestAnimationFrame(() => keyboardSelection.current?.focus())
+  }
+
+  function selectKeyboardReportText() {
+    const field = keyboardSelection.current
+    const selector = field ? captureTextControlSelection(field.value, field.selectionStart, field.selectionEnd) : null
+    if (!selector) {
+      setAnnotationError('请先在报告纯文本中选择要引用的文字。')
+      return
+    }
+    if (acceptReportSelector(selector)) setKeyboardReportText(null)
   }
 
   function changeAnnotationNote(value: string) {
@@ -369,14 +391,22 @@ function WorkPreview({ selection, onSelect, onClose, onFillComposer }: { selecti
           {reportError && <p className="error" role="alert">{reportError}</p>}
           {!reportError && report?.versionId !== artifact.versionId && <p className="muted" role="status">正在加载报告…</p>}
           {report?.versionId === artifact.versionId && <>
-            <p className="review-hint">鼠标选中文字后可直接批注；键盘在正文中用 Shift + 方向键扩选，按 Enter 写批注。批注仅保存在当前浏览器，并固定到此报告版本。</p>
+            <p className="review-hint">鼠标选中文字后可直接批注；键盘请打开纯文本选择器。批注仅保存在当前浏览器，并固定到此报告版本。</p>
+            <button type="button" className="secondary" onClick={openKeyboardSelection}>键盘选择引用</button>
+            {keyboardReportText !== null && <section className="review-selection" aria-label="键盘选择报告引用">
+              <strong>选择报告文字</strong>
+              <label>报告纯文本<textarea ref={keyboardSelection} readOnly rows={8} value={keyboardReportText}
+                onKeyDown={event => {
+                  if (event.key !== 'Enter' || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey || event.nativeEvent.isComposing) return
+                  event.preventDefault()
+                  selectKeyboardReportText()
+                }} /></label>
+              <p className="review-hint">用 Shift + 方向键扩选，按 Enter 或使用下方按钮确认。</p>
+              <div><button type="button" onClick={selectKeyboardReportText}>为所选文字写批注</button>
+                <button type="button" className="secondary" onClick={() => setKeyboardReportText(null)}>关闭</button></div>
+            </section>}
             <article ref={reportRoot} className="work-preview-report" data-task-id={task.id} data-report-version={artifact.versionId}
-              tabIndex={0} aria-label="报告正文，可选择文字并按 Enter 添加批注" onMouseUp={selectReportText}
-              onKeyDown={event => {
-                if (event.key !== 'Enter' || event.shiftKey || event.metaKey || event.ctrlKey || event.altKey || event.nativeEvent.isComposing) return
-                event.preventDefault()
-                selectReportText()
-              }}>
+              aria-label="报告正文，可用鼠标选择文字添加批注" onMouseUp={selectReportText}>
               <ReportMarkdown markdown={report.markdown} />
             </article>
             {pendingSelection && <form className="review-selection" onSubmit={addAnnotation}>

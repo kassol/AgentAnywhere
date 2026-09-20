@@ -3,6 +3,7 @@ import {
   annotationStorageKey,
   annotationDraftStorageKey,
   buildReviewCommand,
+  captureTextControlSelection,
   clearAcceptedAnnotations,
   createTextSelector,
   filterReviewContextForContent,
@@ -42,6 +43,12 @@ describe('report annotation drafts', () => {
     expect(readReportAnnotations(taskId, versionId, storage)).toHaveLength(1)
     expect(selectorStatus('甲重复原文乙，另有重复原文', createTextSelector('甲重复原文乙，另有重复原文', 1, 5))).toBe('exact')
     expect(selectorStatus('重复原文，另有重复原文', createTextSelector('甲重复原文乙，另有重复原文', 1, 5))).toBe('stale')
+  })
+
+  test('maps a native text control selection to the report selector', () => {
+    expect(captureTextControlSelection('前文可批注原文后文', 2, 7)).toMatchObject({ exact: '可批注原文', start: 2, end: 7 })
+    expect(captureTextControlSelection('前文可批注原文后文', 2, 2)).toBeNull()
+    expect(captureTextControlSelection('前文   后文', 2, 5)).toBeNull()
   })
 
   test('restores an unfinished selection and note only for its report version', () => {
