@@ -200,3 +200,23 @@ input:not([data-slot="input"]), select, textarea:not([data-slot="textarea"]) { b
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
 }
+
+/* R5: one work entry, with provenance available on demand. */
+.content-steward .page-header > div { min-width: 0; flex: 1; }
+.content-steward .page-header h2 { margin: 0; overflow: hidden; font-size: 12.5px; font-weight: 650; white-space: nowrap; text-overflow: ellipsis; }
+.content-steward .page-header form { max-width: 620px; }
+.content-steward .page-header [aria-label="修改标题"] { width: 27px; height: 27px; }
+.steward-work-list { gap: 0; }
+.steward-work-row { padding-block: 8px; border-top: 1px solid var(--border); }
+.steward-work-content { padding-bottom: 4px; }
+.steward-work-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.steward-work-actions .quick-actions { margin-top: 0; }
+.steward-work-history, .steward-turn-details { color: var(--muted); font-size: 11px; }
+.steward-work-history { margin-top: 8px; }
+.steward-work-history summary, .steward-turn-details summary { cursor: pointer; }
+.steward-work-history[open] { padding-bottom: 12px; }
+.steward-work-history p, .steward-work-history small { overflow-wrap: anywhere; }
+.steward-original-goal { white-space: pre-wrap; }
+.steward-turn-details .turn-receipts { margin-top: 10px; }
+.steward-turn > header { justify-content: flex-end; }
+.steward-turn > header::before, .steward-turn > header::after { display: none; }

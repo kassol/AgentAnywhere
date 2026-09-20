@@ -6,14 +6,13 @@ import { TurnCard, type ActivityItem } from './craft/components/TurnCard'
 import { UserMessageBubble } from './craft/components/UserMessageBubble'
 import { Button } from './craft/components/Button'
 import { LoadingIndicator } from './craft/components/LoadingIndicator'
-import { BriefcaseBusiness, ListChecks, Square } from 'lucide-react'
+import { BriefcaseBusiness, Square } from 'lucide-react'
 import { QuickActions, type QuickAction } from './QuickActions'
 import { clearAcceptedAnnotations, latestSucceededReportVersion, type ReviewContext } from './ReviewAnnotations'
 import { StewardReceipts, type ControlOperation, type InteractionOperation, type ResearchOperation, type RetryOperation, type RevisionOperation } from './StewardReceipts'
 import { useReviewComposerBridge } from './WorkPreview'
 import { EntityRow } from './craft/components/EntityRow'
 import { InteractionStatusBadge, WorkStatusBadge } from './WorkStatus'
-import { TitleEditor } from './TitleEditor'
 
 type Message = { id: string; turnId: string; role: 'user' | 'assistant'; content: string; status: string }
 type Summary = { id: string; content: string; fromTurnNumber: number; throughTurnNumber: number; coveredTurns: number }
@@ -272,7 +271,6 @@ export function Steward({ fillRequest, onFillRequestHandled }: { fillRequest?: {
   return (
     <div className="steward-layout">
       <section className="conversation" aria-label="管家对话">
-        {detail && <div className="px-6 pt-4"><TitleEditor<Detail> title={detail.title} endpoint={`/api/steward/threads/${detail.id}`} onSaved={setDetail} /></div>}
         <StableScroll storageKey={`agentanywhere:steward-scroll:${routeId ?? 'new'}`} revision={scrollRevision} className="conversation-messages">
           {routeId && !detail
             ? <div className="steward-empty"><LoadingIndicator label="正在加载对话…" /></div>
@@ -314,39 +312,43 @@ export function Steward({ fillRequest, onFillRequestHandled }: { fillRequest?: {
                 isComplete={turn.status === 'completed'}
                 renderMarkdown={content => <ReportMarkdown markdown={content} />}
               />
-              <StewardReceipts turnId={turn.id} research={detail.researchOperations} controls={detail.controlOperations}
+              <details className="steward-turn-details"><summary>执行详情与操作回执</summary><StewardReceipts turnId={turn.id} research={detail.researchOperations} controls={detail.controlOperations}
                 interactions={detail.interactionOperations} retries={detail.retryOperations} revisions={detail.revisionOperations}
-                onFill={fillCommand} disabled={busy} />
+                onFill={fillCommand} disabled={busy} /></details>
               {turn.failure && <p className="error" role="alert">{turn.failure}</p>}
               {turn.status === 'limited' && <p className="error" role="status">{limitMessage(turn)}</p>}
             </section>
           })}
-          {!!detail?.relatedTasks.length && <section className="steward-work-section" aria-label="关联工作"><h3>关联工作</h3><ul className="steward-work-list">{detail.relatedTasks.map(task => <li key={task.id}>
-            <EntityRow href={task.href} className="steward-work-row overflow-hidden rounded-[8px] border border-border bg-background"
-              icon={<BriefcaseBusiness />} title={task.title} badges={<WorkStatusBadge status={task.status} />}
-              trailing={<span className="font-mono text-[10px] text-muted-foreground" title={task.id}>Task {task.id.slice(0, 8)}</span>}>
-              <div className="steward-work-content">
-                {!!task.reports.length && <div className="steward-work-reports">{task.reports.map(report =>
-                  <a key={report.versionId} href={report.href} title={report.versionId}>成果 {report.versionId.slice(0, 8)}</a>)}</div>}
-                <QuickActions actions={relatedTaskQuickActions(task)} onFill={fillCommand} disabled={busy} />
-              </div>
-            </EntityRow>
-          </li>)}</ul></section>}
-          {!!detail?.statusCards.length && <section className="steward-work-section" aria-label="工作状态卡"><h3>工作状态</h3><ul className="steward-work-list">{detail.statusCards.map(card => <li key={card.id}>
-            <EntityRow href={card.href} className="steward-work-row overflow-hidden rounded-[8px] border border-border bg-background"
-              icon={card.interaction ? <ListChecks /> : <BriefcaseBusiness />} title={card.title}
-              subtitle={card.interaction ? `${card.interaction.kind === 'limit' ? '额度等待' : '提问'}：${card.interaction.question}` : card.failure}
-              badges={card.interaction ? <InteractionStatusBadge status={card.interaction.status} /> : <WorkStatusBadge status={card.runStatus} />}
-              trailing={<span className="font-mono text-[10px] text-muted-foreground" title={`${card.taskId} · ${card.runId}`}>Run {card.runId.slice(0, 8)}</span>}>
-              <div className="steward-work-content">
-                {!!card.reports.length && <div className="steward-work-reports">{card.reports.map(report =>
-                  <a key={report.versionId} href={report.href} title={report.versionId}>成果 {report.versionId.slice(0, 8)}</a>)}</div>}
-                {card.interaction?.answer && <small className="steward-work-answer">回答：{card.interaction.answer}</small>}
-                <QuickActions actions={statusCardQuickActions(card, detail.relatedTasks.find(task => task.id === card.taskId)?.runs.at(-1)?.id, replacementModels)}
-                  onFill={fillCommand} disabled={busy} />
-              </div>
-            </EntityRow>
-          </li>)}</ul></section>}
+          {!!detail?.relatedTasks.length && <section className="steward-work-section" aria-label="本轮工作"><h3>关联工作 · {detail.relatedTasks.length}</h3><ul className="steward-work-list">{detail.relatedTasks.map(task => {
+            const latestRun = task.runs.at(-1)
+            const history = detail.statusCards.filter(card => card.taskId === task.id)
+            const currentCards = history.filter(card => card.runId === latestRun?.id)
+            const current = currentCards.find(card => card.interaction?.status === 'pending') ?? currentCards.find(card => !card.interaction)
+            const actions = current ? statusCardQuickActions(current, latestRun?.id, replacementModels) : relatedTaskQuickActions(task)
+            const report = task.reports[0]
+            return <li key={task.id} data-task-id={task.id}>
+              <EntityRow href={task.href} className="steward-work-row" surfaceClassName="py-2"
+                icon={<BriefcaseBusiness />} title={task.title || task.goal}
+                subtitle={current?.interaction?.status === 'pending' ? current.interaction.question : current?.failure}
+                badges={<WorkStatusBadge status={latestRun?.status ?? task.status} />}>
+                <div className="steward-work-content">
+                  <div className="steward-work-actions">{report && <Button asChild variant="ghost" size="sm"><a href={report.href}>阅读报告</a></Button>}
+                    <QuickActions actions={actions} onFill={fillCommand} disabled={busy} /></div>
+                  <details className="steward-work-history"><summary>要求与执行记录</summary>
+                    <p className="steward-original-goal">{task.goal}</p><small>Task {task.id}</small>
+                    {task.runs.map(run => <div key={run.id}><p>执行 {statusLabel[run.status] ?? run.status} · {run.id}</p>
+                      {history.filter(card => card.runId === run.id).map(card => <div key={card.id}>
+                        {card.failure && <p>{card.failure}</p>}
+                        {card.interaction && <p>{card.interaction.question} · <InteractionStatusBadge status={card.interaction.status} />{card.interaction.answer && <> · {card.interaction.answer}</>}</p>}
+                      </div>)}
+                    </div>)}
+                    {!!task.reports.length && <div className="steward-work-reports">{task.reports.map((item, index) => <a key={item.versionId} href={item.href}>报告版本 {task.reports.length - index}</a>)}</div>}
+                    <Button asChild variant="ghost" size="sm"><a href={task.href}>查看完整工作</a></Button>
+                  </details>
+                </div>
+              </EntityRow>
+            </li>
+          })}</ul></section>}
         </StableScroll>
         <Composer state={composer} busy={busy} error={error} onChange={content => storeComposer(changeComposerDraft(composerRef.current, content))}
           onSubmit={() => void submit()} actions={activeTurns.map((turn, index) => {

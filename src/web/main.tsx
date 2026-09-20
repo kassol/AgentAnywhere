@@ -7,6 +7,7 @@ import { BriefcaseBusiness, ListChecks, Menu, MessageSquare, Monitor, Moon, Sett
 import { ModelSettings } from './ModelSettings'
 import { Work } from './Work'
 import { Steward } from './Steward'
+import { TitleEditor } from './TitleEditor'
 import { PreviewWorkspace } from './WorkPreview'
 import { applyTheme, readTheme, saveTheme, type ThemeChoice } from './theme'
 import { Button } from './craft/components/Button'
@@ -158,7 +159,7 @@ function Workbench() {
           </div>}
         </header>
         <header className="page-header"><div>{!steward && <span>{settings ? '偏好与连接' : '任务与成果'}</span>}
-          <h1>{settings ? '设置' : work ? '工作' : activeThread?.title ?? '新对话'}</h1></div>
+          {steward && activeThread ? <TitleEditor title={activeThread.title} endpoint={`/api/steward/threads/${activeThread.id}`} onSaved={value => setThreads(current => current?.map(thread => thread.id === activeThread.id ? { ...thread, title: value.title } : thread) ?? null)} /> : <h1>{settings ? '设置' : work ? '工作' : '新对话'}</h1>}</div>
           {steward && <a href="/tasks">查看工作</a>}
         </header>
         {error && <p className="error" role="alert">{error}</p>}
