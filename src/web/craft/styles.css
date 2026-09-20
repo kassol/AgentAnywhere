@@ -41,6 +41,7 @@
   button[data-slot="settings-secret-toggle"] {
     appearance: none;
     margin: 0;
+    padding: 0;
     border: 0 solid;
     background: transparent;
     color: inherit;

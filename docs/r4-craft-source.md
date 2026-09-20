@@ -222,4 +222,4 @@ className={cn(
 
 新增依赖严格使用固定上游版本：`@radix-ui/react-label 2.1.8`、`@radix-ui/react-select 2.2.6` 和 `@radix-ui/react-switch 1.2.6`。
 
-R4 正式视觉复核补充：固定上游通过 Tailwind 4.1.18 Preflight 重置原生控件；本地为保留 A 外壳而不启用全局 Preflight，因此 `craft/styles.css` 只对已迁入的原生 button slots 补齐 appearance、margin、border、background、color 与字体继承基线。
+R4 正式视觉复核补充：固定上游通过 Tailwind 4.1.18 Preflight 重置原生控件；本地为保留 A 外壳而不启用全局 Preflight，因此 `craft/styles.css` 只对已迁入的原生 button slots 补齐 appearance、margin、padding、border、background、color 与字体继承基线。
