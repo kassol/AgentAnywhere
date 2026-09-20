@@ -5,7 +5,7 @@
  * Copyright 2026 Craft Docs Ltd. Licensed under Apache-2.0.
  */
 import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
-import { ChevronLeft } from 'lucide-react'
+import { ChevronLeft, FileText } from 'lucide-react'
 import { ReportMarkdown, selectReportVersion } from './Work'
 import { buildReviewCommand, captureTextControlSelection, fromCraftAnnotation, fromCraftSelection, readReportAnnotationDraft, readReportAnnotations, selectorStatus,
   toCraftAnnotation, toCraftSelection,
@@ -160,8 +160,91 @@ export function PreviewWorkspace({ children }: { children: ReactNode }) {
   </ReviewComposerBridgeContext.Provider>
 }
 
-function WorkPreview({ selection, onSelect, onClose, onFillComposer }: { selection: PreviewSelection; onSelect(selection: PreviewSelection): void;
-  onClose(): void; onFillComposer(payload: ReviewComposerPayload): boolean }) {
+function reportPageSelection(): PreviewSelection | null {
+  if (location.pathname !== '/reports') return null
+  const query = new URLSearchParams(location.search)
+  const taskId = query.get('task')
+  if (!taskId || !new RegExp(`^${uuid}$`, 'i').test(taskId)) return null
+  const versionId = query.get('version') ?? undefined
+  return { taskId, ...(versionId ? { versionId } : {}) }
+}
+
+function updateReportPageUrl(selection: PreviewSelection | null, mode: 'push' | 'replace') {
+  const url = new URL('/reports', location.origin)
+  if (selection) {
+    url.searchParams.set('task', selection.taskId)
+    if (selection.versionId) url.searchParams.set('version', selection.versionId)
+  }
+  history[mode === 'push' ? 'pushState' : 'replaceState'](null, '', url)
+}
+
+export function ReportPage() {
+  const [selection, setSelection] = useState<PreviewSelection | null>(reportPageSelection)
+  const openedFromIndex = useRef(false)
+
+  useEffect(() => {
+    const pop = () => setSelection(reportPageSelection())
+    addEventListener('popstate', pop)
+    return () => removeEventListener('popstate', pop)
+  }, [])
+
+  function select(next: PreviewSelection) {
+    const mode = selection ? 'replace' : 'push'
+    if (!selection) openedFromIndex.current = true
+    updateReportPageUrl(next, mode)
+    setSelection(next)
+  }
+
+  function close() {
+    if (openedFromIndex.current) history.back()
+    else { updateReportPageUrl(null, 'replace'); setSelection(null) }
+    openedFromIndex.current = false
+  }
+
+  return <div className="report-page">{selection
+    ? <WorkPreview selection={selection} onSelect={select} onClose={close} onFillComposer={() => false} independent />
+    : <ReportIndex onSelect={select} />}
+  </div>
+}
+
+function ReportIndex({ onSelect }: { onSelect(selection: PreviewSelection): void }) {
+  const [tasks, setTasks] = useState<PreviewTask[] | null>(null)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let disposed = false
+    fetch('/api/tasks').then(async response => {
+      if (response.status === 401) return location.assign('/login')
+      if (!response.ok) throw new Error('报告列表加载失败。')
+      const summaries = await response.json() as { id: string }[]
+      const details = await Promise.all(summaries.map(async summary => {
+        const detail = await fetch(`/api/tasks/${summary.id}`)
+        if (!detail.ok) throw new Error('报告列表加载失败。')
+        return await detail.json() as PreviewTask
+      }))
+      if (!disposed) setTasks(details.filter(task => task.artifacts.some(item => item.kind === 'report' && item.runStatus === 'succeeded')))
+    }).catch(caught => { if (!disposed) setError(caught instanceof Error ? caught.message : '报告列表加载失败。') })
+    return () => { disposed = true }
+  }, [])
+
+  return <section className="report-index" aria-labelledby="report-index-title">
+    <header><div><h1 id="report-index-title">报告</h1><p>选择一项真实成果进入独立阅读。</p></div><a href="/tasks">查看工作</a></header>
+    {tasks === null && !error && <p className="report-index-state" role="status">正在加载报告…</p>}
+    {error && <p className="error report-index-state" role="alert">{error}</p>}
+    {tasks && !tasks.length && <div className="report-index-empty"><FileText aria-hidden="true" /><h2>还没有报告</h2><p>工作交付报告后会显示在这里。</p><a href="/tasks">前往工作</a></div>}
+    {!!tasks?.length && <div className="report-index-list">{tasks.map(task => {
+      const reports = task.artifacts.filter(item => item.kind === 'report' && item.runStatus === 'succeeded')
+      const latest = reports[0]
+      return <button type="button" key={task.id} onClick={() => onSelect({ taskId: task.id, versionId: latest.versionId })}>
+        <FileText aria-hidden="true" /><span><strong>{task.goal || task.sourceUrl || `工作 ${task.id.slice(0, 8)}`}</strong>
+          <small>{reports.length} 个版本 · 最近交付 {new Date(latest.createdAt).toLocaleString('zh-CN')}</small></span><span>阅读</span>
+      </button>
+    })}</div>}
+  </section>
+}
+
+function WorkPreview({ selection, onSelect, onClose, onFillComposer, independent = false }: { selection: PreviewSelection; onSelect(selection: PreviewSelection): void;
+  onClose(): void; onFillComposer(payload: ReviewComposerPayload): boolean; independent?: boolean }) {
   const [task, setTask] = useState<PreviewTask | null | undefined>()
   const [taskError, setTaskError] = useState('')
   const [report, setReport] = useState<{ versionId: string; markdown: string } | null>(null)
@@ -409,8 +492,8 @@ function WorkPreview({ selection, onSelect, onClose, onFillComposer }: { selecti
   const renderedText = renderedReportText && renderedReportText.versionId === artifact?.versionId ? renderedReportText.text : ''
   const craftAnnotations = annotations.filter(annotation => selectorStatus(renderedText, annotation.selector) === 'exact').map(toCraftAnnotation)
   const previewTitle = task ? task.goal || task.sourceUrl || `工作 ${task.id.slice(0, 8)}` : '正在读取工作…'
-  return <aside className="work-preview" aria-labelledby="work-preview-title">
-    <PreviewHeader className="min-h-[62px] py-[10px] px-[13px] gap-[11px] border-b border-border" height={62}
+  return <aside className={independent ? 'work-preview work-preview-independent' : 'work-preview'} aria-labelledby="work-preview-title">
+    <PreviewHeader className="work-preview-craft-header py-[8px] px-[13px] gap-[11px] border-b border-border" height={independent ? 49 : 62}
       style={{ position: 'sticky', zIndex: 2, top: 0, background: 'var(--panel)' }} onClose={onClose}
       leftActions={<Button ref={closeButton} type="button" variant="ghost" size="sm" className="work-preview-back" onClick={onClose}>
         <ChevronLeft aria-hidden="true" />返回对话

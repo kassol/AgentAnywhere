@@ -83,6 +83,7 @@ input:not([data-slot="input"]), select, textarea:not([data-slot="textarea"]) { b
 .content-steward .page-header > a { color: var(--foreground); font-size: 11px; font-weight: 600; text-decoration: none; }
 .content-steward .page-header > a:hover { text-decoration: underline; text-underline-offset: 3px; }
 .content-steward .steward-layout { width: 100%; height: 100%; max-width: none; min-height: 0; }
+.content-report { height: 100%; padding: 0; overflow: hidden; }
 
 .empty-state, .settings-card { max-width: 900px; overflow: hidden; border-radius: 12px; background: var(--panel); box-shadow: 0 0 0 1px rgba(var(--foreground-rgb), .07), 0 8px 24px var(--shadow); }
 .empty-state-heading { padding: 14px 20px; border-bottom: 1px solid var(--border); background: var(--subtle); }
@@ -180,6 +181,8 @@ input:not([data-slot="input"]), select, textarea:not([data-slot="textarea"]) { b
   .content-steward .page-header { min-height: 46px; padding: 0 12px; }
   .content-steward .page-header h1 { max-width: calc(100vw - 120px); }
   .content:not(.content-steward) > .mobile-header { margin: -22px -16px 18px; }
+  .content-report > .mobile-header { display: none; }
+  .content-report { padding: 0; }
   .page-header { margin-bottom: 20px; }
   .page-header h1 { font-size: 21px; }
   .conversation-messages { padding: 18px 16px 30px; gap: 23px; }
