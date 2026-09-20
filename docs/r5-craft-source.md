@@ -25,4 +25,6 @@
 - `src/web/style.css:235-240` 只移除 `TurnCard` 回复区域的外框和高度限制，使正文回到 A 的连续阅读流；折叠活动、流式状态和原组件结构继续保留。
 - `src/web/theme.ts:18-23` 固定页面使用 Inter；`src/web/craft-theme.css:1-10,97-100` 使用仓库内自托管字体和中文系统回退。R5 没有增加字体或 UI 运行时依赖。
 
+- `src/web/craft/styles.css` 补齐已迁入 Input/Textarea 的局部颜色与透明底重置，并将 `bg-muted` 映射至低对比度表面；避免深色模式落回浏览器白底黑字。原组件源码保持不变。
+
 R5 的复用原则是：优先使用已迁入的 Craft 原组件；页面路由、持久身份、业务状态、幂等边界和响应式信息结构由 AgentAnywhere 负责。因此不能将这些页面表述为全部来自 Craft。

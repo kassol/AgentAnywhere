@@ -15,6 +15,7 @@
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-muted-foreground: var(--muted);
+  --color-muted: var(--secondary);
   --color-border: var(--border);
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
@@ -34,6 +35,7 @@
 }
 
 @layer components {
+  [data-slot="input"], [data-slot="textarea"] { color: inherit; background: transparent; }
   a[data-slot="button"] { color: inherit; text-decoration: inherit; }
   button[data-craft-button],
   button[data-slot="button"],
