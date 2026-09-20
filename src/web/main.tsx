@@ -1,27 +1,22 @@
 import './craft-theme.css'
 import './craft/styles.css'
 import './style.css'
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import { createRoot } from 'react-dom/client'
-import { BriefcaseBusiness, ListChecks, MessageSquare, Monitor, Moon, Plus, Settings, Sun } from 'lucide-react'
+import { BriefcaseBusiness, ListChecks, Menu, MessageSquare, Monitor, Moon, Settings, Sun, X } from 'lucide-react'
 import { ModelSettings } from './ModelSettings'
 import { Work } from './Work'
 import { Steward } from './Steward'
 import { PreviewWorkspace } from './WorkPreview'
-import { QuickActions, type QuickAction } from './QuickActions'
 import { applyTheme, readTheme, saveTheme, type ThemeChoice } from './theme'
 import { Button } from './craft/components/Button'
-import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from './craft/components/Empty'
 import { Panel } from './craft/components/Panel'
 import { SettingsCard } from './craft/components/SettingsCard'
 import { SettingsInput } from './craft/components/SettingsInput'
 import { SettingsRow } from './craft/components/SettingsRow'
 import { SettingsSection } from './craft/components/SettingsSection'
 import { SidebarButton, type SidebarLinkItem } from './craft/components/SidebarButton'
-import { EntityRow } from './craft/components/EntityRow'
-import { InteractionStatusBadge } from './WorkStatus'
-
-const threadStatusLabel: Record<string, string> = { queued: '排队中', running: '回复中', stopping: '停止中', stopped: '已停止', completed: '已完成', interrupted: '已中断', limited: '已达上限', failed: '失败' }
+import { ConversationNavigation, type ConversationThread } from './ConversationNavigation'
 
 const themeOptions = [
   { value: 'system', label: '跟随系统', icon: Monitor },
@@ -101,18 +96,10 @@ function Workbench() {
   const work = location.pathname === '/tasks' || location.pathname.startsWith('/tasks/')
   const steward = !settings && !work
   const [error, setError] = useState('')
+  const [navigationError, setNavigationError] = useState('')
   const [pendingInteractions, setPendingInteractions] = useState<{ id: string; kind: 'question' | 'limit'; question: string; taskId: string; runId: string; goal: string; href: string }[]>([])
-  const [threads, setThreads] = useState<{ id: string; title: string; status?: string }[]>([])
-  const [fillRequest, setFillRequest] = useState<{ id: number; command: string }>()
-  const fillRequestId = useRef(0)
-
-  const pendingActions = (interaction: typeof pendingInteractions[number]): QuickAction[] => interaction.kind === 'limit'
-    ? [
-        { kind: 'limit', taskId: interaction.taskId, interactionId: interaction.id, decision: 'continue' },
-        { kind: 'limit', taskId: interaction.taskId, interactionId: interaction.id, decision: 'finish' },
-      ]
-    : [{ kind: 'answer', taskId: interaction.taskId, interactionId: interaction.id }]
-
+  const [threads, setThreads] = useState<ConversationThread[] | null>(steward ? null : [])
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   useEffect(() => {
     let disposed = false
     async function refreshNavigation() {
@@ -123,8 +110,11 @@ function Workbench() {
         ])
         if (pendingResponse.status === 401 || threadsResponse?.status === 401) return location.assign('/login')
         if (pendingResponse.ok && !disposed) setPendingInteractions(await pendingResponse.json())
-        if (threadsResponse?.ok && !disposed) setThreads(await threadsResponse.json())
-      } catch { /* keep the last persisted view during a transient disconnect */ }
+        if (threadsResponse && !threadsResponse.ok) throw new Error('对话列表加载失败，请稍后重试。')
+        if (threadsResponse?.ok && !disposed) { setThreads(await threadsResponse.json()); setNavigationError('') }
+      } catch (caught) {
+        if (!disposed && steward) setNavigationError(caught instanceof Error ? caught.message : '对话列表加载失败，请稍后重试。')
+      }
     }
     void refreshNavigation()
     const timer = setInterval(refreshNavigation, 1000)
@@ -144,49 +134,39 @@ function Workbench() {
       label: pendingInteractions.length ? String(pendingInteractions.length) : undefined, variant: 'ghost' },
     { id: 'settings', title: '设置', href: '/settings', icon: Settings, variant: settings ? 'default' : 'ghost' },
   ]
+  const activeThreadId = /^\/steward\/([0-9a-f-]{36})$/i.exec(location.pathname)?.[1] ?? null
+  const activeThread = threads?.find(thread => thread.id === activeThreadId)
 
   return (
-    <div className="shell">
+    <div className={steward ? 'shell shell-steward' : 'shell'}>
       <Panel as="aside" variant="shrink" className="sidebar" aria-label="主导航">
         <a className="brand" href="/" aria-label="AgentAnywhere 管家首页"><span className="brand-mark">A</span><span>AgentAnywhere<small>个人委托工作台</small></span></a>
         <nav className="sidebar-primary" aria-label="页面">
           {primaryLinks.map(link => <SidebarButton key={link.id} link={link} className="sidebar-primary-link" />)}
         </nav>
-        {steward && <section className="sidebar-conversations" aria-label="管家对话">
-          <div className="sidebar-conversations-header"><h2>对话</h2><Button asChild variant="ghost" size="icon" className="sidebar-new-thread">
-            <a href="/" aria-label="新建管家对话"><Plus aria-hidden="true" /></a>
-          </Button></div>
-          {threads.length ? threads.map(thread => <SidebarButton key={thread.id} className="sidebar-thread-link" link={{
-            id: thread.id,
-            title: thread.title,
-            href: `/steward/${thread.id}`,
-            label: thread.status ? threadStatusLabel[thread.status] ?? thread.status : '尚未开始',
-            icon: MessageSquare,
-            compact: true,
-            variant: location.pathname === `/steward/${thread.id}` ? 'default' : 'ghost',
-          }} />) : <Empty className="sidebar-empty">
-            <EmptyMedia variant="icon" className="sidebar-empty-media"><MessageSquare /></EmptyMedia>
-            <EmptyHeader className="sidebar-empty-header"><EmptyTitle>暂无对话</EmptyTitle><EmptyDescription>从管家页开始新的讨论。</EmptyDescription></EmptyHeader>
-          </Empty>}
-        </section>}
-        {!!pendingInteractions.length && <section className="pending-interactions" aria-label="全局待办"><h2>待回答</h2><ul>{pendingInteractions.map(interaction => <li key={interaction.id}>
-          <EntityRow href={interaction.href} className="sidebar-pending-row" surfaceClassName="px-1.5 py-2"
-            icon={<ListChecks />} title={interaction.goal} subtitle={interaction.question}
-            badges={<InteractionStatusBadge status="pending" />}
-            trailing={<span className="font-mono text-[9px] text-muted-foreground" title={interaction.id}>{interaction.id.slice(0, 8)}</span>}>
-            {steward && <QuickActions actions={pendingActions(interaction)} onFill={command => setFillRequest({ id: ++fillRequestId.current, command })} />}
-          </EntityRow>
-        </li>)}</ul></section>}
-        <div className="account-summary"><span>本机</span><div><strong>工作台所有者</strong><small>已登录</small></div></div>
+        <a className="account-summary" href="/settings"><span>K</span><div><strong>工作台所有者</strong><small>本机 · 已登录</small></div></a>
       </Panel>
+      {steward && <ConversationNavigation threads={threads} activeId={activeThreadId} error={navigationError} />}
       <Panel as="main" variant="grow" className={settings ? 'content content-settings' : steward ? 'content content-steward' : 'content'}>
-        <header className="page-header"><span>{settings ? '偏好与连接' : work ? '任务与成果' : '个人管家'}</span><h1>{settings ? '设置' : work ? '工作' : '管家'}</h1></header>
+        <header className="mobile-header"><a className="brand-mark" href="/" aria-label="AgentAnywhere 管家首页">A</a>
+          <strong>{settings ? '设置' : work ? '工作' : '管家对话'}</strong>
+          <Button type="button" variant="ghost" size="icon" aria-label={mobileMenuOpen ? '关闭导航' : '打开导航'} aria-expanded={mobileMenuOpen}
+            onClick={() => setMobileMenuOpen(open => !open)}>{mobileMenuOpen ? <X /> : <Menu />}</Button>
+          {mobileMenuOpen && <div className="mobile-menu" role="dialog" aria-label="移动导航">
+            <nav aria-label="页面">{primaryLinks.map(link => <SidebarButton key={link.id} link={link} onClick={() => setMobileMenuOpen(false)} />)}</nav>
+            {steward && <ConversationNavigation threads={threads} activeId={activeThreadId} error={navigationError} />}
+          </div>}
+        </header>
+        <header className="page-header"><div>{!steward && <span>{settings ? '偏好与连接' : '任务与成果'}</span>}
+          <h1>{settings ? '设置' : work ? '工作' : activeThread?.title ?? '新对话'}</h1></div>
+          {steward && <a href="/tasks">查看工作</a>}
+        </header>
         {error && <p className="error" role="alert">{error}</p>}
         {settings ? (
           <><ThemeSettings /><ModelSettings /><SettingsSection className="settings-card account-card" title="账户" description="当前已登录。">
             <SettingsCard><SettingsRow label="工作台所有者" description="本机登录会话" action={<Button variant="outline" onClick={logout}>退出登录</Button>} /></SettingsCard>
           </SettingsSection></>
-        ) : work ? <Work /> : <PreviewWorkspace><Steward fillRequest={fillRequest} onFillRequestHandled={() => setFillRequest(undefined)} /></PreviewWorkspace>}
+        ) : work ? <Work /> : <PreviewWorkspace><Steward /></PreviewWorkspace>}
       </Panel>
     </div>
   )
