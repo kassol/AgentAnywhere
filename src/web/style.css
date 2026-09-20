@@ -227,3 +227,9 @@ input:not([data-slot="input"]), select, textarea:not([data-slot="textarea"]) { b
 .steward-turn-details .turn-receipts { margin-top: 10px; }
 .steward-turn > header { justify-content: flex-end; }
 .steward-turn > header::before, .steward-turn > header::after { display: none; }
+/* A keeps the assistant response in the reading flow; the Craft turn remains collapsible. */
+.steward-turn div:has(> [data-search-root="response"]) { position: relative; overflow: visible; border-radius: 0; background: transparent; box-shadow: none; }
+.steward-turn div:has(> [data-search-root="response"])::before { position: absolute; top: 3px; left: 0; display: grid; width: 22px; height: 22px; place-items: center; border-radius: 6px; color: var(--background); background: var(--foreground); content: "A"; font-size: 10px; font-weight: 650; }
+.steward-turn [data-search-root="response"] { max-height: none; padding: 0 0 0 36px; overflow: visible; font-size: 14px; line-height: 1.75; }
+.steward-turn [data-search-root="response"] .report-markdown > :first-child { margin-top: 0; }
+.steward-turn [data-search-root="response"] .report-markdown > :last-child { margin-bottom: 0; }
