@@ -165,7 +165,7 @@ function Workbench() {
             <ConversationNavigation threads={threads} activeId={activeThreadId} error={navigationError} />
           </div>}
         </header>
-        {!report && <header className={settings ? 'page-header settings-page-header' : 'page-header'}><div>{!steward && !settings && <span>任务与成果</span>}
+        {!report && <header className={settings ? 'page-header settings-page-header' : 'page-header'}><div>
           {steward && activeThread ? <TitleEditor title={activeThread.title} endpoint={`/api/steward/threads/${activeThread.id}`} onSaved={value => setThreads(current => current?.map(thread => thread.id === activeThread.id ? { ...thread, title: value.title } : thread) ?? null)} /> : <h1>{settings ? '设置' : work ? '工作' : pending ? '待办' : '新对话'}</h1>}{settings && <p>模型连接和工作台偏好。</p>}{(work || pending) && <p>{work ? '查看、创建并控制真实工作。' : '只保留需要你介入后才能继续的事项。'}</p>}</div>
           {steward && <a href="/tasks">查看工作</a>}
         </header>}

@@ -34,6 +34,7 @@
 }
 
 @layer components {
+  a[data-slot="button"] { color: inherit; text-decoration: inherit; }
   button[data-craft-button],
   button[data-slot="button"],
   button[data-slot="select-trigger"],
