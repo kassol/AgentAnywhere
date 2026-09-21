@@ -14,7 +14,7 @@ export interface StatusBadgeValue {
 }
 
 export function StatusBadge({ status, live = false, className }: { status: StatusBadgeValue; live?: boolean; className?: string }) {
-  return <span className={cn('inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium whitespace-nowrap', className)}
+  return <span className={cn('inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap', className)}
     style={{ backgroundColor: `color-mix(in srgb, ${status.color} 12%, transparent)`, color: status.color }}>
     <span className="relative flex h-1.5 w-1.5 shrink-0">
       {live && <span className="absolute inline-flex h-full w-full animate-ping rounded-full opacity-75"

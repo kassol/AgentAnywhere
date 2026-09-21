@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { MessageSquare, Plus, Search, X } from 'lucide-react'
 import { Button } from './craft/components/Button'
 
@@ -20,13 +20,25 @@ export function ConversationNavigation({ threads, activeId, error }: {
   error?: string
 }) {
   const [query, setQuery] = useState('')
+  const inputRef = useRef<HTMLInputElement>(null)
   const visible = filterConversationThreads(threads ?? [], query)
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault()
+        inputRef.current?.focus()
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
 
   return <section className="conversation-navigation" aria-label="管家对话">
     <header><h2>对话</h2><Button asChild variant="ghost" size="icon"><a href="/" aria-label="新建管家对话"><Plus aria-hidden="true" /></a></Button></header>
     <label className="conversation-search">
       <Search aria-hidden="true" />
-      <input type="search" value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索" aria-label="搜索对话" />
+      <input ref={inputRef} type="search" value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索 (⌘K)" aria-label="搜索对话" />
       {query && <Button type="button" variant="ghost" size="icon" aria-label="清空搜索" onClick={() => setQuery('')}><X aria-hidden="true" /></Button>}
     </label>
     <div className="conversation-thread-list">
@@ -34,7 +46,12 @@ export function ConversationNavigation({ threads, activeId, error }: {
       {error && <p className="error" role="alert">{error}</p>}
       {threads !== null && !error && visible.map(thread => <a key={thread.id} href={`/steward/${thread.id}`}
         className={thread.id === activeId ? 'conversation-thread active' : 'conversation-thread'} aria-current={thread.id === activeId ? 'page' : undefined}>
-        <strong>{thread.title}</strong><span>{thread.status ? statusLabel[thread.status] ?? thread.status : '尚未开始'}</span>
+        <strong>{thread.title}</strong>
+        <span className="conversation-thread-status">
+          {thread.status === 'running' && <span className="status-dot status-dot-running" aria-hidden="true" />}
+          {thread.status === 'failed' && <span className="status-dot status-dot-failed" aria-hidden="true" />}
+          {thread.status ? statusLabel[thread.status] ?? thread.status : '尚未开始'}
+        </span>
       </a>)}
       {threads !== null && !error && !visible.length && <div className="conversation-thread-empty"><MessageSquare aria-hidden="true" />
         <p>{query ? '没有匹配的对话' : '暂无对话'}</p>{query && <button type="button" onClick={() => setQuery('')}>清空搜索</button>}</div>}

@@ -24,7 +24,7 @@
 .model-message {
   margin: 0;
   padding: 11px 14px;
-  border-radius: 9px;
+  border-radius: 8px;
   color: var(--muted);
   background: var(--subtle);
   font-size: 13px;
@@ -87,7 +87,7 @@
   right: 20px;
   content: "+";
   color: var(--muted);
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 400;
   transform: translateY(-50%);
 }
@@ -103,7 +103,7 @@
 .model-details > summary small,
 .selected-model > summary small {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 400;
 }
 

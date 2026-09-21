@@ -1,7 +1,7 @@
 .review-hint {
   margin: 0;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1.55;
 }
 
@@ -32,8 +32,8 @@
 .review-selection strong,
 .review-annotations h3 {
   margin: 0;
-  font-size: 11px;
-  font-weight: 650;
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .review-annotations blockquote {
@@ -44,7 +44,7 @@
   border-radius: 6px;
   background: var(--subtle);
   color: var(--muted);
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1.55;
   white-space: pre-wrap;
 }
@@ -52,8 +52,8 @@
 .review-selection label {
   display: grid;
   gap: 6px;
-  font-size: 10px;
-  font-weight: 650;
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .review-selection [data-slot='textarea'] {
@@ -90,18 +90,18 @@
 }
 
 .review-annotations > article strong {
-  font-size: 10px;
+  font-size: 12px;
 }
 
 .review-annotations > article small {
   color: var(--muted);
-  font-size: 9px;
+  font-size: 12px;
 }
 
 .review-annotations > article p {
   margin: 0;
   padding-right: 60px;
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.5;
   white-space: pre-wrap;
 }
@@ -142,13 +142,13 @@
 .work-preview .review-annotations > article:last-child { padding-bottom: 2px; }
 
 .review-version-conflict > strong {
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .review-version-conflict p {
   margin: 0;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 12px;
   line-height: 1.5;
   overflow-wrap: anywhere;
 }

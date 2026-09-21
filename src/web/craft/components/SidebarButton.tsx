@@ -55,7 +55,7 @@ export const SidebarButton = React.forwardRef<HTMLAnchorElement, SidebarButtonPr
       </span>
       <span className="sidebar-link-title min-w-0 flex-1 truncate">{link.title}</span>
       {link.label && (
-        <span className="sidebar-link-label ml-auto shrink-0 text-[11px] text-foreground/50">
+        <span className="sidebar-link-label ml-auto shrink-0 text-xs text-foreground/50">
           {link.label}
         </span>
       )}

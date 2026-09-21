@@ -24,7 +24,7 @@ export function UserMessageBubble({ content, className, isQueued = false, compac
     )}>
       {isQueued && <div className="flex items-center gap-1.5 text-foreground/55 mb-1.5" role="status" aria-live="polite">
         <Clock className="h-3 w-3 animate-pulse" aria-hidden="true" />
-        <span className="text-[11px] italic">排队中</span>
+        <span className="text-xs italic">排队中</span>
       </div>}
       <p className="text-sm whitespace-pre-wrap">{content}</p>
     </div>

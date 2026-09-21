@@ -57,7 +57,7 @@ function ReceiptRow({ operationId, title, status, summary, detail, children }: {
   return <EntityRow className="turn-receipt overflow-hidden rounded-[8px] border border-border bg-background"
     icon={<ReceiptText />} title={title} subtitle={summary}
     badges={<StatusBadge status={receiptStatus[status] ?? { label: status, color: 'var(--muted)' }} />}
-    trailing={<span className="font-mono text-[10px] text-muted-foreground" title={operationId}>Operation {operationId.slice(0, 8)}</span>}>
+    trailing={<span className="font-mono text-xs text-muted-foreground" title={operationId}>Operation {operationId.slice(0, 8)}</span>}>
     {(detail || children) && <div className="turn-receipt-content grid gap-2 px-4 pb-3 pl-9 [overflow-wrap:anywhere]">
       {detail && <small className="text-muted-foreground leading-[1.5]">{detail}</small>}
       {children}

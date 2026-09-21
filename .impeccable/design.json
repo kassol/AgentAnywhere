@@ -1,0 +1,150 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-21T02:35:00.000Z",
+  "title": "Design System: AgentAnywhere (Craft Agent v0.13.3)",
+  "extensions": {
+    "colorMeta": {
+      "primary": {
+        "role": "primary",
+        "displayName": "Craft Editorial Violet",
+        "canonical": "oklch(0.62 0.13 293)",
+        "tonalRamp": [
+          "oklch(0.20 0.08 293)",
+          "oklch(0.35 0.10 293)",
+          "oklch(0.50 0.12 293)",
+          "oklch(0.62 0.13 293)",
+          "oklch(0.72 0.11 293)",
+          "oklch(0.82 0.08 293)",
+          "oklch(0.90 0.04 293)",
+          "oklch(0.96 0.02 293)"
+        ]
+      },
+      "neutral-bg": {
+        "role": "neutral",
+        "displayName": "Canvas Background",
+        "canonical": "oklch(0.98 0.003 265)",
+        "tonalRamp": [
+          "oklch(0.145 0.015 270)",
+          "oklch(0.25 0.01 270)",
+          "oklch(0.40 0.01 270)",
+          "oklch(0.60 0.008 265)",
+          "oklch(0.80 0.005 265)",
+          "oklch(0.90 0.004 265)",
+          "oklch(0.95 0.003 265)",
+          "oklch(0.98 0.003 265)"
+        ]
+      },
+      "neutral-fg": {
+        "role": "neutral",
+        "displayName": "Foreground Text",
+        "canonical": "oklch(0.185 0.01 270)",
+        "tonalRamp": [
+          "oklch(0.12 0.01 270)",
+          "oklch(0.185 0.01 270)",
+          "oklch(0.30 0.01 270)",
+          "oklch(0.50 0.01 270)",
+          "oklch(0.70 0.01 270)",
+          "oklch(0.85 0.01 270)",
+          "oklch(0.92 0.01 270)",
+          "oklch(0.98 0.01 270)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Display", "purpose": "Page titles and modal headers." },
+      "headline": { "displayName": "Headline", "purpose": "Section headings and card groups." },
+      "title": { "displayName": "Title", "purpose": "Entity titles and navigation links." },
+      "body": { "displayName": "Body", "purpose": "Default reading text and chat stream." },
+      "label": { "displayName": "Label", "purpose": "Metadata, tags, and badge indicators." }
+    },
+    "shadows": [
+      {
+        "name": "shadow-minimal",
+        "value": "0 0 0 1px rgba(38, 36, 42, 0.07), 0 1px 2px rgba(28, 21, 35, 0.07)",
+        "purpose": "Slight hover elevation on interactive buttons."
+      },
+      {
+        "name": "shadow-tinted",
+        "value": "0 0 0 1px rgba(0,0,0,0.12), 0 1px 1px -0.5px rgba(0,0,0,0.08), 0 3px 3px -1.5px rgba(0,0,0,0.06)",
+        "purpose": "Floating Island annotation menu and dropdown menus."
+      }
+    ],
+    "motion": [
+      {
+        "name": "ease-standard",
+        "value": "cubic-bezier(0.4, 0, 0.2, 1)",
+        "purpose": "Default easing for micro-transitions."
+      }
+    ],
+    "breakpoints": [
+      { "name": "sm", "value": "640px" },
+      { "name": "md", "value": "768px" },
+      { "name": "lg", "value": "1024px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Primary action button with Craft editorial violet accent.",
+      "html": "<button class=\"ds-btn-primary\">发送要求</button>",
+      "css": ".ds-btn-primary { background: #674e84; color: #ffffff; padding: 6px 12px; font-size: 13px; font-weight: 500; border-radius: 6px; border: none; cursor: pointer; transition: background 0.15s ease; } .ds-btn-primary:hover { background: #553e70; }"
+    },
+    {
+      "name": "Status Badge",
+      "kind": "chip",
+      "refersTo": "badge-status",
+      "description": "Task and run execution state indicator with live pulse.",
+      "html": "<span class=\"ds-badge-status\"><span class=\"ds-dot\"></span>执行中</span>",
+      "css": ".ds-badge-status { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; font-size: 12px; font-weight: 500; border-radius: 9999px; background: rgba(103, 78, 132, 0.08); color: #674e84; } .ds-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }"
+    },
+    {
+      "name": "Sidebar Navigation Item",
+      "kind": "nav",
+      "refersTo": "sidebar-button",
+      "description": "Left sidebar navigation row with subtle active/hover state.",
+      "html": "<a class=\"ds-sidebar-item\" href=\"#\"><span class=\"ds-sidebar-icon\">✦</span><span class=\"ds-sidebar-label\">管家对话</span></a>",
+      "css": ".ds-sidebar-item { display: flex; align-items: center; gap: 8px; padding: 5px 8px; font-size: 13px; color: inherit; text-decoration: none; border-radius: 6px; transition: background 0.15s ease; } .ds-sidebar-item:hover { background: rgba(38, 36, 42, 0.05); }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Restrained Editorial Workbench",
+    "overview": "AgentAnywhere 的视觉设计全盘继承自 Craft Agents OSS (v0.13.3) 的设计哲学与组件底座。它摒弃喧嚣、浮夸的渐变与过度装饰，以高密度、高信息秩序感与精细的微交互呈现专业级桌面工作台质感。",
+    "keyCharacteristics": [
+      "克制严整的中性调色与节制强调色",
+      "自托管 Inter 配合精选 OpenType 字形特性的排版至上",
+      "细腻的色调分层（Tonal Layering）取代大面积脏阴影",
+      "A 三段式外壳连续阅读动线"
+    ],
+    "rules": [
+      {
+        "name": "The Restrained Accent Rule",
+        "body": "强调色（Accent Violet）在单个视图中的视觉面积占比严禁超过 5%。",
+        "section": "colors"
+      },
+      {
+        "name": "The Semantic State Rule",
+        "body": "严禁随意变换状态语义色彩；执行中固定使用动态 Spinner，成功固定 Forest，失败固定 Crimson，等待用户确认固定 Amber。",
+        "section": "colors"
+      },
+      {
+        "name": "The Native CJK Integration Rule",
+        "body": "中文字段继承与英文字符完全相同的行高与字重阶梯，严禁为中文单独重写非对称的行距或打破垂直节奏。",
+        "section": "typography"
+      }
+    ],
+    "dos": [
+      "优先复用 src/web/craft/components/ 中的既有组件，保持代码库的组件同构性。",
+      "始终采用 var(--background), var(--foreground), var(--accent) 等 CSS 变量，确保明暗主题自动相容。",
+      "使用 800px 的标准阅读宽度呈现报告与长对话流，保证最佳阅读舒适度。",
+      "在所有异步加载与轮次等待场景中使用 Craft 统一的九宫格 LoadingIndicator (Spinner)。"
+    ],
+    "donts": [
+      "引入上游无关的 Electron 依赖、富文本/Markdown 客户端混淆库或复杂国际化包。",
+      "为组件添加未经设计的深重、大范围外阴影；始终坚持使用 Tonal Layering 与极细边框建立层次。",
+      "打破既有 A 外壳的 252px 导航与三段工作台网格。",
+      "在没有必要的情况下使用高饱和度色彩，保持“克制严谨的编辑工作台”的核心视觉调性。"
+    ]
+  }
+}

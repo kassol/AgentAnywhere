@@ -1,5 +1,6 @@
 import { ActionBar } from './craft/components/ActionBar'
 import { Button } from './craft/components/Button'
+import { cn } from './craft/lib/utils'
 
 export type ReceiptAction = '调研' | '追加' | '取消' | '回答' | '重试' | '改稿'
 
@@ -63,13 +64,19 @@ export function QuickActions({ actions, onFill, label = '快捷操作', disabled
   return <ActionBar className="quick-actions mt-2 flex-wrap border-t-0 px-0 py-0 max-[520px]:grid max-[520px]:grid-cols-1" role="group" aria-label={label}>
     {actions.map((action, index) => {
       const command = quickActionCommand(action)
+      const isInteraction = action.kind === 'answer' || (action.kind === 'limit' && action.decision === 'continue')
+      const isDestructive = action.kind === 'cancel' || (action.kind === 'limit' && action.decision === 'finish')
       return <Button type="button" variant="outline" size="sm"
-        className="quick-action h-auto min-h-[30px] max-w-full gap-2 px-2.5 py-1.5 text-left max-[520px]:min-h-11 max-[520px]:w-full max-[520px]:justify-between"
+        className={cn(
+          'quick-action h-auto min-h-[30px] max-w-full gap-2 px-2.5 py-1.5 text-left transition-colors max-[520px]:min-h-11 max-[520px]:w-full max-[520px]:justify-between',
+          isInteraction && 'border-accent/40 bg-accent/5 hover:bg-accent/10 hover:border-accent text-foreground font-medium',
+          isDestructive && 'hover:border-destructive/50 hover:text-destructive hover:bg-destructive/5',
+        )}
         key={`${action.kind}:${quickActionIdentity(action)}:${index}`}
         disabled={disabled} aria-label={`${quickActionLabel(action)}，${quickActionIdentity(action)}`}
         title={`填入：${command}`} onClick={() => onFill(command)}>
         <span className="truncate">{quickActionLabel(action)}</span>
-        <small className="truncate text-[10px] font-normal text-muted-foreground">{quickActionIdentity(action)}</small>
+        <small className="truncate text-xs font-normal text-muted-foreground">{quickActionIdentity(action)}</small>
       </Button>
     })}
   </ActionBar>

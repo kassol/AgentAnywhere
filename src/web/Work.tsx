@@ -305,7 +305,7 @@ export function Work() {
         {message.status === 'carried' && <small className="muted">已纳入新 Run</small>}</div>)}
       {detail.run.status === 'running' && <form className="work-form work-inline-form" onSubmit={submitSteer}>
         <div className="grid gap-2"><Label htmlFor="work-steer">追加要求</Label><Textarea id="work-steer" value={steerContent} onChange={event => { setSteerContent(event.target.value); setSteerCommandId(crypto.randomUUID()) }} maxLength={4000} required rows={3} /></div>
-        <Button disabled={busy || !steerContent.trim()} type="submit">{busy ? <LoadingIndicator label="正在保存…" spinnerClassName="text-[10px]" /> : '发送追加要求'}</Button>
+        <Button disabled={busy || !steerContent.trim()} type="submit">{busy ? <LoadingIndicator label="正在保存…" spinnerClassName="text-xs" /> : '发送追加要求'}</Button>
       </form>}
       {finishedStatuses.includes(detail.run.status) && detail.run.cleanupState === 'cleaned' && detail.artifacts.some(item => item.kind === 'report' && item.runStatus === 'succeeded') && <form className="work-form work-continuation" onSubmit={submitContinuation}>
         <h3>继续这项工作</h3>
@@ -313,7 +313,7 @@ export function Work() {
         <div className="grid gap-2"><Label htmlFor="work-continuation">修改要求</Label><Textarea id="work-continuation" value={continuation} onChange={event => { setContinuation(event.target.value); setContinueRequestId(crypto.randomUUID()) }} maxLength={4000} required rows={3} /></div>
         <div className="work-form-grid"><div className="grid gap-2"><Label>模型</Label><ModelSelect value={modelId} models={models} onValueChange={value => { setModelId(value); setContinueRequestId(crypto.randomUUID()) }} /></div>
           <div className="grid gap-2"><Label>协议</Label><ProtocolSelect value={protocol} onValueChange={value => { setProtocol(value); setContinueRequestId(crypto.randomUUID()) }} /></div></div>
-        <Button disabled={busy || !continuation.trim() || !modelId} type="submit">{busy ? <LoadingIndicator label="正在保存…" spinnerClassName="text-[10px]" /> : '创建新 Run'}</Button>
+        <Button disabled={busy || !continuation.trim() || !modelId} type="submit">{busy ? <LoadingIndicator label="正在保存…" spinnerClassName="text-xs" /> : '创建新 Run'}</Button>
       </form>}
       </section>
       {!!activityEpochs.length && <section className="work-activity" aria-label="执行活动"><h3>执行活动</h3>
@@ -347,7 +347,7 @@ export function Work() {
         <div className="work-create-options"><div className="grid gap-2"><Label htmlFor="work-source">公开链接 <small>可选</small></Label><Input id="work-source" name="sourceUrl" type="url" placeholder="https://example.com" /></div>
           <div className="grid gap-2"><Label>模型</Label><ModelSelect value={modelId} models={models} onValueChange={value => { setModelId(value); setRequestId(crypto.randomUUID()) }} /></div></div>
         <div className="work-create-footer"><details><summary>高级选项</summary><div className="grid gap-2"><Label>协议</Label><ProtocolSelect value={protocol} onValueChange={value => { setProtocol(value); setRequestId(crypto.randomUUID()) }} /></div></details>
-          <Button disabled={busy || !modelId} type="submit">{busy ? <LoadingIndicator label="正在保存…" spinnerClassName="text-[10px]" /> : '创建工作'}</Button></div>
+          <Button disabled={busy || !modelId} type="submit">{busy ? <LoadingIndicator label="正在保存…" spinnerClassName="text-xs" /> : '创建工作'}</Button></div>
         {!models.length && <p className="work-form-note muted">请先到<a href="/settings">设置</a>选择模型。</p>}
       </form>
     </details>

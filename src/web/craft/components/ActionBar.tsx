@@ -19,7 +19,7 @@ export function ActionBar({ children, hint, className, ...props }: ActionBarProp
     {children}
     {hint && <>
       <div className="flex-1" />
-      <span className="text-[10px] text-muted-foreground">{hint}</span>
+      <span className="text-xs text-muted-foreground">{hint}</span>
     </>}
   </div>
 }

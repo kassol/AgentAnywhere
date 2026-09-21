@@ -17,6 +17,15 @@
         ],
         "createdAt": "2026-09-20T00:46:25.012Z",
         "reason": "assistant review: 此文件唯一单侧边线用于 blockquote 标识原文引用，属于报告批注的语义区分，未用于卡片强调。"
+      },
+      {
+        "rule": "design-system-font-size",
+        "value": "10px",
+        "files": [
+          "src/web/craft/components/annotations/**"
+        ],
+        "createdAt": "2026-09-21T02:56:21.787Z",
+        "reason": "Inline micro badge chip for annotated text"
       }
     ]
   }

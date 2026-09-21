@@ -57,7 +57,7 @@ export function ActivityStatusIcon({ status }: { status: ActivityStatus }) {
   const renderIcon = () => {
     switch (status) {
       case 'pending': return <Circle className="h-3.5 w-3.5 shrink-0 text-muted-foreground/50" />
-      case 'running': return <div className="h-3.5 w-3.5 flex items-center justify-center shrink-0"><Spinner className="text-[11px]" /></div>
+      case 'running': return <div className="h-3.5 w-3.5 flex items-center justify-center shrink-0"><Spinner className="text-xs" /></div>
       case 'completed': return <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-success" />
       case 'error': return <XCircle className="h-3.5 w-3.5 shrink-0 text-destructive" />
     }
@@ -92,7 +92,7 @@ export function ActivityRow({ activity }: { activity: ActivityItem }) {
         <ActivityStatusIcon status={activity.status} />
         <span id={detailId} className="truncate font-medium">{displayName}</span>
         {activity.summary && <span className="truncate flex-1 text-muted-foreground">· {activity.summary}</span>}
-        <span className="ml-auto text-[10px] text-muted-foreground group-open/activity:hidden">详情</span>
+        <span className="ml-auto text-xs text-muted-foreground group-open/activity:hidden">详情</span>
       </div>
     </summary>
     <div className="ml-5 mt-1 mb-2 grid gap-2 rounded-[6px] bg-foreground/3 p-2 text-xs">
@@ -132,7 +132,7 @@ export function ResponseCard({ text, isStreaming, renderMarkdown }: ResponseCont
       <div className="relative">{renderMarkdown(displayedText)}</div>
     </div>
     {isStreaming && <div className="px-4 py-2 border-t border-border/30 flex items-center bg-foreground/2 text-xs">
-      <LoadingIndicator label="生成中…" spinnerClassName="text-[10px]" />
+      <LoadingIndicator label="生成中…" spinnerClassName="text-xs" />
     </div>}
   </div>
 }
@@ -199,7 +199,7 @@ export const TurnCard = React.memo(function TurnCard({
         <motion.div initial={false} animate={{ rotate: isExpanded ? 90 : 0 }} transition={{ duration: 0.15, ease: 'easeOut' }} className="h-3.5 w-3.5 flex items-center justify-center shrink-0">
           <ChevronRight className="h-3.5 w-3.5" />
         </motion.div>
-        <span className="-ml-0.5 shrink-0 px-1.5 py-0.5 rounded-[4px] bg-background shadow-minimal text-[10px] font-medium tabular-nums">{activities.length}</span>
+        <span className="-ml-0.5 shrink-0 px-1.5 py-0.5 rounded-[4px] bg-background shadow-minimal text-xs font-medium tabular-nums">{activities.length}</span>
         <span className="relative flex-1 min-w-0 h-5 flex items-center"><AnimatePresence initial={false}>
           <motion.span key={previewText} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.2 }} className="absolute inset-0 truncate">{previewText}</motion.span>
         </AnimatePresence></span>
@@ -223,7 +223,7 @@ export const TurnCard = React.memo(function TurnCard({
         </motion.div>}
       </AnimatePresence>
     </div>}
-    {!hasActivities && isStreaming && !response && <LoadingIndicator label="处理中…" className="px-3 py-1.5 text-xs" spinnerClassName="text-[10px]" />}
+    {!hasActivities && isStreaming && !response && <LoadingIndicator label="处理中…" className="px-3 py-1.5 text-xs" spinnerClassName="text-xs" />}
     {response && <div className={cn('select-text', hasActivities && 'mt-2')}><ResponseCard {...response} renderMarkdown={renderMarkdown} /></div>}
   </div>
 })

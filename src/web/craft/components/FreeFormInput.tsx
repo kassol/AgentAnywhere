@@ -99,7 +99,7 @@ export function FreeFormInput({
               className={cn('send-btn h-7 shrink-0 rounded-full ml-2', !pending && !isProcessing && 'w-7')}
               disabled={disabled || isProcessing || (!pending && !value.trim())}
             >
-              {isProcessing ? <LoadingIndicator label="核对中…" spinnerClassName="text-[10px]" /> : pending ? '核对并重试' : <ArrowUp aria-hidden="true" />}
+              {isProcessing ? <LoadingIndicator label="核对中…" spinnerClassName="text-xs" /> : pending ? '核对并重试' : <ArrowUp aria-hidden="true" />}
             </Button>
           </div>
         </div>
