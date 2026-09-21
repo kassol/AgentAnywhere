@@ -12,7 +12,7 @@ if test "${#AGENTANYWHERE_RELEASE}" -ne 40; then
 fi
 export AGENTANYWHERE_RELEASE
 
-for component in web queue agent; do
+for component in web queue agent agent-coding; do
   docker image inspect "agentanywhere-r1-$component:$AGENTANYWHERE_RELEASE" >/dev/null
 done
 test "$(docker inspect -f '{{.State.Health.Status}}' agentanywhere-r1-postgres)" = healthy

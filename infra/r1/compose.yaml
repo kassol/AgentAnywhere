@@ -42,6 +42,7 @@ services:
     env_file: [./database.env, ./opensandbox.env, ./service.env]
     environment:
       AGENT_IMAGE: agentanywhere-r1-agent:${AGENTANYWHERE_RELEASE:?set the 40-character release commit SHA}
+      AGENT_CODING_IMAGE: agentanywhere-r1-agent-coding:${AGENTANYWHERE_RELEASE:?set the 40-character release commit SHA}
       OPEN_SANDBOX_DOMAIN: opensandbox:8080
       MODEL_PROXY_ORIGIN: http://agentanywhere-r1-web:3000
       TOOL_GATEWAY_ORIGIN: http://agentanywhere-r1-queue:3003
