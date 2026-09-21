@@ -608,6 +608,7 @@ async function execute(run, token) {
         }
         const manifestPath = `${outputDir}/manifest.json`
         const reportPath = `${outputDir}/report.md`
+        try { await adapter.close(sandboxId); await adapter.connect(sandboxId) } catch (_) { /* reconnect best-effort */ }
         let manifest, report
         try { [manifest, report] = await Promise.all([optionalFileInfo(sandboxId, manifestPath), optionalFileInfo(sandboxId, reportPath)]) }
         catch (error) { await markSaveBlocked(run, error, result); return }
