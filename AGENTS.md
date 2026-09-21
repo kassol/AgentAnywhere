@@ -83,3 +83,5 @@ React/TypeScript、Bun、PostgreSQL、Node.js 24.21、pg-boss 12.26.3、Pi 0.85.
 - 2026-09-20：R3 工作台与报告审阅发布至 cc-la；兼容、备份、浏览器和目录归并证据见 `docs/evidence/r3-08.md`。
 
 - 2026-09-20：R5 页面体验发布至 cc-la；真实改稿、双协议、页面矩阵与服务器收敛证据见 `docs/evidence/r5-09.md`。
+
+- 2026-09-21：R6 编码闭环（C2: dev→test→patch）发布至 cc-la；SandboxAdapter 中立接口、AgentDefinition 持久化、worker-coding 镜像与 Profile 选择、编码工具集（shell/read_file/write_file/git_diff）与 submit_artifact、Git 仓库预注入、管家委派编码任务。真实公网编码任务验收（bug 修复 + 报告 + 测试日志）证据见 `docs/evidence/r6-07.md`。
