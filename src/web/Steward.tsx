@@ -274,7 +274,25 @@ export function Steward({ fillRequest, onFillRequestHandled }: { fillRequest?: {
         <StableScroll storageKey={`agentanywhere:steward-scroll:${routeId ?? 'new'}`} revision={scrollRevision} className="conversation-messages">
           {routeId && !detail
             ? <div className="steward-empty"><LoadingIndicator label="正在加载对话…" /></div>
-            : !detail?.messages.length && <div className="steward-empty"><h2>有什么需要一起梳理？</h2><p className="muted">可以讨论，也可以直接委托一项或多项独立调研。</p></div>}
+            : !detail?.messages.length && <div className="steward-empty">
+                <div className="steward-empty-icon"><BriefcaseBusiness aria-hidden="true" /></div>
+                <h2>有什么需要一起梳理？</h2>
+                <p className="muted">可以讨论架构方案，也可以直接委托一项或多项独立任务。</p>
+                <div className="steward-prompts" role="group" aria-label="快捷委托示例">
+                  <button type="button" className="steward-prompt-chip" onClick={() => fillCommand('请派发独立调研任务：深入调研 ')}>
+                    <span className="prompt-tag">调研</span>
+                    <span className="prompt-text">深入调研技术选型或架构方案</span>
+                  </button>
+                  <button type="button" className="steward-prompt-chip" onClick={() => fillCommand('请派发编码任务：修复项目缺陷并通过测试')}>
+                    <span className="prompt-tag">编码</span>
+                    <span className="prompt-text">在隔离沙箱中执行代码修复与测试验证</span>
+                  </button>
+                  <button type="button" className="steward-prompt-chip" onClick={() => fillCommand('请检查当前历史工作并解读最新报告')}>
+                    <span className="prompt-tag">解读</span>
+                    <span className="prompt-text">梳理历史执行成果与关键结论</span>
+                  </button>
+                </div>
+              </div>}
           {!!detail?.summaries.length && <section aria-label="较早讨论摘要"><h3>较早讨论摘要</h3>{detail.summaries.map(summary => <article key={summary.id}>
             <small>覆盖本对话第 {summary.fromTurnNumber}–{summary.throughTurnNumber} 轮，共 {summary.coveredTurns} 轮</small>
             <ReportMarkdown markdown={summary.content} />
@@ -327,7 +345,7 @@ export function Steward({ fillRequest, onFillRequestHandled }: { fillRequest?: {
             const actions = current ? statusCardQuickActions(current, latestRun?.id, replacementModels) : relatedTaskQuickActions(task)
             const report = task.reports[0]
             return <li key={task.id} data-task-id={task.id}>
-              <EntityRow href={task.href} className="steward-work-row" surfaceClassName="py-2"
+              <EntityRow href={task.href} className="steward-work-row" surfaceClassName="py-1.5"
                 icon={<BriefcaseBusiness />} title={task.title || task.goal}
                 subtitle={current?.interaction?.status === 'pending' ? current.interaction.question : current?.failure}
                 badges={<WorkStatusBadge status={latestRun?.status ?? task.status} />}>

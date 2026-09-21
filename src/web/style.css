@@ -33,7 +33,7 @@ input:not([data-slot="input"]), select, textarea:not([data-slot="textarea"]) { b
 .login-panel > .error { margin: -8px 0 0; font-size: 12px; line-height: 1.5; }
 
 .shell { display: grid; width: 100%; height: 100dvh; min-height: 0; grid-template-columns: 190px minmax(0, 1fr); overflow: hidden; }
-.shell-steward { grid-template-columns: 190px 240px minmax(0, 1fr); }
+.shell-steward { grid-template-columns: 200px 250px minmax(0, 1fr); }
 .sidebar { display: flex; min-width: 0; min-height: 0; padding: 12px 10px 10px; flex-direction: column; border-right: 1px solid var(--border); background: var(--sidebar); }
 .brand { display: flex !important; height: 48px; margin: 0; padding: 0 7px 8px !important; align-items: center; gap: 10px; color: var(--foreground) !important; text-decoration: none; }
 .brand > span:last-child { min-width: 0; overflow: hidden; font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
@@ -130,9 +130,70 @@ input:not([data-slot="input"]), select, textarea:not([data-slot="textarea"]) { b
 .conversation > .stable-scroll-region { display: flex; min-height: 0; flex: 1; }
 .conversation-messages { display: grid; min-height: 0; padding: 20px max(24px, calc((100% - 760px) / 2)) 42px; align-content: start; flex: 1; overflow-y: auto; overscroll-behavior: contain; gap: 28px; }
 .conversation-messages > * { width: 100%; max-width: 760px; margin-right: auto; margin-left: auto; }
-.steward-empty { margin: auto; padding: 40px 20px; text-align: center; }
-.steward-empty h2 { margin: 0 0 7px; font-size: 16px; font-weight: 600; letter-spacing: -.015em; }
-.steward-empty p { margin: 0; font-size: 13px; }
+.steward-empty {
+  margin: auto;
+  padding: 60px 20px 40px;
+  text-align: center;
+  max-width: 580px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.steward-empty-icon {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border-radius: 10px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  margin-bottom: 16px;
+}
+.steward-empty-icon svg { width: 20px; height: 20px; }
+.steward-empty h2 { margin: 0 0 8px; font-size: 18px; font-weight: 600; letter-spacing: -.02em; color: var(--foreground); }
+.steward-empty p { margin: 0 0 28px; font-size: 13px; color: var(--muted); line-height: 1.6; }
+.steward-prompts {
+  display: grid;
+  width: 100%;
+  gap: 8px;
+  text-align: left;
+}
+.steward-prompt-chip {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--foreground);
+  cursor: pointer;
+  transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
+}
+.steward-prompt-chip:hover {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  background: var(--hover);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.04);
+}
+.steward-prompt-chip .prompt-tag {
+  display: inline-flex;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  flex-shrink: 0;
+}
+.steward-prompt-chip .prompt-text {
+  font-size: 13px;
+  color: var(--foreground-dimmed);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .steward-turn { display: grid; padding: 0 0 26px; gap: 26px; border-bottom: 1px solid var(--border); }
 .steward-turn > header { display: flex; align-items: center; gap: 10px; color: var(--muted); }
 .steward-turn > header::before, .steward-turn > header::after { height: 1px; flex: 1; background: var(--border); content: ""; }

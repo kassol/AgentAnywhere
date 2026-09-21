@@ -37,14 +37,14 @@
 .report-index header p { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
 .report-index a { color: var(--foreground); font-size: 12px; text-underline-offset: 3px; }
 .report-index-state { margin: 24px 2px; color: var(--muted); }
-.report-index-list { display: grid; }
-.report-index-list button { display: grid; width: 100%; padding: 15px 4px; grid-template-columns: 22px minmax(0, 1fr) auto; align-items: center; gap: 11px; border: 0; border-bottom: 1px solid var(--border); color: inherit; background: transparent; text-align: left; cursor: pointer; }
-.report-index-list button:hover { background: var(--foreground-2); }
-.report-index-list button > svg { width: 16px; height: 16px; color: var(--muted); }
-.report-index-list button > span:nth-child(2) { display: grid; min-width: 0; gap: 3px; }
+.report-index-list { display: grid; gap: 4px; margin-top: 14px; }
+.report-index-list button { display: grid; width: 100%; padding: 12px 14px; grid-template-columns: 22px minmax(0, 1fr) auto; align-items: center; gap: 12px; border: 1px solid var(--border); border-radius: 8px; color: inherit; background: var(--panel); text-align: left; cursor: pointer; transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1); }
+.report-index-list button:hover { border-color: color-mix(in srgb, var(--accent) 30%, var(--border)); background: var(--hover); }
+.report-index-list button > svg { width: 16px; height: 16px; color: var(--accent); }
+.report-index-list button > span:nth-child(2) { display: grid; min-width: 0; gap: 2px; }
 .report-index-list strong, .report-index-list small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.report-index-list strong { font-size: 13px; font-weight: 600; }
-.report-index-list small, .report-index-list button > span:last-child { color: var(--muted); font-size: 12px; }
+.report-index-list strong { font-size: 13px; font-weight: 500; color: var(--foreground); }
+.report-index-list small, .report-index-list button > span:last-child { color: var(--muted); font-size: 11px; }
 .report-index-empty { display: grid; min-height: 360px; place-items: center; align-content: center; gap: 8px; text-align: center; }
 .report-index-empty > svg { width: 25px; height: 25px; color: var(--muted); }
 .report-index-empty h2, .report-index-empty p { margin: 0; }
