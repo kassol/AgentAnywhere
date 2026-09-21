@@ -12,6 +12,21 @@ const databaseUrl = process.env.DATABASE_URL
 const sandboxKey = process.env.OPEN_SANDBOX_API_KEY || process.env.OPENSANDBOX_SERVER_API_KEY
 const image = process.env.AGENT_IMAGE
 if (!databaseUrl || !sandboxKey || !image) throw new Error('DATABASE_URL, OPEN_SANDBOX_API_KEY and AGENT_IMAGE are required')
+
+const PROFILES = {
+  'worker-basic': {
+    image: process.env.AGENT_IMAGE || 'agent-worker',
+    cpu: '1',
+    memory: '512Mi',
+    entrypoint: ['node', '/app/agent-worker.mjs'],
+  },
+  'worker-coding': {
+    image: process.env.AGENT_CODING_IMAGE || 'agent-coding',
+    cpu: '2',
+    memory: '2048Mi',
+    entrypoint: ['node', '/app/agent-worker.mjs'],
+  },
+}
 const pool = new pg.Pool({ connectionString: databaseUrl, max: 4 })
 const sandboxConnection = { domain: process.env.OPEN_SANDBOX_DOMAIN || 'opensandbox:8080', protocol: 'http', apiKey: sandboxKey, useServerProxy: true, disableMetrics: true }
 const adapter = new OpenSandboxAdapter(sandboxConnection)
@@ -69,7 +84,7 @@ async function claim(runId, token) {
     const result = await db.query(`UPDATE work_runs SET status='provisioning', active=true, epoch=epoch+1,
       run_token_hash=$2, started_at=COALESCE(started_at,now()), active_since=now(), active_heartbeat_at=now(), cleanup_state='pending', budget_reason=NULL
       WHERE id=$1 AND status='queued' AND NOT active RETURNING id, task_id, epoch, model_snapshot,
-        previous_report_version_id, context_snapshot, checkpoint_ref`,
+        previous_report_version_id, context_snapshot, checkpoint_ref, agent_version_id`,
       [runId, createHash('sha256').update(token).digest('hex')])
     if (!result.rowCount) { await db.query('ROLLBACK'); return null }
     await db.query("UPDATE work_tasks SET status='provisioning' WHERE id=$1", [result.rows[0].task_id])
@@ -416,10 +431,16 @@ async function execute(run, token) {
       goal = `${goal}\n\n既往用户要求：\n${context.messages.map((message, index) => `${index + 1}. ${message}`).join('\n')}\n\n上一版报告（作为修改输入）：\n${new TextDecoder('utf-8', { fatal: true }).decode(report)}\n\n本次修改要求：\n${context.instruction}`
     }
     await ensureActive()
+    let profileId = 'worker-basic'
+    if (run.agent_version_id) {
+      const avRow = await pool.query('SELECT profile_id FROM agent_versions WHERE id = $1', [run.agent_version_id])
+      if (avRow.rows[0]) profileId = avRow.rows[0].profile_id
+    }
+    const profile = PROFILES[profileId] || PROFILES['worker-basic']
     const created = await adapter.create({
-      image, entrypoint: ['node', '/app/agent-worker.mjs'],
+      image: profile.image, entrypoint: profile.entrypoint,
       env: { RUN_TOKEN: token }, metadata: { runId: run.id, epoch: String(run.epoch) },
-      resource: { cpu: '1', memory: '512Mi' }, timeoutSeconds: null, readyTimeoutSeconds: 60,
+      resource: { cpu: profile.cpu, memory: profile.memory }, timeoutSeconds: null, readyTimeoutSeconds: 60,
     })
     sandboxId = created.sandboxId
     run.sandbox_id = sandboxId
