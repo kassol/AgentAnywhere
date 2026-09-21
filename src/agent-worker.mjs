@@ -3,6 +3,7 @@ import { timingSafeEqual } from 'node:crypto'
 import { mkdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { createAgentSession, ModelRuntime, SessionManager } from '@earendil-works/pi-coding-agent'
 import { Type } from 'typebox'
+import { createCodingTools } from './coding-tools.mjs'
 
 const token = process.env.RUN_TOKEN
 if (!token) throw new Error('RUN_TOKEN is required')
@@ -12,7 +13,8 @@ const listeners = new Set()
 let started = false
 let finished = false
 let session
-let reportSubmitted = false
+let artifactSubmitted = false
+const submittedFiles = []
 let cancelRequested = false
 let recoveryRequested = false
 let stopPolling = () => {}
@@ -51,7 +53,7 @@ function send(response, status, body) {
   response.end(JSON.stringify(body))
 }
 
-async function execute({ goal, model, proxyBase, toolBase, resume = false, answer }) {
+async function execute({ goal, model, proxyBase, toolBase, resume = false, answer, agentType }) {
   let messageTimer
   let acceptingMessages = false
   stopPolling = () => { acceptingMessages = false }
@@ -73,9 +75,7 @@ async function execute({ goal, model, proxyBase, toolBase, resume = false, answe
     await mkdir(sessionDir, { recursive: true, mode: 0o700 })
     if (!resume) await writeFile(`${sessionDir}/checkpoint.jsonl`, '', { flag: 'wx', mode: 0o600 })
     const sessionManager = SessionManager.open(`${sessionDir}/checkpoint.jsonl`, sessionDir, '/tmp/agentanywhere-work')
-    const created = await createAgentSession({
-      model: selected, modelRuntime: runtime, sessionManager, tools: ['echo_observation', 'search_web', 'open_public_page', 'submit_report', 'ask_user'],
-      customTools: [{
+    const baseCustomTools = [{
         name: 'ask_user', label: 'Ask user', description: 'Ask the user one question when their decision is needed. Execution stops until they answer.',
         parameters: Type.Object({ question: Type.String() }),
         execute: async (_id, params, signal) => {
@@ -106,39 +106,70 @@ async function execute({ goal, model, proxyBase, toolBase, resume = false, answe
           return { content: [{ type: 'text', text: JSON.stringify(data) }], details: {} }
         },
       })), {
-        name: 'submit_report', label: 'Submit report', description: 'Save the final Markdown report and optional plain text attachments.',
-        parameters: Type.Object({ markdown: Type.String(), attachments: Type.Optional(Type.Array(Type.Object({ name: Type.String(), content: Type.String() }), { maxItems: 5 })) }),
+        name: 'submit_artifact', label: 'Submit artifact', description: 'Save a work artifact. kind=report: Markdown report with optional attachments; kind=patch: unified diff; kind=test_log: test result JSON. Can be called multiple times with different kinds.',
+        parameters: Type.Object({
+          kind: Type.Optional(Type.Union([Type.Literal('report'), Type.Literal('patch'), Type.Literal('test_log')])),
+          content: Type.String(),
+          attachments: Type.Optional(Type.Array(Type.Object({ name: Type.String(), content: Type.String() }), { maxItems: 5 })),
+        }),
         execute: async (_id, params, signal) => {
           if (cancelRequested || signal?.aborted) throw new Error('Run cancelled')
-          const report = Buffer.from(params.markdown, 'utf8')
-          if (!report.length || report.length > 2_000_000) throw new Error('报告大小无效')
-          const attachments = params.attachments ?? []
-          const files = [{ path: 'report.md', name: 'report.md', type: 'text/markdown' }]
-          for (const [index, item] of attachments.entries()) {
-            if (!/^[^/\\\x00-\x1f]{1,100}\.(txt|csv|json|md)$/i.test(item.name) || Buffer.byteLength(item.content, 'utf8') > 10_000_000) throw new Error('附件类型、名称或大小无效')
-            files.push({ path: `attachment-${index}.${item.name.split('.').at(-1).toLowerCase()}`, name: item.name, type: 'text/plain' })
-          }
-          if (new Set(files.map(item => item.name)).size !== files.length) throw new Error('附件名称重复')
+          const kind = params.kind || 'report'
+          const data = Buffer.from(params.content, 'utf8')
+          if (!data.length || data.length > 10_000_000) throw new Error('成果内容大小无效')
           await mkdir(outputDir, { recursive: true, mode: 0o700 })
-          const generation = `generation-${crypto.randomUUID()}`
+          const generation = submittedFiles.length ? submittedFiles[0]._generation : `generation-${crypto.randomUUID()}`
           const temporary = `${outputDir}/${generation}`
-          await mkdir(temporary, { mode: 0o700 })
+          await mkdir(temporary, { recursive: true, mode: 0o700 })
+          if (kind === 'report') {
+            if (data.length > 2_000_000) throw new Error('报告大小无效')
+            const attachments = params.attachments ?? []
+            const files = [{ path: 'report.md', name: 'report.md', type: 'text/markdown', kind: 'report' }]
+            for (const [index, item] of attachments.entries()) {
+              if (!/^[^/\\\x00-\x1f]{1,100}\.(txt|csv|json|md)$/i.test(item.name) || Buffer.byteLength(item.content, 'utf8') > 10_000_000) throw new Error('附件类型、名称或大小无效')
+              files.push({ path: `attachment-${index}.${item.name.split('.').at(-1).toLowerCase()}`, name: item.name, type: 'text/plain', kind: 'attachment' })
+            }
+            if (new Set(files.map(item => item.name)).size !== files.length) throw new Error('附件名称重复')
+            await writeFile(`${temporary}/report.md`, data, { mode: 0o600 })
+            for (const [index, item] of attachments.entries()) await writeFile(`${temporary}/${files[index + 1].path}`, item.content, { mode: 0o600 })
+            submittedFiles.push(...files.filter(f => !submittedFiles.some(s => s.path === f.path)).map(f => ({ ...f, _generation: generation })))
+          } else if (kind === 'patch') {
+            const entry = { path: 'patch.diff', name: 'patch.diff', type: 'text/plain', kind: 'patch' }
+            await writeFile(`${temporary}/patch.diff`, data, { mode: 0o600 })
+            const existing = submittedFiles.findIndex(f => f.path === 'patch.diff')
+            if (existing >= 0) submittedFiles[existing] = { ...entry, _generation: generation }
+            else submittedFiles.push({ ...entry, _generation: generation })
+          } else if (kind === 'test_log') {
+            const entry = { path: 'test-log.json', name: 'test-log.json', type: 'application/json', kind: 'test_log' }
+            await writeFile(`${temporary}/test-log.json`, data, { mode: 0o600 })
+            const existing = submittedFiles.findIndex(f => f.path === 'test-log.json')
+            if (existing >= 0) submittedFiles[existing] = { ...entry, _generation: generation }
+            else submittedFiles.push({ ...entry, _generation: generation })
+          }
+          if (cancelRequested || signal?.aborted) throw new Error('Run cancelled')
+          const manifestFiles = submittedFiles.map(({ _generation, ...rest }) => rest)
           const pointer = `${outputDir}/manifest-${generation}.tmp`
           try {
-            await writeFile(`${temporary}/report.md`, report, { mode: 0o600 })
-            for (const [index, item] of attachments.entries()) await writeFile(`${temporary}/${files[index + 1].path}`, item.content, { mode: 0o600 })
-            if (cancelRequested || signal?.aborted) throw new Error('Run cancelled')
-            await writeFile(pointer, JSON.stringify({ generation, files }), { mode: 0o600, flush: true })
-            if (cancelRequested || signal?.aborted) throw new Error('Run cancelled')
+            await writeFile(pointer, JSON.stringify({ generation, files: manifestFiles }), { mode: 0o600, flush: true })
             await rename(pointer, `${outputDir}/manifest.json`)
-          } catch (error) { await rm(pointer, { force: true }); await rm(temporary, { recursive: true, force: true }); throw error }
-          reportSubmitted = true
-          return { content: [{ type: 'text', text: '报告已保存，等待持久化校验' }], details: {} }
+          } catch (error) { await rm(pointer, { force: true }); throw error }
+          artifactSubmitted = true
+          const label = kind === 'report' ? '报告' : kind === 'patch' ? '补丁' : '测试日志'
+          return { content: [{ type: 'text', text: `${label}已保存，等待持久化校验` }], details: {} }
         },
-      }],
+      }]
+    const baseToolNames = ['echo_observation', 'search_web', 'open_public_page', 'submit_artifact', 'ask_user']
+    if (agentType === 'coding') {
+      const codingTools = createCodingTools('/home/node/workspace')
+      baseCustomTools.push(...codingTools)
+      baseToolNames.push(...codingTools.map(t => t.name))
+    }
+    const created = await createAgentSession({
+      model: selected, modelRuntime: runtime, sessionManager, tools: baseToolNames,
+      customTools: baseCustomTools,
     })
     session = created.session
-    if (resume) reportSubmitted = await stat(`${outputDir}/manifest.json`).then(info => info.isFile(), () => false)
+    if (resume) artifactSubmitted = await stat(`${outputDir}/manifest.json`).then(info => info.isFile(), () => false)
     session.agent.shouldStopAfterTurn = () => question !== null
     if (cancelRequested || recoveryRequested || await recoveryStopped()) throw new Error('Run interrupted')
     const messageUrl = `${proxyBase.slice(0, -3)}/messages`
@@ -190,7 +221,7 @@ async function execute({ goal, model, proxyBase, toolBase, resume = false, answe
         result: event.result?.content?.filter(part => part.type === 'text').map(part => part.text).join('') ?? '', isError: event.isError })
     })
     emit('worker.ready')
-    const execution = session.prompt(resume ? answer || '请根据已保存的对话与工具结果继续完成任务；不要重复已经完成的工具调用。' : `${goal}\n\n可以用 search_web 查询主题；目标含指定来源时，先用 open_public_page 读取该 URL。需要核对搜索结果正文时，也用 open_public_page。搜索摘要与网页正文是不同来源；报告引用实际 URL，注明搜索引擎部分失败、不可读页面和未核查推断。需要用户决定时调用 ask_user 提问，等待回答。完成后调用 submit_report 保存 Markdown 报告，最后简短回复已提交。测试要求使用 echo_observation 时可以调用。`)
+    const execution = session.prompt(resume ? answer || '请根据已保存的对话与工具结果继续完成任务；不要重复已经完成的工具调用。' : `${goal}\n\n可以用 search_web 查询主题；目标含指定来源时，先用 open_public_page 读取该 URL。需要核对搜索结果正文时，也用 open_public_page。搜索摘要与网页正文是不同来源；报告引用实际 URL，注明搜索引擎部分失败、不可读页面和未核查推断。需要用户决定时调用 ask_user 提问，等待回答。完成后调用 submit_artifact 保存成果（kind=report 为 Markdown 报告，kind=patch 为补丁，kind=test_log 为测试日志），最后简短回复已提交。测试要求使用 echo_observation 时可以调用。`)
     messageTimer = setInterval(() => void pollMessages().catch(() => {}), 200)
     await pollMessages()
     await execution
@@ -205,7 +236,7 @@ async function execute({ goal, model, proxyBase, toolBase, resume = false, answe
     }
     const last = [...session.messages].reverse().find(message => message.role === 'assistant')
     if (!last || last.stopReason === 'error' || last.stopReason === 'aborted') throw new Error(last?.errorMessage || '模型执行未完成')
-    if (!reportSubmitted) throw new Error('未提交报告')
+    if (!artifactSubmitted) throw new Error('未提交报告')
     emit('run.finished')
   } catch (error) {
     acceptingMessages = false

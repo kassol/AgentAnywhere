@@ -152,6 +152,19 @@ async function liveEvents(endpoint, token, run, signal) {
   }
 }
 
+const ARTIFACT_VALID_PATHS = new Set(['report.md', 'patch.diff', 'test-log.json'])
+const ARTIFACT_LIMITS = { 'report.md': 2_000_000, 'patch.diff': 10_000_000, 'test-log.json': 10_000_000 }
+
+function validateManifestEntry(entry, index, entries) {
+  if (!entry || typeof entry !== 'object' || typeof entry.name !== 'string' || typeof entry.path !== 'string') return false
+  const kind = entry.kind || (entry.path === 'report.md' ? 'report' : index > 0 ? 'attachment' : null)
+  if (ARTIFACT_VALID_PATHS.has(entry.path)) return true
+  if (/^attachment-[0-4]\.(txt|csv|json|md)$/.test(entry.path)
+    && /^[^/\\\x00-\x1f]{1,100}\.(txt|csv|json|md)$/i.test(entry.name)
+    && entry.type === 'text/plain') return true
+  return false
+}
+
 async function persistArtifacts(run, sandboxId) {
   const manifestPath = `${outputDir}/manifest.json`
   const manifestInfo = await optionalFileInfo(sandboxId, manifestPath)
@@ -162,20 +175,23 @@ async function persistArtifacts(run, sandboxId) {
   const generation = Array.isArray(manifest) ? null : manifest?.generation
   if (generation !== null && (typeof generation !== 'string' || !/^generation-[0-9a-f-]{36}$/.test(generation))) throw new Error('报告代次无效')
   const entries = generation === null ? manifest : manifest.files
-  if (!Array.isArray(entries) || entries.length < 1 || entries.length > 6 || entries[0]?.path !== 'report.md') throw new Error('报告清单无效')
+  if (!Array.isArray(entries) || entries.length < 1 || entries.length > 10) throw new Error('报告清单无效')
   if (new Set(entries.map(item => item?.name)).size !== entries.length) throw new Error('附件名称重复')
   const saved = []
   const destination = join(artifactDir, run.id, `epoch-${run.epoch}`)
   await mkdir(destination, { recursive: true, mode: 0o700 })
   for (const [index, entry] of entries.entries()) {
-    if (!entry || typeof entry !== 'object' || entry.path !== (index === 0 ? 'report.md' : `attachment-${index - 1}.${entry.path?.split('.').at(-1)}`)
-      || (index > 0 && !/^attachment-[0-4]\.(txt|csv|json|md)$/.test(entry.path))
-      || typeof entry.name !== 'string' || !/^[^/\\\x00-\x1f]{1,100}\.(txt|csv|json|md)$/i.test(entry.name)
-      || entry.type !== (index === 0 ? 'text/markdown' : 'text/plain')) throw new Error('成果类型或路径无效')
+    const isKnownArtifact = ARTIFACT_VALID_PATHS.has(entry?.path)
+    const isAttachment = !isKnownArtifact && /^attachment-[0-4]\.(txt|csv|json|md)$/.test(entry?.path)
+    if (!isKnownArtifact && !isAttachment) throw new Error('成果类型或路径无效')
+    if (isAttachment) {
+      if (typeof entry.name !== 'string' || !/^[^/\\\x00-\x1f]{1,100}\.(txt|csv|json|md)$/i.test(entry.name) || entry.type !== 'text/plain') throw new Error('成果类型或路径无效')
+    }
+    const entryKind = entry.kind || (entry.path === 'report.md' ? 'report' : isAttachment ? 'attachment' : entry.path === 'patch.diff' ? 'patch' : 'test_log')
+    const limit = ARTIFACT_LIMITS[entry.path] || 10_000_000
     const source = `${outputDir}/${generation ? `${generation}/` : ''}${entry.path}`
     const info = await optionalFileInfo(sandboxId, source)
-    const limit = index === 0 ? 2_000_000 : 10_000_000
-    if (info?.type !== 'file' || !Number.isSafeInteger(info.size) || info.size < (index === 0 ? 1 : 0) || info.size > limit) throw new Error('成果文件类型或大小无效')
+    if (info?.type !== 'file' || !Number.isSafeInteger(info.size) || info.size < (entry.path === 'report.md' ? 1 : 0) || info.size > limit) throw new Error('成果文件类型或大小无效')
     const temporary = join(destination, `${entry.path}.${randomBytes(8).toString('hex')}.tmp`)
     const file = await open(temporary, 'wx', 0o600)
     let size = 0
@@ -194,7 +210,7 @@ async function persistArtifacts(run, sandboxId) {
     if (size !== info.size || (await optionalFileInfo(sandboxId, source))?.type !== 'file') { await rm(temporary, { force: true }); throw new Error('成果文件复制时发生变化') }
     const storageKey = `${run.id}/epoch-${run.epoch}/${entry.path}`
     await rename(temporary, join(artifactDir, storageKey))
-    saved.push({ ...entry, storageKey, size, sha256: hash.digest('hex'), kind: index === 0 ? 'report' : 'attachment' })
+    saved.push({ ...entry, storageKey, size, sha256: hash.digest('hex'), kind: entryKind })
   }
   const db = await pool.connect()
   try {
@@ -206,7 +222,7 @@ async function persistArtifacts(run, sandboxId) {
         ON CONFLICT (task_id, kind, name) DO UPDATE SET name=EXCLUDED.name RETURNING id`, [crypto.randomUUID(), run.task_id, item.kind, item.name])
       await db.query(`INSERT INTO work_artifact_versions (id, artifact_id, run_id, storage_key, sha256, size_bytes, mime_type)
         VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (artifact_id, run_id) DO NOTHING`,
-        [crypto.randomUUID(), artifact.rows[0].id, run.id, item.storageKey, item.sha256, item.size, item.type])
+        [crypto.randomUUID(), artifact.rows[0].id, run.id, item.storageKey, item.sha256, item.size, item.type || 'text/plain'])
     }
     await db.query('COMMIT')
   } catch (error) { await db.query('ROLLBACK'); throw error } finally { db.release() }
@@ -432,9 +448,13 @@ async function execute(run, token) {
     }
     await ensureActive()
     let profileId = 'worker-basic'
+    let agentType = 'research'
     if (run.agent_version_id) {
-      const avRow = await pool.query('SELECT profile_id FROM agent_versions WHERE id = $1', [run.agent_version_id])
-      if (avRow.rows[0]) profileId = avRow.rows[0].profile_id
+      const avRow = await pool.query('SELECT profile_id, tool_set FROM agent_versions WHERE id = $1', [run.agent_version_id])
+      if (avRow.rows[0]) {
+        profileId = avRow.rows[0].profile_id
+        agentType = avRow.rows[0].tool_set || 'research'
+      }
     }
     const profile = PROFILES[profileId] || PROFILES['worker-basic']
     const created = await adapter.create({
@@ -466,7 +486,7 @@ async function execute(run, token) {
     const base = endpoint.endpoint
     await ensureActive()
     const started = await fetch(`${base}/run`, { method: 'POST', headers: { ...endpoint.headers, 'x-run-token': token, 'content-type': 'application/json' },
-      body: JSON.stringify({ goal, model: run.model_snapshot, proxyBase, toolBase: `${toolOrigin.origin}/internal/research/${run.id}/${run.epoch}`, resume: checkpoint?.resume ?? false, answer: checkpoint?.answer ?? null }), signal: AbortSignal.timeout(10_000) })
+      body: JSON.stringify({ goal, model: run.model_snapshot, proxyBase, toolBase: `${toolOrigin.origin}/internal/research/${run.id}/${run.epoch}`, resume: checkpoint?.resume ?? false, answer: checkpoint?.answer ?? null, agentType }), signal: AbortSignal.timeout(10_000) })
     if (!started.ok) throw new Error('Pi 启动请求失败')
     endpoint = { ...endpoint, endpoint: base }
     result = await liveEvents(endpoint, token, run, AbortSignal.any([eventsAbort.signal, AbortSignal.timeout(50 * 60_000)]))
