@@ -56,11 +56,11 @@ services:
     volumes:
       - ./artifacts:/artifacts
     tmpfs:
-      - /tmp:size=16m,mode=1777
+      - /tmp:size=256m,mode=1777
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     pids_limit: 128
-    mem_limit: 512m
+    mem_limit: 768m
     cpus: 1.0
     networks: [default, sandbox, search]
   postgres:

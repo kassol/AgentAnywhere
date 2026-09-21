@@ -534,9 +534,12 @@ async function execute(run, token) {
     await pool.query('UPDATE work_runs SET sandbox_id=$3 WHERE id=$1 AND epoch=$2 AND active', [run.id, run.epoch, sandboxId])
     const checkpoint = await restoreCheckpoint(run, sandboxId)
     if (repoUrl && !checkpoint) {
+      console.log('Injecting repo', repoUrl, 'into', sandboxId)
       try {
         await injectRepository(adapter, sandboxId, repoUrl, '/home/node/workspace')
+        console.log('Repo injection succeeded')
       } catch (err) {
+        console.error('Repo injection failed:', err.message)
         await pool.query("UPDATE work_runs SET status='failed', failure=$1, finished_at=now() WHERE id=$2 AND epoch=$3 AND active",
           [`Repository injection failed: ${err.message}`, run.id, run.epoch])
         await pool.query("UPDATE work_tasks SET status='failed' WHERE id=$1", [run.task_id])
