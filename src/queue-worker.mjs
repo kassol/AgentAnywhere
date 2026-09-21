@@ -540,11 +540,7 @@ async function execute(run, token) {
         console.log('Repo injection succeeded')
       } catch (err) {
         console.error('Repo injection failed:', err.message)
-        await pool.query("UPDATE work_runs SET status='failed', failure=$1, finished_at=now() WHERE id=$2 AND epoch=$3 AND active",
-          [`Repository injection failed: ${err.message}`, run.id, run.epoch])
-        await pool.query("UPDATE work_tasks SET status='failed' WHERE id=$1", [run.task_id])
-        await cleanup(run, sandboxId)
-        return
+        throw new Error(`Repository injection failed: ${err.message}`)
       }
     }
     await ensureActive()
