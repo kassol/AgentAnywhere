@@ -4,3 +4,4 @@ dist/
 .env
 .env.*
 data/
+infra/r6/sample-project/node_modules/
