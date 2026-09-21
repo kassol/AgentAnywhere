@@ -458,7 +458,7 @@ export async function createWorkStore(databaseUrl: string, artifactDir = join(pr
       const turn = await lockStewardTurnBudget(sql, currentTurnId)
       const [operation] = await sql`SELECT turn_id AS "turnId", request_id AS "requestId", request_hash AS "requestHash",
         goal, source_url AS "sourceUrl", model_snapshot AS "modelSnapshot", credential_ref AS "credentialRef",
-        status, task_id AS "taskId", run_id AS "runId"
+        status, task_id AS "taskId", run_id AS "runId", agent_type AS "agentType", repo_url AS "repoUrl"
         FROM steward_research_operations WHERE operation_id=${operationId} FOR UPDATE`
       const [resume] = operation ? await sql`SELECT 1 FROM steward_research_resumes WHERE turn_id=${currentTurnId} AND operation_id=${operationId}` : []
       if (!turn || !operation || operation.turnId !== currentTurnId && !resume) throw new WorkInputError('调研操作回执无效')
@@ -486,7 +486,7 @@ export async function createWorkStore(databaseUrl: string, artifactDir = join(pr
           return { created: false, status: 'unexecuted' as const, failure }
         }
       }
-      const input: CreateRequest = { requestId: operation.requestId, goal: operation.goal, sourceUrl: operation.sourceUrl, repoUrl: operation.repoUrl ?? null, modelId: snapshot.id, protocol: snapshot.protocol }
+      const input: CreateRequest = { requestId: operation.requestId, goal: operation.goal, sourceUrl: operation.sourceUrl, repoUrl: operation.repoUrl ?? null, modelId: snapshot.id, protocol: snapshot.protocol, agentType: operation.agentType ?? 'research' }
       const taskId = crypto.randomUUID()
       const created = await createWorkInTransaction(sql, input, operation.requestHash, snapshot, operation.credentialRef, taskId)
       if (!created) {
