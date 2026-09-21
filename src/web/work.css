@@ -8,9 +8,9 @@
 
 .work-index {
   display: grid;
-  padding: 26px max(24px, calc((100% - 800px) / 2)) 100px;
+  padding: 28px max(24px, calc((100% - 720px) / 2)) 100px;
   align-content: start;
-  gap: 26px;
+  gap: 24px;
 }
 
 .work-create-disclosure {
@@ -694,7 +694,7 @@
     gap: 24px;
   }
 
-  .work-detail-page, .pending-page { padding: 20px 16px 72px; }
+  .work-detail-page, .pending-page { padding: 24px max(24px, calc((100% - 640px) / 2)) 100px; }
   .work-create-disclosure > summary { align-items: flex-start; flex-direction: column; gap: 3px; }
 
   .work-create-options,
