@@ -177,7 +177,7 @@ function explicitResearchDelegation(content: string) {
     if (!scope) return null
     countText = /^(?:以下\s*)?(10|[1-9]|[一二两三四五六七八九十])\s*(?:项|个(?:主题|问题|方向|目标))/.exec(scope)?.[1]
   } else if (created) {
-    const subject = /^(?:以下\s*)?(?:(10|[1-9]|[一二两三四五六七八九十])\s*(?:项|个(?:主题|问题|方向|目标))\s*)?(?:独立)?(?:调研|编码)(?:工作|任务)?/.exec(rest.slice(created[0].length))
+    const subject = /^(?:以下\s*)?(?:(10|[1-9]|[一二两三四五六七八九十])\s*(?:项|个(?:主题|问题|方向|目标)?)\s*)?(?:独立)?(?:调研|编码)(?:工作|任务)?/.exec(rest.slice(created[0].length))
     if (!subject) return null
     countText = subject[1]
   } else return null
