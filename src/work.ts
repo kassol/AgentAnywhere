@@ -7,10 +7,40 @@ import { lockStewardTurnBudget, stewardBudgetFailure, stewardOperationBudget } f
 import { parseTitle, titleSummary } from './title'
 
 type RunConnection = { endpoint: string; hasCredential: boolean; credentialRef: string | null; models: ModelSelection[] }
-type CreateRequest = { requestId: string; goal: string; sourceUrl: string | null; modelId: string; protocol: Protocol | null }
+type CreateRequest = { requestId: string; goal: string; sourceUrl: string | null; modelId: string; protocol: Protocol | null; agentType?: string }
 type FrozenResearchModel = ModelSelection & { endpoint: string }
 type ContinueRequest = { requestId: string; content: string; modelId: string; protocol: Protocol | null }
 type AppendRunMessageInput = { commandId: string; kind: 'steer'; content: string }
+
+export type AgentVersionRow = { profile_id: string; system_prompt: string; tool_set: string; config: Record<string, unknown> }
+
+const RESEARCH_SYSTEM_PROMPT = `可以用 search_web 查询主题；目标含指定来源时，先用 open_public_page 读取该 URL。需要核对搜索结果正文时，也用 open_public_page。搜索摘要与网页正文是不同来源；报告引用实际 URL，注明搜索引擎部分失败、不可读页面和未核查推断。需要用户决定时调用 ask_user 提问，等待回答。完成后调用 submit_report 保存 Markdown 报告，最后简短回复已提交。测试要求使用 echo_observation 时可以调用。`
+
+const CODING_SYSTEM_PROMPT = `You are working in a cloned Git repository. Use the available tools to understand, modify, and test code.
+
+## Tools
+- shell: Run shell commands (bash). Use for building, testing, installing dependencies, inspecting the repo.
+- read_file: Read file contents. Use to understand existing code before modifying.
+- write_file: Write or overwrite file contents. Use to implement changes.
+- git_diff: Show uncommitted changes (optionally staged only). Use to verify your work before submitting.
+- search_web: Search public pages for documentation or references.
+- open_public_page: Read the HTTP text of a public URL.
+- ask_user: Ask the user a question when their decision is needed.
+
+## Workflow
+1. Read the relevant source files to understand the codebase structure.
+2. Make changes using write_file.
+3. Run tests to verify correctness. If tests fail, read the output, fix the code, and re-run.
+4. When tests pass, submit results:
+   a. submit_artifact(kind='test_log'): Submit test results as JSON with fields: command, stdout, stderr, exitCode.
+   b. submit_artifact(kind='patch'): Submit the output of git diff showing all changes.
+   c. submit_artifact(kind='report'): Submit a Markdown summary of what was done and why.
+5. If tests cannot be fixed, submit a report explaining the failure.
+
+## Rules
+- Always run tests before submitting a patch.
+- Do not commit changes; only produce a diff.
+- Keep changes minimal and focused on the task.`
 
 export class WorkInputError extends Error {}
 export class WorkConflictError extends Error {}
@@ -34,7 +64,8 @@ function parseRequest(body: unknown): CreateRequest {
   if (!goal && !sourceUrl) throw new WorkInputError('请填写目标或公开链接')
   if (typeof value.modelId !== 'string' || !value.modelId.trim()) throw new WorkInputError('请选择模型')
   if (value.protocol !== undefined && value.protocol !== null && value.protocol !== 'chat-completions' && value.protocol !== 'responses') throw new WorkInputError('协议无效')
-  return { requestId: value.requestId, goal, sourceUrl, modelId: value.modelId, protocol: value.protocol as Protocol | null ?? null }
+  const agentType = typeof value.agentType === 'string' && ['research', 'coding'].includes(value.agentType) ? value.agentType : undefined
+  return { requestId: value.requestId, goal, sourceUrl, modelId: value.modelId, protocol: value.protocol as Protocol | null ?? null, agentType }
 }
 
 function parseContinueRequest(body: unknown): ContinueRequest {
@@ -125,6 +156,49 @@ export async function createWorkStore(databaseUrl: string, artifactDir = join(pr
     sha256 text NOT NULL, size_bytes bigint NOT NULL, mime_type text NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now(), UNIQUE (artifact_id, run_id)
   )`
+  await db`CREATE TABLE IF NOT EXISTS agent_definitions (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    name text NOT NULL UNIQUE,
+    description text,
+    created_at timestamptz NOT NULL DEFAULT now()
+  )`
+  await db`CREATE TABLE IF NOT EXISTS agent_versions (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    definition_id uuid NOT NULL REFERENCES agent_definitions(id),
+    version integer NOT NULL,
+    profile_id text NOT NULL,
+    system_prompt text NOT NULL,
+    tool_set text NOT NULL,
+    config jsonb NOT NULL DEFAULT '{}',
+    content_hash text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (definition_id, version)
+  )`
+  await db`ALTER TABLE work_runs ADD COLUMN IF NOT EXISTS agent_version_id uuid REFERENCES agent_versions(id)`
+
+  // Idempotent upsert of builtin agent definitions
+  const builtins = [
+    { name: 'research', description: 'Research agent for investigating topics and producing reports', profileId: 'worker-basic', toolSet: 'research', systemPrompt: RESEARCH_SYSTEM_PROMPT },
+    { name: 'coding', description: 'Coding agent for modifying code, running tests, and producing patches', profileId: 'worker-coding', toolSet: 'coding', systemPrompt: CODING_SYSTEM_PROMPT },
+  ] as const
+  for (const builtin of builtins) {
+    const contentHash = createHash('sha256').update(builtin.systemPrompt).digest('hex')
+    const [def] = await db`INSERT INTO agent_definitions (id, name, description) VALUES (${crypto.randomUUID()}, ${builtin.name}, ${builtin.description})
+      ON CONFLICT (name) DO NOTHING RETURNING id`
+    const definitionId = def?.id ?? (await db`SELECT id FROM agent_definitions WHERE name=${builtin.name}`)[0]?.id
+    if (definitionId) {
+      await db`INSERT INTO agent_versions (id, definition_id, version, profile_id, system_prompt, tool_set, config, content_hash)
+        VALUES (${crypto.randomUUID()}, ${definitionId}, 1, ${builtin.profileId}, ${builtin.systemPrompt}, ${builtin.toolSet}, '{}'::jsonb, ${contentHash})
+        ON CONFLICT (definition_id, version) DO NOTHING`
+    }
+  }
+
+  async function resolveAgentVersionId(sql: SQL, agentType: string) {
+    const name = agentType === 'coding' ? 'coding' : 'research'
+    const [row] = await sql`SELECT av.id FROM agent_versions av JOIN agent_definitions ad ON ad.id=av.definition_id
+      WHERE ad.name=${name} ORDER BY av.version DESC LIMIT 1`
+    return row?.id ?? null
+  }
 
   async function createWorkInTransaction(sql: SQL, input: CreateRequest, requestHash: string, snapshot: FrozenResearchModel, credentialRef: string, taskId: string) {
     const rows = await sql`INSERT INTO work_tasks (id, owner_id, request_id, request_hash, goal, source_url, status)
@@ -134,8 +208,9 @@ export async function createWorkStore(databaseUrl: string, artifactDir = join(pr
     const threadId = crypto.randomUUID()
     await sql`INSERT INTO work_threads (id, task_id) VALUES (${threadId}, ${taskId})`
     const runId = crypto.randomUUID()
-    await sql`INSERT INTO work_runs (id, task_id, status, model_snapshot, credential_ref)
-      VALUES (${runId}, ${taskId}, 'queued', ${JSON.stringify(snapshot)}::text::jsonb, ${credentialRef})`
+    const agentVersionId = await resolveAgentVersionId(sql, input.agentType ?? 'research')
+    await sql`INSERT INTO work_runs (id, task_id, status, model_snapshot, credential_ref, agent_version_id)
+      VALUES (${runId}, ${taskId}, 'queued', ${JSON.stringify(snapshot)}::text::jsonb, ${credentialRef}, ${agentVersionId})`
     await sql`INSERT INTO work_outbox (run_id) VALUES (${runId})`
     await sql`INSERT INTO work_messages (id, thread_id, role, content)
       VALUES (${crypto.randomUUID()}, ${threadId}, 'user', ${input.goal || input.sourceUrl!})`
@@ -1158,7 +1233,15 @@ export async function createWorkStore(databaseUrl: string, artifactDir = join(pr
       WHERE EXISTS (SELECT 1 FROM work_runs WHERE id = ${runId} AND epoch = ${epoch} AND active)`
   }
 
+  async function getAgentVersion(versionId: string): Promise<AgentVersionRow | null> {
+    const [row] = await db`SELECT profile_id AS "profile_id", system_prompt AS "system_prompt", tool_set AS "tool_set", config
+      FROM agent_versions WHERE id=${versionId}`
+    if (!row) return null
+    return { profile_id: row.profile_id, system_prompt: row.system_prompt, tool_set: row.tool_set,
+      config: typeof row.config === 'string' ? JSON.parse(row.config) : row.config ?? {} }
+  }
+
   async function close() { await db.close() }
 
-  return { list, detail, updateTitle, events, create, continueTask, retryTask, appendRunMessage, resolveInteraction, pendingInteractions, pendingRunMessages, acknowledgeRunMessage, cancel, isRunStopped, artifactVersion, readArtifact, stewardCatalog, stewardMetadata, stewardStatusCards, stewardRead, stewardRetryContext, stewardModelStats, createFromSteward, freezeStewardControl, applyStewardControl, freezeStewardInteraction, applyStewardInteraction, freezeStewardRetry, applyStewardRetry, freezeStewardRevision, applyStewardRevision, requestCleanupRetry, resolveRunModelConnection, authorizeModelProxy, reserveModelAttempt, recordModelUsage, close }
+  return { list, detail, updateTitle, events, create, continueTask, retryTask, appendRunMessage, resolveInteraction, pendingInteractions, pendingRunMessages, acknowledgeRunMessage, cancel, isRunStopped, artifactVersion, readArtifact, stewardCatalog, stewardMetadata, stewardStatusCards, stewardRead, stewardRetryContext, stewardModelStats, createFromSteward, freezeStewardControl, applyStewardControl, freezeStewardInteraction, applyStewardInteraction, freezeStewardRetry, applyStewardRetry, freezeStewardRevision, applyStewardRevision, requestCleanupRetry, resolveRunModelConnection, authorizeModelProxy, reserveModelAttempt, recordModelUsage, getAgentVersion, close }
 }
