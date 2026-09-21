@@ -1,8 +1,11 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
+import { execFile as execFileCb } from 'node:child_process'
 import { lookup } from 'node:dns/promises'
 import http from 'node:http'
-import { mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { mkdir, mkdtemp, open, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join, relative } from 'node:path'
+import { promisify } from 'node:util'
 import { PgBoss } from 'pg-boss'
 import pg from 'pg'
 import { OpenSandboxAdapter } from './sandbox-opensandbox.mjs'
@@ -39,6 +42,69 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms))
 const searchOrigin = process.env.SEARCH_ORIGIN || 'http://agentanywhere-r1-searxng:8080'
 const publicHost = process.env.AGENTANYWHERE_PUBLIC_ORIGIN && new URL(process.env.AGENTANYWHERE_PUBLIC_ORIGIN).hostname.replace(/^\[|\]$/g, '')
 if (!publicHost) throw new Error('AGENTANYWHERE_PUBLIC_ORIGIN is required for public page protection')
+
+const execFileAsync = promisify(execFileCb)
+
+async function* walkDir(dir, base = dir) {
+  for (const entry of await readdir(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name)
+    if (entry.name === '.git') continue
+    if (entry.isDirectory()) {
+      yield* walkDir(full, base)
+    } else if (entry.isFile()) {
+      const rel = relative(base, full)
+      const st = await stat(full)
+      yield { path: rel, fullPath: full, size: st.size }
+    }
+  }
+}
+
+const REPO_MAX_TOTAL = 200 * 1024 * 1024
+const REPO_MAX_FILE = 10 * 1024 * 1024
+const REPO_BATCH_SIZE = 50
+
+async function injectRepository(adapterInstance, sandboxId, repoUrl, workdir) {
+  const tmpDir = await mkdtemp(join(tmpdir(), 'aa-clone-'))
+  try {
+    const env = { ...process.env }
+    if (process.env.GIT_TOKEN) {
+      const askpass = join(tmpDir, 'askpass.sh')
+      await writeFile(askpass, `#!/bin/sh\necho "${process.env.GIT_TOKEN}"`, { mode: 0o700 })
+      env.GIT_ASKPASS = askpass
+    }
+    const repoDir = join(tmpDir, 'repo')
+    await execFileAsync('git', ['clone', '--depth', '1', repoUrl, repoDir], { env, timeout: 120_000 })
+
+    const files = []
+    let totalSize = 0
+    for await (const file of walkDir(repoDir)) {
+      if (file.size > REPO_MAX_FILE) {
+        console.warn(`Skipping large file (${file.size} bytes): ${file.path}`)
+        continue
+      }
+      totalSize += file.size
+      if (totalSize > REPO_MAX_TOTAL) throw new Error(`Repository exceeds ${REPO_MAX_TOTAL} byte limit`)
+      files.push(file)
+    }
+
+    for (let i = 0; i < files.length; i += REPO_BATCH_SIZE) {
+      const batch = files.slice(i, i + REPO_BATCH_SIZE)
+      const entries = await Promise.all(batch.map(async file => ({
+        path: join(workdir, file.path),
+        data: await readFile(file.fullPath),
+        mode: 0o644,
+      })))
+      const dirs = [...new Set(entries.map(e => e.path.slice(0, e.path.lastIndexOf('/'))))]
+        .map(p => ({ path: p, mode: 0o755 }))
+      if (dirs.length) await adapterInstance.createDirectories(sandboxId, dirs)
+      await adapterInstance.writeFile(sandboxId, entries)
+    }
+
+    await adapterInstance.startProcess(sandboxId, { command: `cd ${workdir} && git init && git add -A && git commit -m initial`, timeoutSeconds: 30 })
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true })
+  }
+}
 
 const researchServer = http.createServer(async (request, response) => {
   const match = /^\/internal\/research\/([0-9a-f-]+)\/(\d+)\/(search|open)$/.exec(request.url || '')
@@ -430,7 +496,8 @@ async function execute(run, token) {
   }
   try {
     await ensureActive()
-    const row = await pool.query('SELECT goal, source_url FROM work_tasks WHERE id=$1', [run.task_id])
+    const row = await pool.query('SELECT goal, source_url, repo_url FROM work_tasks WHERE id=$1', [run.task_id])
+    const repoUrl = row.rows[0]?.repo_url || null
     let goal = [row.rows[0].goal, row.rows[0].source_url && `指定来源：${row.rows[0].source_url}`].filter(Boolean).join('\n\n')
     if (run.previous_report_version_id && !run.checkpoint_ref) {
       const previous = await pool.query(`SELECT v.storage_key, v.sha256, v.size_bytes, v.run_id
@@ -466,6 +533,17 @@ async function execute(run, token) {
     run.sandbox_id = sandboxId
     await pool.query('UPDATE work_runs SET sandbox_id=$3 WHERE id=$1 AND epoch=$2 AND active', [run.id, run.epoch, sandboxId])
     const checkpoint = await restoreCheckpoint(run, sandboxId)
+    if (repoUrl && !checkpoint) {
+      try {
+        await injectRepository(adapter, sandboxId, repoUrl, '/home/node/workspace')
+      } catch (err) {
+        await pool.query("UPDATE work_runs SET status='failed', failure=$1, finished_at=now() WHERE id=$2 AND epoch=$3 AND active",
+          [`Repository injection failed: ${err.message}`, run.id, run.epoch])
+        await pool.query("UPDATE work_tasks SET status='failed' WHERE id=$1", [run.task_id])
+        await cleanup(run, sandboxId)
+        return
+      }
+    }
     await ensureActive()
     endpoint = await adapter.getEndpoint(sandboxId, 3001)
     let ready = false

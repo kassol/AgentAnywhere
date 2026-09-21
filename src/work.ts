@@ -7,7 +7,7 @@ import { lockStewardTurnBudget, stewardBudgetFailure, stewardOperationBudget } f
 import { parseTitle, titleSummary } from './title'
 
 type RunConnection = { endpoint: string; hasCredential: boolean; credentialRef: string | null; models: ModelSelection[] }
-type CreateRequest = { requestId: string; goal: string; sourceUrl: string | null; modelId: string; protocol: Protocol | null; agentType?: string }
+type CreateRequest = { requestId: string; goal: string; sourceUrl: string | null; repoUrl: string | null; modelId: string; protocol: Protocol | null; agentType?: string }
 type FrozenResearchModel = ModelSelection & { endpoint: string }
 type ContinueRequest = { requestId: string; content: string; modelId: string; protocol: Protocol | null }
 type AppendRunMessageInput = { commandId: string; kind: 'steer'; content: string }
@@ -61,11 +61,18 @@ function parseRequest(body: unknown): CreateRequest {
     try { parsed = new URL(sourceUrl) } catch { throw new WorkInputError('公开链接无效') }
     if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password || !parsed.hostname) throw new WorkInputError('公开链接须为 HTTP 地址')
   }
+  const repoUrl = typeof value.repoUrl === 'string' && value.repoUrl.trim() ? value.repoUrl.trim() : null
+  if (repoUrl) {
+    if (repoUrl.length > 2048) throw new WorkInputError('仓库链接过长')
+    let parsed: URL
+    try { parsed = new URL(repoUrl) } catch { throw new WorkInputError('仓库链接无效') }
+    if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password || !parsed.hostname) throw new WorkInputError('仓库链接须为 HTTPS 地址')
+  }
   if (!goal && !sourceUrl) throw new WorkInputError('请填写目标或公开链接')
   if (typeof value.modelId !== 'string' || !value.modelId.trim()) throw new WorkInputError('请选择模型')
   if (value.protocol !== undefined && value.protocol !== null && value.protocol !== 'chat-completions' && value.protocol !== 'responses') throw new WorkInputError('协议无效')
   const agentType = typeof value.agentType === 'string' && ['research', 'coding'].includes(value.agentType) ? value.agentType : undefined
-  return { requestId: value.requestId, goal, sourceUrl, modelId: value.modelId, protocol: value.protocol as Protocol | null ?? null, agentType }
+  return { requestId: value.requestId, goal, sourceUrl, repoUrl, modelId: value.modelId, protocol: value.protocol as Protocol | null ?? null, agentType }
 }
 
 function parseContinueRequest(body: unknown): ContinueRequest {
@@ -175,6 +182,7 @@ export async function createWorkStore(databaseUrl: string, artifactDir = join(pr
     UNIQUE (definition_id, version)
   )`
   await db`ALTER TABLE work_runs ADD COLUMN IF NOT EXISTS agent_version_id uuid REFERENCES agent_versions(id)`
+  await db`ALTER TABLE work_tasks ADD COLUMN IF NOT EXISTS repo_url text`
 
   // Idempotent upsert of builtin agent definitions
   const builtins = [
@@ -201,8 +209,8 @@ export async function createWorkStore(databaseUrl: string, artifactDir = join(pr
   }
 
   async function createWorkInTransaction(sql: SQL, input: CreateRequest, requestHash: string, snapshot: FrozenResearchModel, credentialRef: string, taskId: string) {
-    const rows = await sql`INSERT INTO work_tasks (id, owner_id, request_id, request_hash, goal, source_url, status)
-      VALUES (${taskId}, 'owner', ${input.requestId}, ${requestHash}, ${input.goal}, ${input.sourceUrl}, 'queued')
+    const rows = await sql`INSERT INTO work_tasks (id, owner_id, request_id, request_hash, goal, source_url, repo_url, status)
+      VALUES (${taskId}, 'owner', ${input.requestId}, ${requestHash}, ${input.goal}, ${input.sourceUrl}, ${input.repoUrl}, 'queued')
       ON CONFLICT (request_id) DO NOTHING RETURNING id`
     if (!rows.length) return null
     const threadId = crypto.randomUUID()
@@ -478,7 +486,7 @@ export async function createWorkStore(databaseUrl: string, artifactDir = join(pr
           return { created: false, status: 'unexecuted' as const, failure }
         }
       }
-      const input: CreateRequest = { requestId: operation.requestId, goal: operation.goal, sourceUrl: operation.sourceUrl, modelId: snapshot.id, protocol: snapshot.protocol }
+      const input: CreateRequest = { requestId: operation.requestId, goal: operation.goal, sourceUrl: operation.sourceUrl, repoUrl: operation.repoUrl ?? null, modelId: snapshot.id, protocol: snapshot.protocol }
       const taskId = crypto.randomUUID()
       const created = await createWorkInTransaction(sql, input, operation.requestHash, snapshot, operation.credentialRef, taskId)
       if (!created) {
