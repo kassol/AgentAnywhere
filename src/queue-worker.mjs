@@ -92,10 +92,10 @@ async function injectRepository(adapterInstance, sandboxId, repoUrl, workdir) {
       const entries = await Promise.all(batch.map(async file => ({
         path: join(workdir, file.path),
         data: await readFile(file.fullPath),
-        mode: 0o644,
+        mode: 644,
       })))
       const dirs = [...new Set(entries.map(e => e.path.slice(0, e.path.lastIndexOf('/'))))]
-        .map(p => ({ path: p, mode: 0o755 }))
+        .map(p => ({ path: p, mode: 755 }))
       if (dirs.length) await adapterInstance.createDirectories(sandboxId, dirs)
       await adapterInstance.writeFile(sandboxId, entries)
     }
