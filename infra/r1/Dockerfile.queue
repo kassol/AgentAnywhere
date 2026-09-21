@@ -4,5 +4,7 @@ COPY infra/r1/queue/package*.json ./
 RUN npm ci --omit=dev
 COPY src/queue-worker.mjs ./queue-worker.mjs
 COPY src/research-tools.mjs ./research-tools.mjs
+COPY src/sandbox-adapter.mjs ./sandbox-adapter.mjs
+COPY src/sandbox-opensandbox.mjs ./sandbox-opensandbox.mjs
 USER node
 CMD ["node", "/app/queue-worker.mjs"]
