@@ -5,7 +5,7 @@ import { mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { PgBoss } from 'pg-boss'
 import pg from 'pg'
-import { Sandbox, SandboxManager } from '@alibaba-group/opensandbox'
+import { OpenSandboxAdapter } from './sandbox-opensandbox.mjs'
 import { openPublicPage, searchWeb } from './research-tools.mjs'
 
 const databaseUrl = process.env.DATABASE_URL
@@ -14,7 +14,7 @@ const image = process.env.AGENT_IMAGE
 if (!databaseUrl || !sandboxKey || !image) throw new Error('DATABASE_URL, OPEN_SANDBOX_API_KEY and AGENT_IMAGE are required')
 const pool = new pg.Pool({ connectionString: databaseUrl, max: 4 })
 const sandboxConnection = { domain: process.env.OPEN_SANDBOX_DOMAIN || 'opensandbox:8080', protocol: 'http', apiKey: sandboxKey, useServerProxy: true, disableMetrics: true }
-const manager = SandboxManager.create({ connectionConfig: sandboxConnection })
+const adapter = new OpenSandboxAdapter(sandboxConnection)
 const boss = new PgBoss({ connectionString: databaseUrl, schema: process.env.QUEUE_SCHEMA || 'pgboss' })
 const active = new Set()
 const recovering = new Set()
@@ -54,20 +54,12 @@ const researchServer = http.createServer(async (request, response) => {
 })
 researchServer.requestTimeout = 40_000
 
-async function optionalFileInfo(sandbox, path) {
-  try { return (await sandbox.files.getFileInfo([path]))[path] ?? null }
-  catch (error) { if (error.statusCode === 404 && error.error?.code === 'FILE_NOT_FOUND') return null; throw error }
+async function optionalFileInfo(sandboxId, path) {
+  return adapter.fileInfo(sandboxId, path)
 }
 
-async function readSandboxBytes(sandbox, path, limit) {
-  const chunks = []
-  let size = 0
-  for await (const chunk of sandbox.files.readBytesStream(path)) {
-    size += chunk.length
-    if (size > limit) throw new Error('沙箱文件超过大小限制')
-    chunks.push(chunk)
-  }
-  return Buffer.concat(chunks, size)
+async function readSandboxBytes(sandboxId, path, limit) {
+  return adapter.readFile(sandboxId, path, limit)
 }
 
 async function claim(runId, token) {
@@ -145,11 +137,11 @@ async function liveEvents(endpoint, token, run, signal) {
   }
 }
 
-async function persistArtifacts(run, sandbox) {
+async function persistArtifacts(run, sandboxId) {
   const manifestPath = `${outputDir}/manifest.json`
-  const manifestInfo = await optionalFileInfo(sandbox, manifestPath)
+  const manifestInfo = await optionalFileInfo(sandboxId, manifestPath)
   if (manifestInfo?.type !== 'file' || !Number.isSafeInteger(manifestInfo.size) || manifestInfo.size < 2 || manifestInfo.size > 4096) throw new Error('报告清单不存在或无效')
-  const bytes = await readSandboxBytes(sandbox, manifestPath, 4097)
+  const bytes = await readSandboxBytes(sandboxId, manifestPath, 4097)
   if (bytes.length !== manifestInfo.size) throw new Error('报告清单已变化')
   const manifest = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
   const generation = Array.isArray(manifest) ? null : manifest?.generation
@@ -166,7 +158,7 @@ async function persistArtifacts(run, sandbox) {
       || typeof entry.name !== 'string' || !/^[^/\\\x00-\x1f]{1,100}\.(txt|csv|json|md)$/i.test(entry.name)
       || entry.type !== (index === 0 ? 'text/markdown' : 'text/plain')) throw new Error('成果类型或路径无效')
     const source = `${outputDir}/${generation ? `${generation}/` : ''}${entry.path}`
-    const info = await optionalFileInfo(sandbox, source)
+    const info = await optionalFileInfo(sandboxId, source)
     const limit = index === 0 ? 2_000_000 : 10_000_000
     if (info?.type !== 'file' || !Number.isSafeInteger(info.size) || info.size < (index === 0 ? 1 : 0) || info.size > limit) throw new Error('成果文件类型或大小无效')
     const temporary = join(destination, `${entry.path}.${randomBytes(8).toString('hex')}.tmp`)
@@ -174,7 +166,7 @@ async function persistArtifacts(run, sandbox) {
     let size = 0
     const hash = createHash('sha256')
     try {
-      for await (const chunk of sandbox.files.readBytesStream(source)) {
+      for await (const chunk of adapter.readFileStream(sandboxId, source)) {
         size += chunk.length
         if (size > limit) throw new Error('成果文件超过大小限制')
         hash.update(chunk)
@@ -184,7 +176,7 @@ async function persistArtifacts(run, sandbox) {
       await file.sync()
     } catch (error) { await file.close(); await rm(temporary, { force: true }); throw error }
     await file.close()
-    if (size !== info.size || (await optionalFileInfo(sandbox, source))?.type !== 'file') { await rm(temporary, { force: true }); throw new Error('成果文件复制时发生变化') }
+    if (size !== info.size || (await optionalFileInfo(sandboxId, source))?.type !== 'file') { await rm(temporary, { force: true }); throw new Error('成果文件复制时发生变化') }
     const storageKey = `${run.id}/epoch-${run.epoch}/${entry.path}`
     await rename(temporary, join(artifactDir, storageKey))
     saved.push({ ...entry, storageKey, size, sha256: hash.digest('hex'), kind: index === 0 ? 'report' : 'attachment' })
@@ -205,15 +197,15 @@ async function persistArtifacts(run, sandbox) {
   } catch (error) { await db.query('ROLLBACK'); throw error } finally { db.release() }
 }
 
-async function saveCheckpoint(run, sandbox, question = null, kind = 'question') {
+async function saveCheckpoint(run, sandboxId, question = null, kind = 'question') {
   if (question !== null && (typeof question !== 'string' || !question.trim() || question.length > 4000)) throw new Error('问题无效')
   const paths = [{ source: '/tmp/agentanywhere-session/checkpoint.jsonl', name: 'session.jsonl', limit: 10_000_000 }]
   const artifacts = []
   const manifestPath = `${outputDir}/manifest.json`
-  const manifestInfo = await optionalFileInfo(sandbox, manifestPath)
+  const manifestInfo = await optionalFileInfo(sandboxId, manifestPath)
   if (manifestInfo) {
     if (manifestInfo.type !== 'file' || manifestInfo.size > 4096) throw new Error('检查点成果清单无效')
-    const bytes = await readSandboxBytes(sandbox, manifestPath, 4097)
+    const bytes = await readSandboxBytes(sandboxId, manifestPath, 4097)
     const manifest = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes))
     if (!/^generation-[0-9a-f-]{36}$/.test(manifest?.generation) || !Array.isArray(manifest.files) || manifest.files.length < 1 || manifest.files.length > 6) throw new Error('检查点成果清单无效')
     if (new Set(manifest.files.map(file => file?.name)).size !== manifest.files.length) throw new Error('检查点附件名称重复')
@@ -234,10 +226,10 @@ async function saveCheckpoint(run, sandbox, question = null, kind = 'question') 
   const files = []
   try {
     for (const item of paths) {
-      const info = await optionalFileInfo(sandbox, item.source)
+      const info = await optionalFileInfo(sandboxId, item.source)
       if (info?.type !== 'file' || !Number.isSafeInteger(info.size) || info.size < (item.name.includes('/attachment-') ? 0 : 1) || info.size > item.limit) throw new Error('检查点文件缺失或过大')
-      const bytes = await readSandboxBytes(sandbox, item.source, item.limit + 1)
-      if (bytes.length !== info.size || (await optionalFileInfo(sandbox, item.source))?.size !== info.size) throw new Error('检查点文件复制时变化')
+      const bytes = await readSandboxBytes(sandboxId, item.source, item.limit + 1)
+      if (bytes.length !== info.size || (await optionalFileInfo(sandboxId, item.source))?.size !== info.size) throw new Error('检查点文件复制时变化')
       const path = join(temporary, item.name)
       await mkdir(join(path, '..'), { recursive: true, mode: 0o700 })
       await writeFile(path, bytes, { mode: 0o600, flush: true })
@@ -264,7 +256,7 @@ async function saveCheckpoint(run, sandbox, question = null, kind = 'question') 
   } catch (error) { await rm(temporary, { recursive: true, force: true }); throw error }
 }
 
-async function restoreCheckpoint(run, sandbox) {
+async function restoreCheckpoint(run, sandboxId) {
   const checkpoint = run.checkpoint_ref
   if (!checkpoint) return null
   const sourceRunId = checkpoint.sourceRunId || run.id
@@ -280,9 +272,9 @@ async function restoreCheckpoint(run, sandbox) {
   }
   if (!entries.some(item => item.path.endsWith('/checkpoint.jsonl'))) throw new Error('检查点会话缺失')
   const generationDirs = [...new Set(entries.filter(item => item.path.startsWith(`${outputDir}/generation-`)).map(item => item.path.slice(0, item.path.lastIndexOf('/'))))]
-  await sandbox.files.createDirectories([{ path: '/tmp/agentanywhere-session', mode: 700 }, { path: outputDir, mode: 700 },
+  await adapter.createDirectories(sandboxId, [{ path: '/tmp/agentanywhere-session', mode: 700 }, { path: outputDir, mode: 700 },
     ...generationDirs.map(path => ({ path, mode: 700 }))])
-  await sandbox.files.writeFiles(entries)
+  await adapter.writeFile(sandboxId, entries)
   if (sourceRunId !== run.id) return { resume: true, answer: null }
   const [interaction] = (await pool.query("SELECT answer, kind FROM work_interactions WHERE run_id=$1 AND epoch=$2 AND status='answered'", [run.id, checkpoint.epoch])).rows
   if (!interaction) throw new Error('检查点回答缺失')
@@ -328,20 +320,20 @@ async function markSaveBlocked(run, error, result) {
 
 async function cleanup(run, sandboxId) {
   try {
-    const infos = await manager.listSandboxInfos({ metadata: { runId: run.id }, pageSize: 100 })
-    const ids = new Set(infos.items.filter(item => item.metadata?.epoch === String(run.epoch) && item.status.state !== 'Deleted').map(item => item.id))
+    const items = await adapter.listSandboxes({ runId: run.id })
+    const ids = new Set(items.filter(item => item.metadata?.epoch === String(run.epoch) && item.state !== 'Deleted').map(item => item.id))
     if (sandboxId) ids.add(sandboxId)
     for (const id of ids) {
-      try { await manager.killSandbox(id) } catch (error) { if (error.statusCode !== 404) throw error }
+      await adapter.destroy(id)
     }
-    const remaining = await manager.listSandboxInfos({ metadata: { runId: run.id }, pageSize: 100 })
-    if (remaining.items.some(item => item.metadata?.epoch === String(run.epoch) && item.status.state !== 'Deleted')) throw new Error('沙箱仍存在')
+    const remaining = await adapter.listSandboxes({ runId: run.id })
+    if (remaining.some(item => item.metadata?.epoch === String(run.epoch) && item.state !== 'Deleted')) throw new Error('沙箱仍存在')
     return 'cleaned'
   } catch { return 'failed' }
 }
 
-async function stopRecoveredAgent(sandbox) {
-  await sandbox.files.writeFiles([{ path: '/tmp/agentanywhere-recovery-stop', data: Buffer.from('stop'), mode: 600 }])
+async function stopRecoveredAgent(sandboxId) {
+  await adapter.writeFile(sandboxId, [{ path: '/tmp/agentanywhere-recovery-stop', data: Buffer.from('stop'), mode: 600 }])
   const command = String.raw`node -e 'const fs=require("node:fs");
     const idle="/tmp/agentanywhere-recovery-idle";
     const running=()=>fs.readdirSync("/proc").filter(name=>/^[0-9]+$/.test(name)).filter(pid=>{
@@ -354,7 +346,7 @@ async function stopRecoveredAgent(sandbox) {
     if(found.length && !fs.existsSync(idle)) process.kill(Number(found[0]),"SIGTERM");
     const started=Date.now();
     setInterval(()=>{ if(fs.existsSync(idle) && running().length===1) process.exit(0); if(Date.now()-started>10000) process.exit(3) },100)'`
-  const result = await sandbox.commands.run(command, { timeoutSeconds: 12 })
+  const result = await adapter.startProcess(sandboxId, { command, timeoutSeconds: 12 })
   if (result.exitCode !== 0) throw new Error('旧 Pi 未停止')
 }
 
@@ -376,7 +368,7 @@ async function finish(run, result, sandboxId) {
 }
 
 async function execute(run, token) {
-  let sandbox
+  let sandboxId
   let result = { status: 'failed', failure: 'Pi 启动失败' }
   let cancelled = false
   let endpoint
@@ -395,7 +387,7 @@ async function execute(run, token) {
     stopSent = true
     cancelled = state.status === 'cancelling'
     if (endpoint) {
-      const base = endpoint.endpoint.startsWith('http') ? endpoint.endpoint : `${sandbox.connectionConfig.protocol}://${endpoint.endpoint}`
+      const base = endpoint.endpoint
       try { await fetch(`${base}/cancel`, { method: 'POST', headers: { ...endpoint.headers, 'x-run-token': token }, signal: AbortSignal.timeout(3000) }) }
       catch { /* cleanup still follows */ }
     }
@@ -424,20 +416,21 @@ async function execute(run, token) {
       goal = `${goal}\n\n既往用户要求：\n${context.messages.map((message, index) => `${index + 1}. ${message}`).join('\n')}\n\n上一版报告（作为修改输入）：\n${new TextDecoder('utf-8', { fatal: true }).decode(report)}\n\n本次修改要求：\n${context.instruction}`
     }
     await ensureActive()
-    sandbox = await Sandbox.create({
-      connectionConfig: sandboxConnection, image, entrypoint: ['node', '/app/agent-worker.mjs'],
+    const created = await adapter.create({
+      image, entrypoint: ['node', '/app/agent-worker.mjs'],
       env: { RUN_TOKEN: token }, metadata: { runId: run.id, epoch: String(run.epoch) },
       resource: { cpu: '1', memory: '512Mi' }, timeoutSeconds: null, readyTimeoutSeconds: 60,
     })
-    run.sandbox_id = sandbox.id
-    await pool.query('UPDATE work_runs SET sandbox_id=$3 WHERE id=$1 AND epoch=$2 AND active', [run.id, run.epoch, sandbox.id])
-    const checkpoint = await restoreCheckpoint(run, sandbox)
+    sandboxId = created.sandboxId
+    run.sandbox_id = sandboxId
+    await pool.query('UPDATE work_runs SET sandbox_id=$3 WHERE id=$1 AND epoch=$2 AND active', [run.id, run.epoch, sandboxId])
+    const checkpoint = await restoreCheckpoint(run, sandboxId)
     await ensureActive()
-    endpoint = await sandbox.getEndpoint(3001)
+    endpoint = await adapter.getEndpoint(sandboxId, 3001)
     let ready = false
     for (let attempt = 0; attempt < 30; attempt++) {
       try {
-        const health = await fetch(`${sandbox.connectionConfig.protocol}://${endpoint.endpoint}/health`, { headers: endpoint.headers, signal: AbortSignal.timeout(1000) })
+        const health = await fetch(`${endpoint.endpoint}/health`, { headers: endpoint.headers, signal: AbortSignal.timeout(1000) })
         if (health.ok) { ready = true; break }
       } catch { /* process can still be starting */ }
       await pause(500)
@@ -449,7 +442,7 @@ async function execute(run, token) {
     const proxyBase = `${proxyOrigin.origin}/internal/runs/${run.id}/${run.epoch}/v1`
     const toolOrigin = new URL(process.env.TOOL_GATEWAY_ORIGIN || 'http://queue:3003')
     toolOrigin.hostname = (await lookup(toolOrigin.hostname, { family: 4 })).address
-    const base = `${sandbox.connectionConfig.protocol}://${endpoint.endpoint}`
+    const base = endpoint.endpoint
     await ensureActive()
     const started = await fetch(`${base}/run`, { method: 'POST', headers: { ...endpoint.headers, 'x-run-token': token, 'content-type': 'application/json' },
       body: JSON.stringify({ goal, model: run.model_snapshot, proxyBase, toolBase: `${toolOrigin.origin}/internal/research/${run.id}/${run.epoch}`, resume: checkpoint?.resume ?? false, answer: checkpoint?.answer ?? null }), signal: AbortSignal.timeout(10_000) })
@@ -463,51 +456,51 @@ async function execute(run, token) {
   finally {
     clearInterval(watch)
     try {
-      if (sandbox) {
+      if (sandboxId) {
         const state = await pool.query('SELECT status, budget_reason, model_call_limit, active_limit_ms FROM work_runs WHERE id=$1 AND epoch=$2', [run.id, run.epoch])
         if (state.rows[0]?.status !== 'cancelling' && state.rows[0]?.budget_reason) {
           const question = state.rows[0].budget_reason === 'time'
             ? `已达到 ${Math.ceil(Number(state.rows[0].active_limit_ms) / 60000)} 分钟活跃执行上限。继续会增加 45 分钟和 40 次模型调用额度；是否继续？`
             : `已达到 ${state.rows[0].model_call_limit} 次模型调用上限。继续会增加 45 分钟和 40 次模型调用额度；是否继续？`
           try {
-            const saved = await saveCheckpoint(run, sandbox, question, 'limit')
-            if (saved) { await releaseWaiting(run, sandbox.id); return }
+            const saved = await saveCheckpoint(run, sandboxId, question, 'limit')
+            if (saved) { await releaseWaiting(run, sandboxId); return }
           } catch (error) { await markSaveBlocked(run, error, { status: 'waiting', failure: null }); return }
           result = { status: 'cancelled', failure: null }
         }
         if (result.status === 'waiting') {
           let saved
-          try { saved = await saveCheckpoint(run, sandbox, result.question) }
+          try { saved = await saveCheckpoint(run, sandboxId, result.question) }
           catch (error) {
             const current = await pool.query('SELECT status FROM work_runs WHERE id=$1 AND epoch=$2', [run.id, run.epoch])
             if (current.rows[0]?.status !== 'cancelling') { await markSaveBlocked(run, error, result); return }
           }
-          if (saved) { await releaseWaiting(run, sandbox.id); return }
+          if (saved) { await releaseWaiting(run, sandboxId); return }
           result = { status: 'cancelled', failure: null }
         }
         if (result.status === 'failed') {
           let sessionInfo
-          try { sessionInfo = await optionalFileInfo(sandbox, '/tmp/agentanywhere-session/checkpoint.jsonl') }
+          try { sessionInfo = await optionalFileInfo(sandboxId, '/tmp/agentanywhere-session/checkpoint.jsonl') }
           catch (error) { await markSaveBlocked(run, error, result); return }
           if (sessionInfo) {
-            try { await saveCheckpoint(run, sandbox) }
+            try { await saveCheckpoint(run, sandboxId) }
             catch (error) { await markSaveBlocked(run, error, result); return }
           }
         }
         const manifestPath = `${outputDir}/manifest.json`
         const reportPath = `${outputDir}/report.md`
         let manifest, report
-        try { [manifest, report] = await Promise.all([optionalFileInfo(sandbox, manifestPath), optionalFileInfo(sandbox, reportPath)]) }
+        try { [manifest, report] = await Promise.all([optionalFileInfo(sandboxId, manifestPath), optionalFileInfo(sandboxId, reportPath)]) }
         catch (error) { await markSaveBlocked(run, error, result); return }
         if (result.status === 'succeeded' || manifest || report) {
-          try { await persistArtifacts(run, sandbox) }
+          try { await persistArtifacts(run, sandboxId) }
           catch (error) { await markSaveBlocked(run, error, result); return }
         }
       }
-      await finish(run, result, sandbox?.id)
+      await finish(run, result, sandboxId)
     }
     finally {
-      await sandbox?.close().catch(() => {})
+      if (sandboxId) await adapter.close(sandboxId)
       active.delete(run.id)
     }
   }
@@ -521,13 +514,12 @@ async function reconcile() {
     if (run.status === 'waiting') { await releaseWaiting(run, run.sandbox_id); continue }
     await pool.query(`UPDATE work_runs SET active_ms=active_ms + COALESCE(GREATEST(0, EXTRACT(EPOCH FROM (COALESCE(active_heartbeat_at,now())-active_since))*1000)::bigint,0),
       active_since=NULL WHERE id=$1 AND epoch=$2 AND active`, [run.id, run.epoch])
-    let sandbox
     try {
       if (run.sandbox_id) {
-        sandbox = await Sandbox.connect({ connectionConfig: sandboxConnection, sandboxId: run.sandbox_id })
-        await stopRecoveredAgent(sandbox)
+        await adapter.connect(run.sandbox_id)
+        await stopRecoveredAgent(run.sandbox_id)
       }
-      if (sandbox && run.status !== 'cancelling' && await optionalFileInfo(sandbox, '/tmp/agentanywhere-session/checkpoint.jsonl')) await saveCheckpoint(run, sandbox)
+      if (run.sandbox_id && run.status !== 'cancelling' && await optionalFileInfo(run.sandbox_id, '/tmp/agentanywhere-session/checkpoint.jsonl')) await saveCheckpoint(run, run.sandbox_id)
       const persisted = await pool.query('SELECT 1 FROM work_artifact_versions WHERE run_id=$1 LIMIT 1', [run.id])
       if (persisted.rowCount) {
         const terminal = await pool.query("SELECT type, payload FROM work_events WHERE run_id=$1 AND type IN ('run.finished', 'run.failed') ORDER BY server_seq DESC LIMIT 1", [run.id])
@@ -535,20 +527,20 @@ async function reconcile() {
         await finish(run, { status: last?.type === 'run.finished' ? 'succeeded' : last?.type === 'run.failed' ? 'failed' : 'lost', failure: last?.type === 'run.failed' ? last.payload?.error : last?.type === 'run.finished' ? null : '执行服务中断；请手动重试' }, run.sandbox_id)
         continue
       }
-      const manifest = sandbox && await optionalFileInfo(sandbox, `${outputDir}/manifest.json`)
-      const report = sandbox && await optionalFileInfo(sandbox, `${outputDir}/report.md`)
+      const manifest = run.sandbox_id && await optionalFileInfo(run.sandbox_id, `${outputDir}/manifest.json`)
+      const report = run.sandbox_id && await optionalFileInfo(run.sandbox_id, `${outputDir}/report.md`)
       if (run.status === 'cancelling') {
-        if (manifest || report) await persistArtifacts(run, sandbox)
+        if (manifest || report) await persistArtifacts(run, run.sandbox_id)
         await finish(run, { status: 'cancelled', failure: null }, run.sandbox_id)
         continue
       }
       if (manifest || report) await markSaveBlocked(run, new Error('执行服务中断，需重试保存已有报告'), { status: 'lost', failure: '执行服务中断；请手动重试' })
       else await finish(run, { status: 'lost', failure: '执行服务中断；请手动重试' }, run.sandbox_id)
     } catch (error) {
-      if (error.statusCode === 404 && !sandbox) await finish(run, { status: 'lost', failure: '执行中断且沙箱已失效；请手动重试' }, run.sandbox_id)
+      if (error.statusCode === 404 && !run.sandbox_id) await finish(run, { status: 'lost', failure: '执行中断且沙箱已失效；请手动重试' }, run.sandbox_id)
       else await markSaveBlocked(run, error, { status: 'lost', failure: '执行服务中断；请手动重试' })
     }
-    finally { await sandbox?.close().catch(() => {}) }
+    finally { if (run.sandbox_id) await adapter.close(run.sandbox_id) }
   }
 }
 
@@ -558,29 +550,28 @@ async function recoverPending() {
     if (recovering.has(run.id)) continue
     recovering.add(run.id)
     void (async () => {
-      let sandbox
       try {
         if (run.status === 'waiting') { await releaseWaiting(run, run.sandbox_id); return }
         if (run.status === 'save_failed') {
-          sandbox = await Sandbox.connect({ connectionConfig: sandboxConnection, sandboxId: run.sandbox_id })
-          await stopRecoveredAgent(sandbox)
+          await adapter.connect(run.sandbox_id)
+          await stopRecoveredAgent(run.sandbox_id)
           if (run.pending_status === 'waiting') {
             const event = await pool.query("SELECT payload FROM work_events WHERE run_id=$1 AND epoch=$2 AND type='interaction.requested' ORDER BY server_seq DESC LIMIT 1", [run.id, run.epoch])
             const reason = (await pool.query('SELECT budget_reason FROM work_runs WHERE id=$1', [run.id])).rows[0]?.budget_reason
             const question = event.rows[0]?.payload?.question || (reason ? '执行达到上限。是否继续？' : null)
             if (!question) throw new Error('待保存问题缺失')
-            await saveCheckpoint(run, sandbox, question, event.rows[0] ? 'question' : 'limit')
+            await saveCheckpoint(run, run.sandbox_id, question, event.rows[0] ? 'question' : 'limit')
             await releaseWaiting(run, run.sandbox_id)
             return
           }
-          const manifest = await optionalFileInfo(sandbox, `${outputDir}/manifest.json`)
-          const report = await optionalFileInfo(sandbox, `${outputDir}/report.md`)
-          if (run.pending_status !== 'cancelled' && await optionalFileInfo(sandbox, '/tmp/agentanywhere-session/checkpoint.jsonl')) await saveCheckpoint(run, sandbox)
-          if (run.pending_status === 'succeeded' || manifest || report) await persistArtifacts(run, sandbox)
+          const manifest = await optionalFileInfo(run.sandbox_id, `${outputDir}/manifest.json`)
+          const report = await optionalFileInfo(run.sandbox_id, `${outputDir}/report.md`)
+          if (run.pending_status !== 'cancelled' && await optionalFileInfo(run.sandbox_id, '/tmp/agentanywhere-session/checkpoint.jsonl')) await saveCheckpoint(run, run.sandbox_id)
+          if (run.pending_status === 'succeeded' || manifest || report) await persistArtifacts(run, run.sandbox_id)
         }
         await finish(run, { status: run.pending_status || run.status, failure: run.pending_failure || (run.status === 'save_failed' ? null : run.failure) }, run.sandbox_id)
       } catch (error) { await markSaveBlocked(run, error, { status: run.pending_status || run.status, failure: run.pending_failure || run.failure }) }
-      finally { await sandbox?.close().catch(() => {}); recovering.delete(run.id) }
+      finally { if (run.sandbox_id) await adapter.close(run.sandbox_id); recovering.delete(run.id) }
     })()
   }
 }
